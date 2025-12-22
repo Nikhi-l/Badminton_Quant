@@ -107,13 +107,17 @@ class YOLOTracker(BaseTracker):
         """
         self.frame_count += 1
 
-        # Run YOLO detection
-        results = self.model(
-            frame,
-            conf=self.confidence_threshold,
-            iou=self.iou_threshold,
-            verbose=False,
-        )
+        try:
+            # Run YOLO detection
+            results = self.model(
+                frame,
+                conf=self.confidence_threshold,
+                iou=self.iou_threshold,
+                verbose=False,
+            )
+        except Exception as e:
+            logger.error(f"YOLO inference failed on frame {self.frame_count}: {e}")
+            return {"frame": self.frame_count, "error": str(e)}
 
         # Process results
         best_detection = None

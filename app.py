@@ -7,6 +7,7 @@ Users can submit Instagram reel links and receive detailed analytics.
 
 import asyncio
 import logging
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -17,12 +18,13 @@ from racket_sports.pipeline import AnalysisPipeline
 from racket_sports.video_acquisition.instagram import download_instagram_reel, extract_instagram_id
 from racket_sports.visualization.reports import ReportGenerator
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging with format
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 logger = logging.getLogger(__name__)
-
-# Store user sessions
-user_sessions = {}
 
 
 @cl.on_chat_start
@@ -83,12 +85,21 @@ async def on_select_table_tennis(action: cl.Action):
 
 async def select_sport(sport: str):
     """Set the selected sport and initialize pipeline."""
+    logger.info(f"User selected sport: {sport}")
     cl.user_session.set("sport", sport)
 
-    # Initialize pipeline for selected sport
-    config = load_config(sport)
-    pipeline = AnalysisPipeline(sport=sport)
-    cl.user_session.set("pipeline", pipeline)
+    try:
+        # Initialize pipeline for selected sport
+        config = load_config(sport)
+        pipeline = AnalysisPipeline(sport=sport)
+        cl.user_session.set("pipeline", pipeline)
+        logger.info(f"Pipeline initialized for {sport}")
+    except Exception as e:
+        logger.error(f"Failed to initialize pipeline: {e}")
+        await cl.Message(
+            content=f"❌ Error initializing {sport} pipeline: {str(e)}"
+        ).send()
+        return
 
     sport_emoji = "🏸" if sport == "badminton" else "🏓"
     sport_name = sport.replace("_", " ").title()
@@ -136,14 +147,19 @@ async def process_instagram_url(url: str):
     sport = cl.user_session.get("sport", "badminton")
     sport_emoji = "🏸" if sport == "badminton" else "🏓"
 
+    logger.info(f"Processing Instagram URL: {url}")
+
     # Extract video ID
     video_id = extract_instagram_id(url)
     if not video_id:
+        logger.warning(f"Could not extract video ID from URL: {url}")
         await cl.Message(
             content="❌ Could not extract video ID from the URL. "
             "Please make sure it's a valid Instagram reel URL."
         ).send()
         return
+
+    logger.info(f"Extracted video ID: {video_id}")
 
     # Start analysis with steps
     async with cl.Step(name="Video Download", type="tool") as step:
@@ -156,17 +172,21 @@ async def process_instagram_url(url: str):
         try:
             # Download video
             step.output = "Downloading video from Instagram..."
+            logger.info("Starting video download...")
             video_path = await asyncio.to_thread(
                 download_instagram_reel,
                 url,
                 "data/input",
             )
             step.output = f"Downloaded: {video_path}"
+            logger.info(f"Video downloaded to: {video_path}")
 
         except Exception as e:
-            step.output = f"Download failed: {str(e)}"
+            error_msg = str(e)
+            logger.error(f"Download failed: {error_msg}\n{traceback.format_exc()}")
+            step.output = f"Download failed: {error_msg}"
             await cl.Message(
-                content=f"❌ Failed to download video: {str(e)}\n\n"
+                content=f"❌ Failed to download video: {error_msg}\n\n"
                 f"This might be due to:\n"
                 f"- Private account\n"
                 f"- Rate limiting\n"
@@ -183,6 +203,7 @@ async def process_instagram_url(url: str):
             # Get pipeline
             pipeline = cl.user_session.get("pipeline")
             if pipeline is None:
+                logger.info("Creating new pipeline...")
                 pipeline = AnalysisPipeline(sport=sport)
                 cl.user_session.set("pipeline", pipeline)
 
@@ -190,6 +211,7 @@ async def process_instagram_url(url: str):
             await cl.Message(content="📊 Analyzing video frames...").send()
 
             # Run analysis
+            logger.info("Starting video analysis...")
             results = await asyncio.to_thread(
                 pipeline.analyze_video,
                 source="local",
@@ -198,11 +220,21 @@ async def process_instagram_url(url: str):
             )
 
             analysis_step.output = "Analysis complete"
+            logger.info("Video analysis completed successfully")
+
+            # Log any errors from the analysis
+            if results.get("errors"):
+                logger.warning(f"Analysis completed with {len(results['errors'])} errors")
+                for err in results["errors"][:5]:  # Log first 5 errors
+                    logger.warning(f"  - {err}")
 
         except Exception as e:
-            analysis_step.output = f"Analysis failed: {str(e)}"
+            error_msg = str(e)
+            logger.error(f"Analysis failed: {error_msg}\n{traceback.format_exc()}")
+            analysis_step.output = f"Analysis failed: {error_msg}"
             await cl.Message(
-                content=f"❌ Analysis failed: {str(e)}"
+                content=f"❌ Analysis failed: {error_msg}\n\n"
+                f"Check the logs for more details."
             ).send()
             return
 
@@ -212,6 +244,7 @@ async def process_instagram_url(url: str):
 
 async def display_results(results: dict, video_id: str, sport: str):
     """Display analysis results with elements."""
+    logger.info(f"Displaying results for video: {video_id}")
     sport_emoji = "🏸" if sport == "badminton" else "🏓"
 
     # Generate summary

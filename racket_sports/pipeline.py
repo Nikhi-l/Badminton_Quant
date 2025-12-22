@@ -118,12 +118,22 @@ class AnalysisPipeline:
 
         # Acquire video
         logger.info(f"Acquiring video from {source}...")
-        if source == "instagram":
-            video_path = self.video_acquisition.download_instagram(url)
-        elif source == "local":
-            video_path = Path(path)
-        else:
-            raise ValueError(f"Unsupported source: {source}")
+        try:
+            if source == "instagram":
+                if not url:
+                    raise ValueError("URL is required for Instagram source")
+                video_path = self.video_acquisition.download_instagram(url)
+            elif source == "local":
+                if not path:
+                    raise ValueError("Path is required for local source")
+                video_path = Path(path)
+                if not video_path.exists():
+                    raise FileNotFoundError(f"Video file not found: {video_path}")
+            else:
+                raise ValueError(f"Unsupported source: {source}")
+        except Exception as e:
+            logger.error(f"Failed to acquire video: {e}")
+            raise
 
         # Process video
         results = self._process_video(video_path, output_dir)
@@ -150,69 +160,93 @@ class AnalysisPipeline:
         # Open video
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
+            logger.error(f"Could not open video: {video_path}")
             raise ValueError(f"Could not open video: {video_path}")
 
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        try:
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        logger.info(f"Video: {width}x{height} @ {fps}fps, {frame_count} frames")
+            logger.info(f"Video: {width}x{height} @ {fps}fps, {frame_count} frames")
 
-        # Initialize results
-        results = {
-            "video_info": {
-                "path": str(video_path),
-                "fps": fps,
-                "frame_count": frame_count,
-                "resolution": [width, height],
-            },
-            "tracking": [],
-            "poses": [],
-            "speeds": [],
-            "heatmap": None,
-        }
+            # Initialize results
+            results = {
+                "video_info": {
+                    "path": str(video_path),
+                    "fps": fps,
+                    "frame_count": frame_count,
+                    "resolution": [width, height],
+                },
+                "tracking": [],
+                "poses": [],
+                "speeds": [],
+                "heatmap": None,
+                "errors": [],
+            }
 
-        # Process frames
-        frame_idx = 0
-        positions = []
+            # Process frames
+            frame_idx = 0
+            positions = []
 
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-            # Track shuttle/ball
-            tracking_result = self.tracker.track(frame)
-            results["tracking"].append(tracking_result)
+                try:
+                    # Track shuttle/ball
+                    tracking_result = self.tracker.track(frame)
+                    results["tracking"].append(tracking_result)
 
-            if tracking_result.get("position"):
-                positions.append(tracking_result["position"])
+                    if tracking_result.get("position"):
+                        positions.append(tracking_result["position"])
 
-            # Estimate pose
-            pose_result = self.pose_estimator.estimate(frame)
-            results["poses"].append(pose_result)
+                    # Estimate pose
+                    pose_result = self.pose_estimator.estimate(frame)
+                    results["poses"].append(pose_result)
 
-            frame_idx += 1
-            if frame_idx % 100 == 0:
-                logger.info(f"Processed {frame_idx}/{frame_count} frames")
+                except Exception as e:
+                    logger.warning(f"Error processing frame {frame_idx}: {e}")
+                    results["errors"].append({
+                        "frame": frame_idx,
+                        "error": str(e),
+                    })
+                    # Add empty results for this frame
+                    results["tracking"].append({"frame": frame_idx, "error": str(e)})
+                    results["poses"].append({"detected": False, "error": str(e)})
 
-        cap.release()
+                frame_idx += 1
+                if frame_idx % 100 == 0:
+                    logger.info(f"Processed {frame_idx}/{frame_count} frames")
+
+        finally:
+            cap.release()
+            logger.debug("Video capture released")
 
         # Calculate speeds
         if positions:
-            speeds = self.speed_detector.calculate_speeds(
-                positions,
-                fps=fps,
-            )
-            results["speeds"] = speeds
+            try:
+                speeds = self.speed_detector.calculate_speeds(
+                    positions,
+                    fps=fps,
+                )
+                results["speeds"] = speeds
+            except Exception as e:
+                logger.error(f"Error calculating speeds: {e}")
+                results["errors"].append({"stage": "speed_calculation", "error": str(e)})
 
         # Generate heatmap
         if results["poses"]:
-            heatmap = self.heatmap_generator.generate(results["poses"])
-            results["heatmap"] = heatmap
+            try:
+                heatmap = self.heatmap_generator.generate(results["poses"])
+                results["heatmap"] = heatmap
+            except Exception as e:
+                logger.error(f"Error generating heatmap: {e}")
+                results["errors"].append({"stage": "heatmap_generation", "error": str(e)})
 
-        logger.info("Analysis complete")
+        logger.info(f"Analysis complete. Processed {frame_idx} frames with {len(results['errors'])} errors")
         return results
 
     def analyze_frame(self, frame: np.ndarray) -> dict[str, Any]:

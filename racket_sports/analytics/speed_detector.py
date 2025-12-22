@@ -74,7 +74,10 @@ class SpeedDetector:
         Returns:
             List of speeds in km/h
         """
+        logger.debug(f"Calculating speeds for {len(positions)} positions at {fps} fps")
+
         if len(positions) < 2:
+            logger.debug("Insufficient positions for speed calculation")
             return []
 
         positions = np.array(positions)
@@ -103,6 +106,9 @@ class SpeedDetector:
 
         # Convert to km/h
         speeds_kmh = speeds_m_per_sec * 3.6
+
+        if len(speeds_kmh) > 0:
+            logger.debug(f"Speed stats: min={speeds_kmh.min():.1f}, max={speeds_kmh.max():.1f}, avg={speeds_kmh.mean():.1f} km/h")
 
         return speeds_kmh.tolist()
 
