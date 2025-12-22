@@ -1,0 +1,90 @@
+# Table Tennis Sport Configuration
+sport: table_tennis
+
+# Table dimensions (ITTF standard)
+table:
+  length_m: 2.74
+  width_m: 1.525
+  height_m: 0.76
+  net_height_m: 0.1525
+  net_overhang_m: 0.1525  # Each side
+
+# Ball properties
+ball:
+  diameter_mm: 40
+  weight_g: 2.7
+  max_speed_kmh: 112.5  # Approximate
+  typical_smash_kmh: 80-100
+  color: white  # or orange
+
+# Tracking configuration
+tracking:
+  model: yolo  # Options: yolo, tracknetv3, sam2
+  yolo:
+    model_size: n
+    confidence_threshold: 0.25
+    iou_threshold: 0.5
+  tracknetv3:
+    checkpoint: null
+    input_frames: 3
+  sam2:
+    model_size: tiny
+
+# Pose estimation
+pose:
+  model: mediapipe
+  mediapipe:
+    model_complexity: 2
+    min_detection_confidence: 0.5
+    min_tracking_confidence: 0.5
+    enable_segmentation: false
+  output_3d: true
+
+# Table detection
+table_detection:
+  enabled: true
+  method: edge_detection
+
+# Analytics settings
+analytics:
+  speed:
+    enabled: true
+    kalman_filter: true
+    min_trajectory_frames: 3
+    smash_threshold_kmh: 80
+
+  heatmap:
+    enabled: true
+    resolution: [50, 30]
+    gaussian_sigma: 1.5
+
+  shot_classification:
+    enabled: true
+    classes:
+      - forehand_drive
+      - backhand_drive
+      - forehand_push
+      - backhand_push
+      - forehand_loop
+      - backhand_loop
+      - smash
+      - block
+      - chop
+      - lob
+
+  weakness:
+    enabled: true
+    min_samples: 10
+
+# Video processing
+video:
+  max_fps: 60  # Higher for fast ball
+  target_resolution: [1280, 720]
+  stabilization: false
+
+# Output settings
+output:
+  annotated_video: true
+  analytics_json: true
+  heatmap_image: true
+  report_pdf: false

@@ -1,0 +1,89 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "racket-sports-analytics"
+version = "0.1.0"
+description = "AI-powered sports analytics for racket sports (badminton, table tennis)"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+keywords = ["badminton", "table-tennis", "sports-analytics", "computer-vision", "pose-estimation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+
+dependencies = [
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+    "mediapipe>=0.10.0",
+    "ultralytics>=8.0.0",  # YOLO
+    "yt-dlp>=2024.0.0",  # Video downloading
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "pillow>=10.0.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.65.0",
+    "matplotlib>=3.7.0",
+    "pandas>=2.0.0",
+    "scipy>=1.10.0",
+    "filterpy>=1.4.5",  # Kalman filtering
+    "chainlit>=1.0.0",  # Chatbot interface
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+]
+sam2 = [
+    "segment-anything-2>=0.1.0",
+]
+tracknet = [
+    # TrackNet dependencies
+    "einops>=0.6.0",
+]
+full = [
+    "racket-sports-analytics[dev,sam2,tracknet]",
+]
+
+[project.scripts]
+racket-sports = "racket_sports.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/Badminton_Quant"
+Repository = "https://github.com/yourusername/Badminton_Quant"
+Issues = "https://github.com/yourusername/Badminton_Quant/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["racket_sports*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311', 'py312']
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

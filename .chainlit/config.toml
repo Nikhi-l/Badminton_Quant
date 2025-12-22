@@ -1,0 +1,92 @@
+[project]
+# Whether to enable telemetry (default: true). No personal data is collected.
+enable_telemetry = false
+
+# List of environment variables to be provided by each user to use the app.
+user_env = []
+
+# Duration (in seconds) during which the session is saved when the connection is lost
+session_timeout = 3600
+
+# Enable third parties caching (e.g LangChain cache)
+cache = false
+
+# Authorized origins
+allow_origins = ["*"]
+
+# Follow symlink for asset mount (see https://github.com/Chainlit/chainlit/issues/317)
+follow_symlink = false
+
+[features]
+# Enables multi-modal (images, audio, video) sending in chat
+multi_modal = true
+
+# Shows the "Expand" button on elements
+expand_messages = true
+
+# Authorize users to spontaneously upload files with messages
+spontaneous_file_upload = true
+
+# Allows user to use speech to text
+speech_to_text = true
+
+[features.audio]
+# Threshold for audio recording
+min_decibels = -45
+# Delay for the user to start speaking in MS
+initial_silence_timeout = 3000
+# Delay for the user to continue speaking in MS
+silence_timeout = 1500
+# Above this duration (MS), the recording will forcefully stop
+max_duration = 15000
+# Duration of the audio chunks in MS
+chunk_duration = 1000
+# Sample rate of the audio
+sample_rate = 44100
+
+[UI]
+# Name of the app and chatbot.
+name = "Racket Sports Analytics"
+
+# Show the readme while the thread is empty.
+show_readme_as_default = true
+
+# Description of the app and target.
+description = "AI-powered video analysis for badminton and table tennis"
+
+# Large size content are by default collapsed for a cleaner ui
+default_collapse_content = true
+
+# Hide the chain of thought until the final answer is generated
+hide_cot = false
+
+# Custom CSS file
+# custom_css = "/public/custom.css"
+
+# Custom JS file
+# custom_js = "/public/custom.js"
+
+# Custom font
+# custom_font = "https://fonts.googleapis.com/..."
+
+# Override default MUI light theme
+[UI.theme]
+    default = "light"
+
+    [UI.theme.light]
+        background = "#fafafa"
+        paper = "#ffffff"
+
+        [UI.theme.light.primary]
+            main = "#1976d2"
+            dark = "#115293"
+            light = "#4791db"
+
+    [UI.theme.dark]
+        background = "#121212"
+        paper = "#1e1e1e"
+
+        [UI.theme.dark.primary]
+            main = "#90caf9"
+            dark = "#648dae"
+            light = "#a6d4fa"
