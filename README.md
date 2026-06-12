@@ -1,264 +1,83 @@
-# Racket Sports Analytics (Badminton Quant)
+# 🏸 Baddy — AI Badminton Highlight Agent
 
-AI-powered sports analytics for racket sports, starting with badminton and extending to table tennis and beyond.
+Upload a raw badminton recording → get back a beat-synced, vertical (9:16) highlight
+reel of your longest rallies, framed by an AI virtual camera. Fully automated.
 
-## Vision
+## Pipeline
 
-Build an accessible, open-source sports analytics platform that transforms video footage into actionable insights for athletes at all levels. Process videos from social media (Instagram reels), POV cameras (Meta glasses), and stationary setups.
+```
+upload (any res, 4K ok; one file or several clips of the same game)
+  └─ combine ──────── multi-clip: order by recording time (creation_time metadata;
+  │                   upload order when absent), normalize to common geometry, concat
+  └─ probe ────────── ffprobe metadata + rotation handling
+  └─ proxy ────────── 480p/30fps H.264 proxy (all analysis is low-res; final render is full-res)
+  └─ rallies ──────── proxy uploaded to Gemini Files API; gemini-3.5-flash returns every
+  │                   rally's start/end/intensity as JSON (gemini-3.1-pro-preview fallback)
+  └─ select ───────── rallies ranked longest-first, capped to ~59 s story budget
+  └─ tracking ─────── per-rally motion analysis on the proxy: flicker-masked motion cells →
+  │                   weighted 2-means = the two players (with stillness memory) → shuttle =
+  │                   coherent motion away from both bodies → framing by CONTAINMENT: the
+  │                   shuttle + active player must sit inside the crop with padding, the
+  │                   second player joins whenever zoom-out can fit them; keyframes every
+  │                   0.5 s + cosine interpolation + EMA + pan-speed clamp
+  └─ render ───────── ORIGINAL full-res frames piped through ffmpeg; animated crop window
+  │                   with adaptive zoom (1.02–1.40x) + gentle push-in; 1080×1920 output
+  └─ validate ─────── every clip is audited: heuristics (black / flat / frozen frames) +
+  │                   Gemini visually reviewing sampled frames (players visible? anyone cut
+  │                   off? empty court?); failures re-render with a safe wide camera and are
+  │                   dropped if still bad; the stitched reel gets a final heuristic sweep
+  └─ stitch ───────── clips concatenated, court audio kept, procedural 120 BPM track
+                      (accent every 2 s) mixed underneath, thumbnail extracted
+```
 
-## Current Capabilities (In Development)
+Per-edit Gemini token usage and an estimated cost (rates configurable via
+`GEMINI_IN_RATE`/`GEMINI_OUT_RATE`, $/1M tokens) are recorded in each result and
+shown on gallery cards. POV/head-mounted footage is detected (global camera motion)
+and rendered with a gentle centered camera instead of noise-chasing.
 
-| Feature | Badminton | Table Tennis |
-|---------|-----------|--------------|
-| Shuttle/Ball Tracking | 🔄 | 🔄 |
-| Pose Estimation (2D/3D) | 🔄 | 🔄 |
-| Smash/Shot Speed Detection | 🔄 | 🔄 |
-| Movement Heatmaps | 🔄 | 🔄 |
-| Weakness Analysis | 🔄 | 🔄 |
-| Shot Classification | 🔄 | 🔄 |
-
-**Legend:** ✅ Ready | 🔄 In Progress | ⏳ Planned
-
-## Quick Start
-
-### Option 1: Chainlit Web Interface (Recommended)
+## Run locally
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/Badminton_Quant.git
-cd Badminton_Quant
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -e .
-
-# Launch the Chainlit chatbot interface
-chainlit run app.py
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# .env needs GEMINI_API_KEY
+.venv/bin/uvicorn app.main:app --port 8000          # web app on :8000
+.venv/bin/python -m app.pipeline.run game.mov       # or run the pipeline directly
 ```
 
-Then open `http://localhost:8000` in your browser to start analyzing videos!
-
-### Option 2: Command Line
+## Deploy (GCP VM)
 
 ```bash
-# Run analysis on an Instagram reel
-python -m racket_sports.cli --source instagram --url "YOUR_INSTAGRAM_REEL_URL"
-
-# Run on local video
-python -m racket_sports.cli --source local --path "path/to/video.mp4"
-
-# Quick test to verify installation
-python examples/quick_test.py
+bash deploy/deploy.sh    # creates e2-standard-4 'baddy-agent' in us-central1-a if missing,
+                         # pushes code, installs deps, (re)starts uvicorn (:8000) + Caddy
 ```
 
-## Chainlit Chatbot Interface
+Live at **https://136-113-208-173.sslip.io** — Caddy terminates TLS (Let's Encrypt via the
+sslip.io hostname, which resolves to the VM's IP); plain-IP HTTP requests 301 there.
 
-The project includes a conversational AI interface built with [Chainlit](https://chainlit.io):
+## Shuttle tracking — research notes & upgrade path
 
-**Features:**
-- Interactive sport selection (badminton/table tennis)
-- Instagram reel URL processing
-- Real-time analysis progress with steps
-- Downloadable JSON reports
-- Ready-to-share social media captions
-- Custom UI with light/dark themes
+The virtual camera currently follows a **motion-energy centroid** (frame differencing on
+the static-camera proxy, pooled in 8×8 cells, robust median keyframes each second). This is
+fast on CPU and looks like a human camera operator, but it tracks *the action*, not the
+shuttle itself.
 
-**Screenshots:**
+Researched options for true shuttle (x,y) tracking:
 
-```
-┌────────────────────────────────────────────────────┐
-│  🏸 Racket Sports Analytics                        │
-├────────────────────────────────────────────────────┤
-│  Welcome! I can analyze your badminton videos.     │
-│                                                    │
-│  [🏸 Badminton]  [🏓 Table Tennis]                │
-├────────────────────────────────────────────────────┤
-│  > Paste Instagram URL here...                     │
-└────────────────────────────────────────────────────┘
-```
+| Approach | Verdict |
+|---|---|
+| **TrackNetV3** ([qaz812345/TrackNetV3](https://github.com/qaz812345/TrackNetV3)) | ✅ Best upgrade. MIT license, public pretrained weights (TrackNet + InpaintNet), per-frame x,y CSV out of the box. ~25 fps on GPU, only 1–5 fps on CPU → needs a T4/L4 spot instance. |
+| **WASB-SBDT** ([nttcom/WASB-SBDT](https://github.com/nttcom/WASB-SBDT)) | Strong accuracy, MIT, badminton weights in model zoo; more wiring (Hydra/research code). Plan B. |
+| YOLO per-frame | ❌ No quality public shuttle weights; single-frame detectors lose the motion-blurred shuttle. |
+| Gemini per-frame coords | ❌ Video input is sampled ~1 fps; tiny fast objects score poorly; cost/latency explode at 30 fps. Gemini is used where it shines: clip-level rally understanding. |
+| Classical frame-diff + Kalman | ✅ Used as v1 "action centroid". Fine for framing, not for shuttle-precise coords. |
 
-## Project Structure
+**Upgrade plan:** run TrackNetV3 on a GPU instance for the selected rallies only
+(~25 fps ≈ real-time), feed shuttle x,y + visibility through the existing `FocusPath`
+interface in `app/pipeline/track.py`, blended with the player centroid (shuttle leads the
+frame, players keep it stable). Fine-tune on ~50–100 labeled amateur clips if needed.
 
-```
-Badminton_Quant/
-├── app.py                      # Chainlit chatbot interface
-├── chainlit.md                 # Welcome message
-├── .chainlit/config.toml       # Chainlit configuration
-├── racket_sports/              # Core Python package
-│   ├── video_acquisition/      # Video download & preprocessing
-│   │   ├── instagram.py        # Instagram reel downloader
-│   │   └── preprocessor.py     # Frame extraction, stabilization
-│   ├── tracking/               # Object tracking modules
-│   │   ├── tracknet.py         # TrackNetV3 shuttle/ball tracking
-│   │   ├── yolo_tracker.py     # YOLO-based tracking (lightweight)
-│   │   └── sam2_tracker.py     # SAM2 segmentation tracking
-│   ├── pose/                   # Pose estimation
-│   │   ├── mediapipe_pose.py   # MediaPipe 2D/3D pose
-│   │   └── pose_analyzer.py    # Pose-based analytics
-│   ├── analytics/              # Core analytics
-│   │   ├── speed_detector.py   # Smash/shot speed calculation
-│   │   ├── heatmap.py          # Movement heatmaps
-│   │   ├── weakness.py         # Weakness area detection
-│   │   └── shot_classifier.py  # Shot type classification
-│   └── visualization/          # Output generation
-│       ├── overlays.py         # Video overlay generation
-│       └── reports.py          # Analytics reports
-├── configs/                    # Sport-specific configurations
-│   ├── badminton.yaml
-│   └── table_tennis.yaml
-├── models/                     # Pre-trained weights (gitignored)
-├── data/                       # Input/output data (gitignored)
-│   ├── input/
-│   └── output/
-├── examples/                   # Example scripts
-└── tests/                      # Unit tests
-```
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        VIDEO INPUT                                   │
-│  (Instagram Reel / POV Camera / Stationary Camera)                  │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    VIDEO PREPROCESSING                               │
-│  • Frame extraction • Stabilization • Court detection               │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                ┌───────────────┼───────────────┐
-                ▼               ▼               ▼
-        ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-        │   TRACKING   │ │    POSE      │ │   RACKET     │
-        │  TrackNet/   │ │  MediaPipe   │ │  Detection   │
-        │  YOLO/SAM2   │ │  2D/3D       │ │  YOLO        │
-        └──────────────┘ └──────────────┘ └──────────────┘
-                │               │               │
-                └───────────────┼───────────────┘
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                      ANALYTICS ENGINE                                │
-│  • Speed Detection • Heatmaps • Shot Classification • Weakness      │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                         OUTPUT                                       │
-│  • Annotated Video • Analytics Report • Social Media Share          │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-## Key Technologies & Research
-
-### Shuttle/Ball Tracking
-- **[TrackNetV3](https://github.com/qaz812345/TrackNetV3)**: State-of-the-art shuttlecock tracking using deep learning with trajectory prediction and rectification
-- **[YOLO](https://docs.ultralytics.com/)**: Lightweight object detection for real-time tracking
-- **[SAM2](https://github.com/facebookresearch/sam2)**: Meta's Segment Anything Model 2 for precise video object segmentation
-
-### Pose Estimation
-- **[MediaPipe Pose](https://github.com/google-ai-edge/mediapipe/blob/master/docs/solutions/pose.md)**: Real-time 2D/3D pose estimation with 33 body landmarks
-- **[SoloShuttlePose](https://github.com/sunwuzhou03/SoloShuttlePose)**: Lightweight badminton-specific pose detection
-
-### Speed Detection
-- Kinematic speed estimation using trajectory analysis
-- Kalman filtering for robust tracking
-- Camera calibration for real-world distance mapping
-
-### Hit Detection
-- **[SwingNet](https://github.com/wish44165/A-New-Perspective-for-Shuttlecock-Hitting-Event-Detection)**: Deep learning for shuttlecock hitting event detection
-- **[Automated Hit-frame Detection](https://github.com/arthur900530/Automated-Hit-frame-Detection-for-Badminton-Match-Analysis)**: Transformer-based hit detection
-
-### Table Tennis Resources
-- **[TT3D](https://cogsys-tuebingen.github.io/tt3d/)**: 3D table tennis reconstruction
-- **[tt_tracker](https://github.com/ckjellson/tt_tracker)**: 3D ball tracking using stereo cameras
-- **[Table Tennis Posture Analysis](https://github.com/wutonytt/Camera-Based-Table-Tennis-Posture-Analysis)**: Pose-based analysis
-
-## Social Media Integration
-
-The platform is designed around social media sharing:
-
-1. **Input**: Users share Instagram reel links of their gameplay
-2. **Processing**: Our system analyzes the video
-3. **Output**: Annotated video with analytics shared on our Instagram page
-
-This approach:
-- Saves data/storage costs (no direct video upload needed)
-- Provides free marketing through shares
-- Creates community engagement
-
-## Configuration
-
-Sport-specific parameters are defined in YAML configs:
-
-```yaml
-# configs/badminton.yaml
-sport: badminton
-court:
-  length_m: 13.4
-  width_singles_m: 5.18
-  width_doubles_m: 6.1
-  net_height_m: 1.55
-
-tracking:
-  model: tracknetv3  # or yolo, sam2
-  confidence_threshold: 0.5
-
-pose:
-  model: mediapipe
-  landmarks_3d: true
-
-analytics:
-  smash_speed_threshold_kmh: 200
-  movement_sampling_hz: 30
-```
-
-## Development Roadmap
-
-### Phase 1: Core Infrastructure ✅
-- [x] Project structure
-- [x] Configuration system
-- [x] Video acquisition pipeline
-
-### Phase 2: Tracking & Detection 🔄
-- [ ] TrackNetV3 integration for shuttle tracking
-- [ ] YOLO lightweight tracker
-- [ ] MediaPipe pose estimation
-- [ ] Court detection
-
-### Phase 3: Analytics Engine ⏳
-- [ ] Smash speed detection
-- [ ] Movement heatmaps
-- [ ] Shot classification
-- [ ] Weakness analysis
-
-### Phase 4: Production ⏳
-- [x] Chainlit chatbot interface
-- [ ] Optimized inference (ONNX, TensorRT)
-- [ ] API server
-- [ ] Social media bot integration
-- [ ] Web dashboard
-
-## Contributing
-
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
-## Acknowledgments
-
-- [TrackNet](https://nol.cs.nctu.edu.tw/ndo3je6av9/) research team at NYCU
-- [MediaPipe](https://mediapipe.dev/) team at Google
-- [SAM2](https://ai.meta.com/sam2/) team at Meta AI
-- [Chainlit](https://chainlit.io) for the chatbot framework
-- Open source badminton analytics community
-
----
-
-**Note**: This project is for research and personal use. Always respect copyright and terms of service when downloading content from social media platforms.
+## Roadmap
+- [ ] Shot-type filters (smashes only, drop shots, jump smashes) via Gemini per-rally labels
+- [ ] TrackNetV3 shuttle-precise camera on GPU
+- [ ] Instagram DM intake + auto-story posting with tag
+- [ ] User accounts; private reels
