@@ -1,0 +1,10 @@
+# On-device vision workers (YOLO11 pose + optional CPU TrackNetV3).
+# Installed on the VM in addition to requirements.txt. torch is installed
+# separately as the CPU wheel by deploy/remote_setup.sh.
+ultralytics>=8.3
+opencv-python-headless>=4.10
+pandas>=2.0
+tqdm>=4.66
+parse>=1.20
+pycocotools>=2.0
+matplotlib>=3.7

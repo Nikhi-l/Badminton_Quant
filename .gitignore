@@ -4,3 +4,9 @@ __pycache__/
 data/
 *.pyc
 .DS_Store
+runpod_worker/models/**/*.pt
+runpod_worker/models/**/*.pth
+runpod_worker/models/**/*.zip
+yolo*.pt
+vendor/TrackNetV3/__pycache__/
+vendor/TrackNetV3/**/__pycache__/

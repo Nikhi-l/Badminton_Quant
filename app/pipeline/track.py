@@ -449,3 +449,87 @@ def safe_path(proxy_path, t0: float, t1: float, fps: int = config.PROXY_FPS) -> 
         ys=np.full(n, float(np.median(fp.ys)), np.float32),
         zs=np.full(n, Z_HARD, np.float32),
     )
+
+
+def _nearest(samples: list[dict], t: float, max_gap: float = 0.8) -> dict | None:
+    if not samples:
+        return None
+    best = min(samples, key=lambda s: abs(float(s.get("t", 0.0)) - t))
+    return best if abs(float(best.get("t", 0.0)) - t) <= max_gap else None
+
+
+def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
+                fps: int = config.PROXY_FPS) -> FocusPath | None:
+    """Build a camera path from GPU player boxes + confident shuttle points.
+
+    This is deliberately conservative: if the worker only returns sparse or weak
+    tracks, the caller should use the existing CPU motion path.
+    """
+    if not vision_rally or vision_rally.get("player_quality", 0.0) < 0.35:
+        return None
+    player_frames = vision_rally.get("players") or []
+    shuttle_frames = vision_rally.get("shuttle") or []
+    use_shuttle = vision_rally.get("shuttle_quality", 0.0) >= config.SHUTTLE_MASK_MIN_QUALITY
+    n = max(2, int(round((t1 - t0) * fps)))
+    times = t0 + np.arange(n, dtype=np.float32) / fps
+    cw_norm, ch_norm = _crop_norms(proxy_path)
+
+    xs = np.full(n, 0.5, np.float32)
+    ys = np.full(n, 0.55, np.float32)
+    zs = np.full(n, Z_HARD, np.float32)
+    seen = np.zeros(n, dtype=bool)
+
+    for i, t in enumerate(times):
+        pf = _nearest(player_frames, float(t))
+        boxes = sorted((pf or {}).get("boxes", []), key=lambda b: b.get("confidence", 0), reverse=True)[:2]
+        if not boxes:
+            continue
+        pts_x, pts_y = [], []
+        for b in boxes:
+            pts_x.extend([float(b["x1"]), float(b["x2"])])
+            pts_y.extend([float(b["y1"]), float(b["y2"])])
+        sf = _nearest(shuttle_frames, float(t), max_gap=0.35) if use_shuttle else None
+        if sf and sf.get("confidence", 0.0) >= config.SHUTTLE_MASK_MIN_CONF:
+            pts_x.append(float(sf["x"]))
+            pts_y.append(float(sf["y"]))
+
+        lo_x, hi_x = max(0.0, min(pts_x) - 0.08), min(1.0, max(pts_x) + 0.08)
+        lo_y, hi_y = max(0.0, min(pts_y) - 0.10), min(1.0, max(pts_y) + 0.13)
+        span_x = max(0.18, hi_x - lo_x)
+        span_y = max(0.28, hi_y - lo_y)
+        z = min(cw_norm / span_x, ch_norm / span_y) * 0.86
+        z = float(np.clip(z, Z_HARD, Z_MAX))
+        hw, hh = cw_norm / (2 * z), ch_norm / (2 * z)
+        xs[i] = np.clip((lo_x + hi_x) / 2, hw, 1.0 - hw)
+        ys[i] = np.clip((lo_y + hi_y) / 2, hh, 1.0 - hh)
+        zs[i] = z
+        seen[i] = True
+
+    if seen.mean() < 0.20:
+        return None
+
+    for arr, fill in ((xs, 0.5), (ys, 0.55), (zs, Z_HARD)):
+        last = fill
+        for i in range(n):
+            if seen[i]:
+                last = float(arr[i])
+            else:
+                arr[i] = last
+        last = fill
+        for i in range(n - 1, -1, -1):
+            if seen[i]:
+                last = float(arr[i])
+            else:
+                arr[i] = (arr[i] + last) / 2
+
+    win = 17 if n >= 17 else max(3, n | 1)
+    xs = _hann_smooth(xs, win)
+    ys = _hann_smooth(ys, win)
+    zs = _hann_smooth(zs, win)
+    hw = cw_norm / (2 * zs)
+    hh = ch_norm / (2 * zs)
+    xs = _solve_smooth_path(xs.astype(np.float64), hw.astype(np.float64),
+                            (1.0 - hw).astype(np.float64), beta=5e4, w_bound=500.0)
+    ys = _solve_smooth_path(ys.astype(np.float64), hh.astype(np.float64),
+                            (1.0 - hh).astype(np.float64), beta=2e4, w_bound=500.0)
+    return FocusPath(t0=t0, fps=fps, xs=xs, ys=ys, zs=zs.astype(np.float32))

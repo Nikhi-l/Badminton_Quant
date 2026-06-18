@@ -26,9 +26,53 @@ _load_dotenv()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 SEGMENT_MODEL = os.environ.get("SEGMENT_MODEL", "gemini-3.5-flash")
 PRO_MODEL = os.environ.get("PRO_MODEL", "gemini-3.1-pro-preview")
+COACH_MODEL = os.environ.get("COACH_MODEL", SEGMENT_MODEL)
+COACH_ENABLED = os.environ.get("COACH_ENABLED", "1").lower() not in {"0", "false", "no", "off"}
+COACH_FRAME_COUNT = int(os.environ.get("COACH_FRAME_COUNT", "4"))
+COACH_FRAME_HEIGHT = int(os.environ.get("COACH_FRAME_HEIGHT", "360"))
 # $ per 1M tokens for cost estimates shown in the UI (override when pricing changes).
 GEMINI_IN_RATE = float(os.environ.get("GEMINI_IN_RATE", "0.30"))
 GEMINI_OUT_RATE = float(os.environ.get("GEMINI_OUT_RATE", "2.50"))
+
+# Optional burst-GPU vision worker. When these are unset, the pipeline keeps the
+# existing CPU tracking path and records why GPU analysis was skipped.
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+RUNPOD_API_KEY = os.environ.get("RUNPOD_API_KEY", "")
+RUNPOD_ENDPOINT_ID = os.environ.get("RUNPOD_ENDPOINT_ID", "")
+RUNPOD_BASE_URL = os.environ.get("RUNPOD_BASE_URL", "https://api.runpod.ai")
+RUNPOD_TIMEOUT_SEC = float(os.environ.get("RUNPOD_TIMEOUT_SEC", "1200"))
+RUNPOD_POLL_SEC = float(os.environ.get("RUNPOD_POLL_SEC", "5"))
+GPU_ARTIFACT_TOKEN = os.environ.get("GPU_ARTIFACT_TOKEN", "")
+GPU_ARTIFACT_TTL_SEC = int(os.environ.get("GPU_ARTIFACT_TTL_SEC", "7200"))
+SHUTTLE_MASK_MIN_CONF = float(os.environ.get("SHUTTLE_MASK_MIN_CONF", "0.55"))
+SHUTTLE_MASK_MIN_QUALITY = float(os.environ.get("SHUTTLE_MASK_MIN_QUALITY", "0.65"))
+
+# Per-job vision worker selection. Each upload picks which analyses run; only
+# selected workers execute. Heavy GPU work (TrackNetV3) goes to Runpod serverless
+# and is opt-in to conserve credits; CPU-viable work (YOLO pose) runs on the VM.
+#   shuttle: "off" (CPU motion camera) | "tracknetv3" (Runpod GPU shuttle lock)
+#   pose:    "off" | "yolo11" (player + pose; CPU on VM, or bundled into a GPU job)
+#   coach:   bool (grounded Gemini coach notes)
+SHUTTLE_ENGINES = {"off", "tracknetv3"}
+POSE_ENGINES = {"off", "yolo11"}
+VISION_DEFAULT_SHUTTLE = os.environ.get("VISION_DEFAULT_SHUTTLE", "off")
+VISION_DEFAULT_POSE = os.environ.get("VISION_DEFAULT_POSE", "off")
+# When a GPU task is requested but Runpod is unavailable, may we run TrackNetV3 on
+# the VM CPU? Off by default: it is ~1 hour/reel and would block the queue.
+VISION_ALLOW_CPU_TRACKNET = os.environ.get("VISION_ALLOW_CPU_TRACKNET", "0").lower() \
+    not in {"0", "false", "no", "off"}
+
+
+def normalize_options(opts: dict | None) -> dict:
+    """Validate/clamp per-job vision options to the supported worker set."""
+    opts = opts if isinstance(opts, dict) else {}
+    shuttle = str(opts.get("shuttle", VISION_DEFAULT_SHUTTLE)).lower()
+    pose = str(opts.get("pose", VISION_DEFAULT_POSE)).lower()
+    return {
+        "shuttle": shuttle if shuttle in SHUTTLE_ENGINES else "off",
+        "pose": pose if pose in POSE_ENGINES else "off",
+        "coach": bool(opts.get("coach", COACH_ENABLED)),
+    }
 
 # Analysis runs on a downscaled proxy; final render samples the original file.
 PROXY_HEIGHT = int(os.environ.get("PROXY_HEIGHT", "480"))

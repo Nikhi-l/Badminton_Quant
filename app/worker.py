@@ -49,7 +49,8 @@ def _loop():
                         db.set_done(job_id, _json.loads(old["result"]))
                     raise
             else:
-                result = pipeline_run.process(src, workdir, cb=cb)
+                result = pipeline_run.process(src, workdir, cb=cb,
+                                              options=db.job_options(job_id))
                 db.set_done(job_id, result)
         except Exception as e:  # noqa: BLE001 — job isolation: one bad video must not kill the worker
             traceback.print_exc()

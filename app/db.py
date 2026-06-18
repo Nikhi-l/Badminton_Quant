@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   message TEXT DEFAULT '',
   result TEXT,
   error TEXT,
+  options TEXT,
   created_at REAL,
   updated_at REAL
 );
@@ -30,13 +31,28 @@ def _conn() -> sqlite3.Connection:
 def init():
     with _conn() as c:
         c.executescript(SCHEMA)
+        # Migration for DBs created before per-job options existed.
+        cols = {r[1] for r in c.execute("PRAGMA table_info(jobs)").fetchall()}
+        if "options" not in cols:
+            c.execute("ALTER TABLE jobs ADD COLUMN options TEXT")
 
 
-def create_job(job_id: str, filename: str):
+def create_job(job_id: str, filename: str, options: dict | None = None):
     now = time.time()
     with _conn() as c:
-        c.execute("INSERT INTO jobs (id, filename, status, stage, created_at, updated_at) "
-                  "VALUES (?, ?, 'queued', 'queued', ?, ?)", (job_id, filename, now, now))
+        c.execute("INSERT INTO jobs (id, filename, status, stage, options, created_at, updated_at) "
+                  "VALUES (?, ?, 'queued', 'queued', ?, ?, ?)",
+                  (job_id, filename, json.dumps(options or {}), now, now))
+
+
+def job_options(job_id: str) -> dict:
+    job = get_job(job_id)
+    if not job or not job.get("options"):
+        return {}
+    try:
+        return json.loads(job["options"])
+    except (ValueError, TypeError):
+        return {}
 
 
 def update_stage(job_id: str, stage: str, message: str = ""):

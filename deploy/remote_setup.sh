@@ -15,6 +15,15 @@ cd /opt/baddy
 sudo ./venv/bin/pip install -q --upgrade pip
 sudo ./venv/bin/pip install -q -r requirements.txt
 
+echo ">> [vm] installing on-device vision deps (YOLO11 pose; CPU torch)"
+# CPU-only torch wheel (the default index pulls the ~2GB CUDA build).
+sudo ./venv/bin/pip install -q torch torchvision \
+  --index-url https://download.pytorch.org/whl/cpu || \
+  echo ">> [vm] WARNING: torch install failed; on-device pose disabled (shuttle still uses Runpod GPU)"
+sudo ./venv/bin/pip install -q -r requirements-vision.txt || \
+  echo ">> [vm] WARNING: vision deps install failed; on-device pose disabled"
+sudo mkdir -p /opt/baddy/data/models
+
 echo ">> [vm] configuring service user and permissions"
 sudo useradd -r -s /usr/sbin/nologin baddy 2>/dev/null || true
 sudo mkdir -p /opt/baddy/data

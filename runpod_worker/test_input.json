@@ -1,0 +1,21 @@
+{
+  "input": {
+    "contract": "baddy.vision.v1",
+    "job_id": "local-test",
+    "sport": "badminton",
+    "proxy_url": "https://example.com/proxy.mp4",
+    "proxy_name": "proxy.mp4",
+    "rallies": [
+      {
+        "rally_index": 1,
+        "start": 0.0,
+        "end": 8.0,
+        "dur": 8.0,
+        "note": "test rally",
+        "intensity": 3
+      }
+    ],
+    "tasks": ["players", "pose", "racquet", "shuttle"],
+    "return_normalized_coordinates": true
+  }
+}

@@ -9,7 +9,8 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, db, worker
+from . import artifacts, config, db, worker
+from .pipeline import gpu as gpu_pipeline
 from .pipeline.run import STAGES
 
 ALLOWED_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
@@ -41,6 +42,11 @@ def _startup():
 @app.get("/api/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/api/vision/status")
+def vision_status():
+    return gpu_pipeline.readiness()
 
 
 # --- Chunked upload: survives flaky connections (each chunk retries client-side).
@@ -142,9 +148,10 @@ async def upload_finish(job_id: str, request: Request):
         _part_path(job_id, fidx).rename(config.UPLOADS / job_id / f"input_{fidx:02d}{meta['ext']}")
         _meta_path(job_id, fidx).unlink(missing_ok=True)
     label = names[0] if n_files == 1 else f"{names[0]} +{n_files - 1} more"
-    db.create_job(job_id, label)
+    options = config.normalize_options(payload.get("options"))
+    db.create_job(job_id, label, options=options)
     worker.enqueue(job_id)
-    return {"id": job_id, "files": n_files}
+    return {"id": job_id, "files": n_files, "options": options}
 
 
 @app.post("/api/upload")
@@ -164,6 +171,41 @@ async def upload(file: UploadFile):
     return {"id": job_id}
 
 
+def _compact_vision(v: dict | None) -> dict | None:
+    if not isinstance(v, dict):
+        return None
+    out = {k: v.get(k) for k in (
+        "status", "camera_mode", "shuttle_quality", "player_quality",
+        "pose_quality", "racquet_quality", "pose_samples", "racquet_samples",
+        "racquet_candidate_quality", "racquet_candidate_samples",
+        "mask_enabled", "shuttle_engine",
+    ) if k in v}
+    shuttle = v.get("shuttle") or []
+    players = v.get("players") or []
+    out["shuttle_samples"] = len(shuttle) if isinstance(shuttle, list) else 0
+    if isinstance(players, list):
+        out["player_samples"] = sum(
+            len(f.get("boxes") or []) for f in players if isinstance(f, dict)
+        )
+    else:
+        out["player_samples"] = 0
+    tracknet = v.get("tracknet") if isinstance(v.get("tracknet"), dict) else None
+    if tracknet:
+        out["tracknet"] = {k: tracknet.get(k) for k in (
+            "enabled", "status", "points", "quality"
+        ) if k in tracknet}
+    return out
+
+
+def _public_rally(rr: dict) -> dict:
+    out = {k: rr.get(k) for k in ("start", "end", "dur", "clip_dur", "src_start",
+                                  "intensity", "note", "trimmed")}
+    vision = _compact_vision(rr.get("vision"))
+    if vision:
+        out["vision"] = vision
+    return out
+
+
 def _public_result(job: dict) -> dict | None:
     import json
     if not job.get("result"):
@@ -177,18 +219,49 @@ def _public_result(job: dict) -> dict | None:
         "sport": r.get("sport"),
         "n_rallies_found": r.get("n_rallies_found"),
         "n_rallies_used": r.get("n_rallies_used"),
-        "rallies": [{k: rr.get(k) for k in ("start", "end", "dur", "clip_dur",
-                                            "intensity", "note", "trimmed")}
-                    for rr in r.get("rallies", [])],
+        "rallies": [_public_rally(rr) for rr in r.get("rallies", [])],
         "all_rallies": r.get("all_rallies", []),
         "source_duration": (r.get("source") or {}).get("duration"),
         "n_clips": r.get("n_clips", 1),
         "clip_order": r.get("clip_order"),
         "pov_camera": r.get("pov_camera"),
+        "vision": r.get("vision"),
+        "options": r.get("options"),
+        "coach": r.get("coach"),
         "remix": r.get("remix"),
-        "rally_pool": r.get("rally_pool"),
+        "rally_pool": [_public_rally(rr) for rr in r.get("rally_pool", [])]
+        if isinstance(r.get("rally_pool"), list) else None,
         "gemini_usage": r.get("gemini_usage"),
         "elapsed_sec": r.get("elapsed_sec"),
+    }
+
+
+@app.get("/api/capabilities")
+def capabilities():
+    """What vision workers this deployment can run, for the upload UI."""
+    gpu_ready = bool(config.RUNPOD_ENDPOINT_ID and config.RUNPOD_API_KEY)
+    try:
+        from .pipeline import vision_local
+        local_ok, local_why = vision_local.available()
+    except Exception as e:  # noqa: BLE001
+        local_ok, local_why = False, str(e)
+    return {
+        "shuttle": {
+            "tracknetv3": {
+                "available": gpu_ready or (local_ok and config.VISION_ALLOW_CPU_TRACKNET),
+                "backend": "runpod" if gpu_ready else ("cpu" if local_ok else "none"),
+                "note": "GPU shuttle tracking" if gpu_ready
+                        else "on-device (slow) " if local_ok else "not configured",
+            },
+        },
+        "pose": {
+            "yolo11": {"available": local_ok or gpu_ready,
+                       "backend": "cpu" if local_ok else ("runpod" if gpu_ready else "none"),
+                       "note": local_why if not local_ok else "on-device YOLO11 pose"},
+        },
+        "coach": {"available": bool(config.GEMINI_API_KEY)},
+        "defaults": {"shuttle": config.VISION_DEFAULT_SHUTTLE,
+                     "pose": config.VISION_DEFAULT_POSE},
     }
 
 
@@ -256,6 +329,16 @@ def media_file(job_id: str, name: str):
     if name not in MEDIA_WHITELIST or not job_id.isalnum():
         raise HTTPException(404)
     path = config.OUTPUTS / job_id / name
+    if not path.exists():
+        raise HTTPException(404)
+    return FileResponse(path)
+
+
+@app.get("/api/gpu-artifacts/{job_id}/{name}")
+def gpu_artifact(job_id: str, name: str, token: str = ""):
+    if not job_id.isalnum() or not artifacts.verify(job_id, name, token):
+        raise HTTPException(404)
+    path = artifacts.path_for(job_id, name)
     if not path.exists():
         raise HTTPException(404)
     return FileResponse(path)

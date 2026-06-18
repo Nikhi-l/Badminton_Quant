@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=9">
+<link rel="stylesheet" href="/style.css?v=16">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🏸</text></svg>">
 </head>
 <body>
@@ -51,6 +51,28 @@
       (or upload order if your files have no timestamps) · 4K welcome</div>
       <button class="btn" id="browse">Choose video(s)</button>
     </div>
+  </div>
+
+  <div class="vopts" id="vopts">
+    <div class="vopts-head">Analysis workers <span class="muted">— pick what runs on your video</span></div>
+    <div class="vopts-row">
+      <label class="vopt" id="voptShuttle">
+        <input type="checkbox" id="optShuttle">
+        <span class="vopt-b">🏸 Shuttle tracking</span>
+        <span class="vopt-s">TrackNetV3 · GPU · locks camera to the shuttle</span>
+      </label>
+      <label class="vopt" id="voptPose">
+        <input type="checkbox" id="optPose">
+        <span class="vopt-b">🧍 Pose estimation</span>
+        <span class="vopt-s">YOLO11 · players &amp; body keypoints</span>
+      </label>
+      <label class="vopt" id="voptCoach">
+        <input type="checkbox" id="optCoach">
+        <span class="vopt-b">🧠 Coach notes</span>
+        <span class="vopt-s">Gemini feedback from measured signals</span>
+      </label>
+    </div>
+    <div class="vopts-note muted" id="voptsNote">Defaults use the free CPU camera. Shuttle tracking runs on GPU.</div>
   </div>
 
   <div class="chips">
@@ -107,14 +129,14 @@
   <div class="steps">
     <div class="step"><div class="step-n">01</div><h3>Upload</h3><p>Any length, any phone. We build a low-res proxy for analysis and keep your original for the final render.</p></div>
     <div class="step"><div class="step-n">02</div><h3>Rally detection</h3><p>Gemini watches the proxy and timestamps every rally — serve to floor — then ranks them by length and intensity.</p></div>
-    <div class="step"><div class="step-n">03</div><h3>Virtual camera</h3><p>Motion tracking finds the action each frame; a keyframed crop pans and zooms like a real camera operator, rendered from your full-res frames.</p></div>
+    <div class="step"><div class="step-n">03</div><h3>Virtual camera</h3><p>Runpod vision adds player pose and shuttle tracks; the crop follows the action and renders from your full-res frames.</p></div>
     <div class="step"><div class="step-n">04</div><h3>Beat-synced stitch</h3><p>Longest rallies first, court audio kept, a 120 BPM bed underneath, packed into a vertical story-ready reel.</p></div>
   </div>
 </section>
 
 <footer>
   <span>BADDY · AI sports highlights</span>
-  <span class="muted">rally detection by Gemini · shuttle-precise tracking (TrackNetV3) coming soon</span>
+  <span class="muted">rally detection by Gemini · Runpod vision with TrackNetV3 shuttle tracking</span>
 </footer>
 
 <div class="studio" id="studio" hidden>
@@ -133,6 +155,7 @@
     </div>
   </div>
   <div class="studio-stage"><video id="stVideo" playsinline></video></div>
+  <div class="coachbar" id="coachbar" hidden></div>
   <div class="transport">
     <button class="tp-play" id="tpPlay">▶</button>
     <span class="tp-time" id="tpTime">0:00 / 0:00</span>
@@ -168,6 +191,6 @@
   </div>
 </div>
 
-<script src="/app.js?v=9"></script>
+<script src="/app.js?v=16"></script>
 </body>
 </html>

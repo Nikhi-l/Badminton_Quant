@@ -8,9 +8,11 @@ import time
 from pathlib import Path
 
 from .. import config
-from . import gemini, media, rally, render, stitch, track, validate
+from . import coach, gemini, media, rally, render, stitch, track, validate
+from . import vision as vision_engine
 
-STAGES = ["combine", "probe", "proxy", "rallies", "tracking", "render", "validate", "stitch"]
+STAGES = ["combine", "probe", "proxy", "rallies", "vision", "tracking", "render",
+          "validate", "coach", "stitch"]
 
 
 def _good_window(v: dict, clip_dur: float) -> tuple[float, float] | None:
@@ -60,11 +62,13 @@ def _order_clips(paths: list[Path], log) -> tuple[list[Path], str]:
     return paths, "upload order"
 
 
-def process(input_path, workdir: str | Path, cb=None) -> dict:
+def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
     """input_path: one video path or a list of them (multi-clip game).
+    options: per-job vision worker selection (see config.normalize_options).
     cb(stage, message) is invoked on stage transitions and progress notes."""
     t_start = time.time()
     gemini.reset_usage()
+    opt = config.normalize_options(options)
     paths = [Path(p) for p in (input_path if isinstance(input_path, (list, tuple)) else [input_path])]
     workdir = Path(workdir)
     clips_dir = workdir / "clips"
@@ -108,6 +112,20 @@ def process(input_path, workdir: str | Path, cb=None) -> dict:
         raise RuntimeError("no rallies detected in this video")
     note("rallies", f"{len(all_rallies)} rallies found, using top {len(picked)} by length")
 
+    note("vision", f"vision: shuttle={opt['shuttle']}, pose={opt['pose']}")
+    vision = vision_engine.analyze(proxy, workdir, sport, picked, opt,
+                                   log=lambda m: note("vision", m))
+    if vision.get("status") == "disabled":
+        note("vision", vision.get("message", "vision workers disabled"))
+    elif vision.get("status") == "failed":
+        note("vision", "vision worker failed; using CPU tracking")
+    else:
+        summary = vision.get("summary") or {}
+        player_q = float(summary.get("player_quality") or 0)
+        shuttle_q = float(summary.get("shuttle_quality") or 0)
+        note("vision", f"vision ready ({vision.get('backend', 'gpu')}): "
+                       f"players {player_q:.0%}, shuttle {shuttle_q:.0%}")
+
     clips: list[Path] = []
     rendered = []
     validation: list[dict] = []
@@ -115,7 +133,12 @@ def process(input_path, workdir: str | Path, cb=None) -> dict:
         t0 = max(0.0, r["start"] - config.PAD_BEFORE)
         t1 = min(info.duration, r["end"] + config.PAD_AFTER)
         note("tracking", f"rally {i}/{len(picked)}: tracking action {t0:.0f}s-{t1:.0f}s")
-        path = track.track(proxy, t0, t1, force_gentle=pov)
+        vision_rally = vision_engine.rally(vision, i)
+        path = track.from_vision(proxy, t0, t1, vision_rally) if not pov else None
+        if path is None:
+            path = track.track(proxy, t0, t1, force_gentle=pov)
+        else:
+            note("tracking", f"rally {i}: using GPU player/pose path")
         cw_norm, ch_norm = track._crop_norms(proxy)
         ps = validate.path_smoothness(path, cw_norm, ch_norm)
         if not ps["ok"]:
@@ -128,7 +151,8 @@ def process(input_path, workdir: str | Path, cb=None) -> dict:
         note("render", f"rally {i}/{len(picked)}: virtual camera render")
         out = clips_dir / f"clip_{i:02d}.mp4"
         label = (f"RALLY {i}", f"{r['dur']:.0f}s · {r['note'] or 'match play'}")
-        dur = render.render_rally(input_path, info, t0, t1, path, out, *label)
+        dur = render.render_rally(input_path, info, t0, t1, path, out, *label,
+                                  annotations=vision_rally)
 
         note("validate", f"rally {i}/{len(picked)}: checking frames")
         v = validate.validate_clip(out, motion_limit, pov)
@@ -140,8 +164,11 @@ def process(input_path, workdir: str | Path, cb=None) -> dict:
                 nt0, nt1 = t0 + win[0], t0 + win[1]
                 note("validate", f"rally {i}: failed ({_why(v)}) — trimming to clean "
                                  f"window {win[0]:.1f}-{win[1]:.1f}s")
-                path = track.track(proxy, nt0, nt1, force_gentle=pov)
-                dur = render.render_rally(input_path, info, nt0, nt1, path, out, *label)
+                path = track.from_vision(proxy, nt0, nt1, vision_rally) if not pov else None
+                if path is None:
+                    path = track.track(proxy, nt0, nt1, force_gentle=pov)
+                dur = render.render_rally(input_path, info, nt0, nt1, path, out, *label,
+                                          annotations=vision_rally)
                 v = validate.validate_clip(out, motion_limit, pov)
                 attempt = {"rally": i, "pass": "trimmed", "ok": v["ok"]}
                 if v["ok"]:
@@ -149,7 +176,8 @@ def process(input_path, workdir: str | Path, cb=None) -> dict:
         if not v["ok"]:
             note("validate", f"rally {i}: failed ({_why(v)}) — re-rendering with safe camera")
             dur = render.render_rally(input_path, info, t0, t1,
-                                      track.safe_path(proxy, t0, t1), out, *label)
+                                      track.safe_path(proxy, t0, t1), out, *label,
+                                      annotations=vision_rally)
             v = validate.validate_clip(out, motion_limit, pov)
             attempt = {"rally": i, "pass": "safe", "ok": v["ok"]}
             if not v["ok"]:
@@ -163,10 +191,28 @@ def process(input_path, workdir: str | Path, cb=None) -> dict:
         if trim_range:   # report the window that actually shipped, keep identity via src_start
             entry.update(start=round(trim_range[0], 2), end=round(trim_range[1], 2),
                          dur=round(trim_range[1] - trim_range[0], 2), trimmed=True)
+        if vision_rally:
+            entry["vision"] = {k: vision_rally.get(k) for k in (
+                "status", "camera_mode", "shuttle_quality", "player_quality",
+                "pose_quality", "racquet_quality", "pose_samples", "racquet_samples",
+                "racquet_candidate_quality", "racquet_candidate_samples",
+                "mask_enabled", "shuttle_engine", "tracknet", "shuttle", "players"
+            )}
         rendered.append(entry)
 
     if not clips:
         raise RuntimeError("all rally clips failed validation — source video may be unusable")
+
+    if opt["coach"]:
+        note("coach", "summarizing measured rally signals")
+        coach_result = coach.summarize(sport, vision, rendered, all_rallies, proxy,
+                                       log=lambda m: note("coach", m))
+        if coach_result.get("status") == "ok":
+            note("coach", coach_result.get("headline", "coach notes ready"))
+        else:
+            note("coach", coach_result.get("message", "coach notes skipped"))
+    else:
+        coach_result = {"status": "disabled", "message": "coach not selected for this job"}
 
     note("stitch", "concatenating clips and mixing soundtrack")
     result = stitch.stitch(clips, workdir, log=lambda m: note("stitch", m))
@@ -202,6 +248,11 @@ def process(input_path, workdir: str | Path, cb=None) -> dict:
         "n_clips": len(paths),
         "clip_order": order_source,
         "pov_camera": pov,
+        "options": opt,
+        "vision": {k: vision.get(k) for k in ("enabled", "status", "engine", "contract",
+                                              "worker_version", "message", "models", "summary",
+                                              "backend")},
+        "coach": coach_result,
         "gemini_usage": gemini.usage_snapshot(),
         "elapsed_sec": round(time.time() - t_start, 1),
     }
@@ -247,11 +298,13 @@ def remix(input_path, workdir: str | Path, order: list[int], mirror: bool = Fals
             else:
                 t0 = max(0.0, r["start"] - config.PAD_BEFORE)
                 t1 = min(info.duration, r["end"] + config.PAD_AFTER)
-            path = track.track(proxy, t0, t1, force_gentle=pov)
+            path = track.from_vision(proxy, t0, t1, r.get("vision")) if not pov else None
+            if path is None:
+                path = track.track(proxy, t0, t1, force_gentle=pov)
             clip = workdir / "clips" / f"mirror_{r['clip']}"
             render.render_rally(src, info, t0, t1, path, clip,
                                 f"RALLY {slot}", f"{r['dur']:.0f}s · {r['note'] or 'match play'}",
-                                mirror=True)
+                                mirror=True, annotations=r.get("vision"))
         clips.append(clip)
 
     note("stitch", "rebuilding reel")

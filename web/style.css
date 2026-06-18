@@ -56,6 +56,19 @@ h1{font-size:clamp(44px,7vw,76px);line-height:1.02;letter-spacing:-.02em;font-we
 .btn-small{padding:9px 18px;font-size:13px;color:#0a0c08}
 .btn-ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
 
+.vopts{max-width:640px;margin:18px auto 0;border:1px solid var(--line);background:var(--panel);border-radius:16px;padding:16px 18px;text-align:left}
+.vopts-head{font-size:13px;font-weight:600;margin-bottom:12px}
+.vopts-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.vopt{display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto auto;column-gap:9px;align-items:center;
+  border:1px solid var(--line);border-radius:11px;padding:11px 12px;cursor:pointer;transition:.13s;background:rgba(255,255,255,.02)}
+.vopt:hover{border-color:rgba(255,255,255,.22)}
+.vopt input{grid-row:1/3;width:17px;height:17px;accent-color:var(--lime);cursor:pointer}
+.vopt-b{font-size:13px;font-weight:600}
+.vopt-s{font-size:11px;color:var(--muted);grid-column:2}
+.vopt.checked{border-color:var(--lime);background:rgba(183,245,66,.07)}
+.vopt.disabled{opacity:.42;pointer-events:none}
+.vopts-note{font-size:11.5px;margin-top:11px}
+
 .chips{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:30px}
 .chip{font-size:12.5px;color:var(--muted);border:1px solid var(--line);background:var(--panel);padding:7px 14px;border-radius:999px}
 
@@ -153,6 +166,14 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
 .src-toggle button.active{background:var(--panel2);color:var(--text)}
 .studio-stage{position:relative;flex:1 1 0;min-height:0;overflow:hidden}
 .studio-stage video{position:absolute;inset:12px;width:calc(100% - 24px);height:calc(100% - 24px);object-fit:contain;border-radius:12px;background:#000}
+.coachbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 20px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);background:#090b10}
+.coachbar span{white-space:nowrap}
+.coach-pill{border:1px solid var(--line);border-radius:999px;padding:3px 9px;color:var(--text);background:var(--panel)}
+.coach-pill.ok{border-color:rgba(183,245,66,.35);color:var(--lime);background:rgba(183,245,66,.08)}
+.coach-main{white-space:normal!important;max-width:420px;color:var(--text);font-weight:700;line-height:1.35}
+.coach-note{white-space:normal!important;max-width:360px;line-height:1.35}
+.coach-metric{color:var(--muted)}
+.coach-metric.warn{color:#ffcf6a}
 .transport{display:flex;align-items:center;gap:16px;padding:10px 20px;border-top:1px solid var(--line)}
 .tp-play{width:38px;height:38px;border-radius:50%;border:0;background:var(--grad);color:#0a0c08;font-size:15px;cursor:pointer;font-weight:700}
 .tp-time{font-family:ui-monospace,monospace;font-size:13px;color:var(--text)}
@@ -188,6 +209,9 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
 .seg:hover{border-color:var(--lime);filter:brightness(1.2)}
 .seg b{font-size:12px;font-family:"Space Grotesk";white-space:nowrap}
 .seg span{font-size:10.5px;color:var(--muted);white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
+.seg.vision-ok{border-color:rgba(183,245,66,.32)}
+.seg.vision-ok::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;background:rgba(183,245,66,.72)}
+.seg.mask-on::after{background:linear-gradient(90deg,rgba(183,245,66,.78),rgba(70,227,255,.78))}
 .seg.skip{background:rgba(255,255,255,.05);border-style:dashed;opacity:.65}
 .seg.active-seg{border-color:var(--lime);box-shadow:0 0 0 1px var(--lime)}
 .playhead{position:absolute;top:0;bottom:0;width:2px;background:var(--lime);box-shadow:0 0 8px rgba(183,245,66,.7);pointer-events:none}
@@ -197,4 +221,8 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
   .result{flex-direction:column;align-items:stretch}
   .result video{width:100%;max-width:280px;margin:0 auto}
   .nav-links a:not(.btn){display:none}
+  .studio-top,.transport,.editbar{align-items:flex-start;gap:10px;flex-wrap:wrap}
+  .studio-right,.tp-right,.edit-actions{margin-left:0;flex-wrap:wrap}
+  .coachbar{max-height:86px;overflow:auto}
+  .coach-main,.coach-note{max-width:100%;width:100%}
 }

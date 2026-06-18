@@ -69,6 +69,31 @@ def _blend(frame: np.ndarray, overlay: np.ndarray, x: int, y: int):
     frame[y:y + h, x:x + w] = (region * (1 - a) + overlay[:, :, :3].astype(np.float32) * a).astype(np.uint8)
 
 
+def _nearest_shuttle(annotations: dict | None, t: float) -> dict | None:
+    if not annotations or not annotations.get("mask_enabled"):
+        return None
+    pts = annotations.get("shuttle") or []
+    if not pts:
+        return None
+    best = min(pts, key=lambda p: abs(float(p.get("t", 0.0)) - t))
+    if abs(float(best.get("t", 0.0)) - t) > 0.18:
+        return None
+    if float(best.get("confidence", 0.0)) < config.SHUTTLE_MASK_MIN_CONF:
+        return None
+    return best
+
+
+def _draw_shuttle_mask(img: Image.Image, x: float, y: float, conf: float):
+    if x < -20 or y < -20 or x > config.OUT_W + 20 or y > config.OUT_H + 20:
+        return
+    d = ImageDraw.Draw(img, "RGBA")
+    r = int(24 + 18 * min(max(conf, 0.0), 1.0))
+    cx, cy = int(round(x)), int(round(y))
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(183, 245, 66, 30),
+              outline=(183, 245, 66, 230), width=5)
+    d.ellipse([cx - 5, cy - 5, cx + 5, cy + 5], fill=(255, 255, 255, 235))
+
+
 def _push(progress: float) -> float:
     """Gentle extra push-in over the rally on top of the adaptive zoom."""
     p = min(max(progress, 0.0), 1.0)
@@ -85,7 +110,7 @@ def _punch(t_in: float) -> float:
 
 def render_rally(src: str | Path, info: media.VideoInfo, t0: float, t1: float,
                  focus: FocusPath, out_path: str | Path, label: str, sub: str,
-                 mirror: bool = False) -> float:
+                 mirror: bool = False, annotations: dict | None = None) -> float:
     """Render one rally clip. Returns the clip duration in seconds."""
     W, H = info.width, info.height
     A = config.OUT_W / config.OUT_H
@@ -113,10 +138,15 @@ def render_rally(src: str | Path, info: media.VideoInfo, t0: float, t1: float,
             x0, y0 = max(0, x0), max(0, y0)
             crop = frame[y0:y1, x0:x1]
             img = Image.fromarray(crop).resize((config.OUT_W, config.OUT_H), Image.BILINEAR)
+            shuttle = _nearest_shuttle(annotations, t)
+            if shuttle:
+                sx = (float(shuttle["x"]) * W - x0) / max(1, x1 - x0) * config.OUT_W
+                sy = (float(shuttle["y"]) * H - y0) / max(1, y1 - y0) * config.OUT_H
+                _draw_shuttle_mask(img, sx, sy, float(shuttle.get("confidence", 1.0)))
             arr = np.asarray(img, dtype=np.uint8)
             if mirror:   # flip the scene BEFORE overlays so badges stay readable
                 arr = arr[:, ::-1]
-            out = np.ascontiguousarray(arr)
+            out = np.array(arr)  # writable, contiguous copy (asarray view is read-only)
             _blend(out, badge, 56, config.OUT_H - 130 - 72)
             _blend(out, mark, config.OUT_W - mark.shape[1] - 40, 54)
             writer.write(out)

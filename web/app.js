@@ -1,14 +1,56 @@
 /* Baddy frontend: upload, job progress, gallery. Vanilla JS, no build step. */
 const $ = (id) => document.getElementById(id);
 
+/* ---------- per-job vision worker selection ---------- */
+function currentOptions() {
+  return {
+    shuttle: $("optShuttle").checked ? "tracknetv3" : "off",
+    pose: $("optPose").checked ? "yolo11" : "off",
+    coach: $("optCoach").checked,
+  };
+}
+
+function bindVopt(id) {
+  const box = $(id).querySelector("input");
+  const sync = () => $(id).classList.toggle("checked", box.checked);
+  box.addEventListener("change", sync);
+  sync();
+}
+
+async function initWorkerOptions() {
+  ["voptShuttle", "voptPose", "voptCoach"].forEach(bindVopt);
+  try {
+    const cap = await (await fetch("/api/capabilities")).json();
+    const setAvail = (wrapId, ok, note) => {
+      const el = $(wrapId);
+      el.classList.toggle("disabled", !ok);
+      if (note) el.querySelector(".vopt-s").textContent = note;
+      if (!ok) el.querySelector("input").checked = false;
+    };
+    const sh = cap.shuttle?.tracknetv3 || {};
+    setAvail("voptShuttle", sh.available,
+      sh.available ? `TrackNetV3 · ${sh.backend === "runpod" ? "GPU" : "on-device"} · locks camera to the shuttle`
+                   : "TrackNetV3 · unavailable (no GPU configured)");
+    const po = cap.pose?.yolo11 || {};
+    setAvail("voptPose", po.available);
+    setAvail("voptCoach", cap.coach?.available);
+    $("optShuttle").checked = sh.available && cap.defaults?.shuttle === "tracknetv3";
+    $("optPose").checked = po.available && cap.defaults?.pose === "yolo11";
+    ["voptShuttle", "voptPose", "voptCoach"].forEach(id =>
+      $(id).classList.toggle("checked", $(id).querySelector("input").checked));
+  } catch { /* capabilities optional; checkboxes stay as-is */ }
+}
+
 const STAGE_META = {
   combine:  ["Ordering & joining clips", "🧩"],
   probe:    ["Reading your video", "🔍"],
   proxy:    ["Building analysis proxy", "📉"],
   rallies:  ["Gemini finding rallies", "🧠"],
+  vision:   ["Pose + shuttle analysis", "🧬"],
   tracking: ["Tracking the action", "🎯"],
   render:   ["AI virtual camera render", "🎥"],
   validate: ["Quality check (AI reviews frames)", "✅"],
+  coach:    ["Gemini coach notes", "C"],
   stitch:   ["Beat-synced stitch", "🎵"],
 };
 
@@ -92,7 +134,7 @@ async function startUpload(files) {
     await jfetch(`/api/upload/${jobId}/finish`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ files: files.length }),
+      body: JSON.stringify({ files: files.length, options: currentOptions() }),
     });
     myJobs.add(jobId);
     localStorage.setItem("baddy_jobs", JSON.stringify([...myJobs]));
@@ -156,6 +198,8 @@ function showResult(job) {
   $("resultMeta").innerHTML =
     `${r.duration}s reel · ${r.n_rallies_used} of ${r.n_rallies_found} rallies (longest first)` +
     (r.n_clips > 1 ? `<br>${r.n_clips} clips joined · ordered by ${esc(r.clip_order || "upload order")}` : "") +
+    visionSummaryHtml(r.vision, "<br>") +
+    coachSummaryHtml(r.coach, "<br>") +
     (u ? `<br>AI cost: ~$${u.est_cost_usd.toFixed(3)} (${((u.prompt_tokens + u.output_tokens) / 1000).toFixed(0)}k tokens, ${u.calls} Gemini calls)` : "") + "<br>" +
     (r.rallies || []).map((x, i) => `R${i + 1}: ${x.dur}s ${x.note ? "— " + esc(x.note) : ""}`).join("<br>");
   $("resultStudio").onclick = () => openStudio({ ...r, id: job.id, filename: job.filename });
@@ -166,7 +210,76 @@ function showResult(job) {
 $("anotherBtn").onclick = () => { $("jobPanel").hidden = true; fileInput.value = ""; window.scrollTo({ top: 0, behavior: "smooth" }); };
 
 /* ---------- gallery ---------- */
-const esc = (s) => s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const esc = (s = "") => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtPct = (v) => `${Math.round((Number(v) || 0) * 100)}%`;
+
+function modelSummaryText(models) {
+  const m = models || {};
+  const bits = [];
+  if (m.pose && m.pose.enabled) bits.push("YOLO pose");
+  if (m.tracknet && m.tracknet.enabled) bits.push("TrackNet model");
+  if (m.racquet && m.racquet.enabled) bits.push("racquet measured");
+  else if (m.racquet) bits.push("racquet detector pending");
+  return bits.join(" · ");
+}
+
+function visionSummaryHtml(vision, sep = " · ") {
+  if (!vision) return "";
+  const s = (vision || {}).summary || {};
+  if (vision.status === "ok") {
+    const shuttleEngine = s.shuttle_engine === "tracknetv3" ? " · TrackNetV3" : "";
+    const models = modelSummaryText(vision.models);
+    return `${sep}Coach engine: ${esc(vision.engine || "runpod")} · players ${fmtPct(s.player_quality)} · shuttle ${fmtPct(s.shuttle_quality)}${shuttleEngine}${s.shuttle_mask ? " · shuttle mask" : ""}${models ? " · " + esc(models) : ""}`;
+  }
+  if (vision.status === "failed") return `${sep}Coach engine: GPU failed, CPU tracker used`;
+  return `${sep}Coach engine: CPU tracker`;
+}
+
+function rallyVisionText(vision) {
+  if (!vision || vision.status !== "ok") return "";
+  const bits = [];
+  if ((vision.shuttle_engine || "") === "tracknetv3") bits.push("TrackNetV3");
+  if (vision.mask_enabled) bits.push("mask");
+  bits.push(`pose ${fmtPct(vision.pose_quality)}`);
+  bits.push(`shuttle ${fmtPct(vision.shuttle_quality)}`);
+  if (Number(vision.racquet_quality) > 0) bits.push(`racquet ${fmtPct(vision.racquet_quality)}`);
+  else if (Number(vision.racquet_candidate_quality) > 0) bits.push(`racquet candidate ${fmtPct(vision.racquet_candidate_quality)}`);
+  return bits.join(" · ");
+}
+
+function rallyVisionTitle(vision) {
+  if (!vision) return "";
+  const tracknet = vision.tracknet || {};
+  const lines = [
+    `Players: ${fmtPct(vision.player_quality)}`,
+    `Pose: ${fmtPct(vision.pose_quality)} (${vision.pose_samples || 0} samples)`,
+    `Racquet: ${fmtPct(vision.racquet_quality)} (${vision.racquet_samples || 0} samples)`,
+    `Racquet candidates: ${fmtPct(vision.racquet_candidate_quality)} (${vision.racquet_candidate_samples || 0} samples)`,
+    `Shuttle: ${fmtPct(vision.shuttle_quality)} (${vision.shuttle_samples || 0} samples)`,
+  ];
+  if ((vision.shuttle_engine || "") === "tracknetv3") {
+    lines.push(`TrackNetV3: ${tracknet.status || "ok"}${tracknet.points ? ` · ${tracknet.points} points` : ""}`);
+  }
+  if (vision.mask_enabled) lines.push("Shuttle mask enabled in render");
+  return lines.join("\n");
+}
+
+function coachSummaryHtml(coach, sep = " · ") {
+  if (!coach) return "";
+  const frames = (((coach.evidence || {}).frames) || []).length;
+  const evidence = frames ? ` · ${frames} frames` : "";
+  const racquet = (((coach.summary || {}).racquet_evidence || {}).mode);
+  const racquetText = racquet === "measured" ? " · racquet measured"
+    : racquet === "pose_guided_candidate" ? " · racquet candidate"
+    : racquet === "frame_context_only" ? " · racquet frame context"
+    : "";
+  if (coach.status === "ok") {
+    return `${sep}Coach notes: ${esc(coach.headline || "ready")} · confidence ${fmtPct(coach.confidence)}${evidence}${racquetText}`;
+  }
+  if (coach.status === "failed") return `${sep}Coach notes: Gemini failed`;
+  if (coach.status === "skipped") return `${sep}Coach notes: ${esc(coach.message || "skipped")}`;
+  return "";
+}
 
 function timeAgo(ts) {
   const s = (Date.now() / 1000) - ts;
@@ -200,6 +313,8 @@ function renderGallery() {
         <span class="pill">⏱ ${Math.round(i.duration)}s</span>
         <span class="pill">🏸 ${i.n_rallies_used}</span>
         ${i.n_clips > 1 ? `<span class="pill">🧩 ${i.n_clips}</span>` : ""}
+        ${i.vision && i.vision.status === "ok" ? `<span class="pill" title="${esc(visionSummaryHtml(i.vision, "").trim())}">🧬 ${fmtPct((i.vision.summary || {}).player_quality)}</span>` : ""}
+        ${i.coach && i.coach.status === "ok" ? `<span class="pill" title="${esc(coachSummaryHtml(i.coach, "").trim())}">C ${fmtPct(i.coach.confidence)}</span>` : ""}
         ${i.gemini_usage ? `<span class="pill" title="${(i.gemini_usage.prompt_tokens / 1000).toFixed(0)}k in + ${(i.gemini_usage.output_tokens / 1000).toFixed(1)}k out tokens, ${i.gemini_usage.calls} calls">💳 $${i.gemini_usage.est_cost_usd.toFixed(3)}</span>` : ""}
         <span class="when">${timeAgo(i.created_at)}</span>
       </div>
@@ -240,11 +355,63 @@ function openStudio(item) {
   $("studioDownload").href = item.video;
   document.body.style.overflow = "hidden";
   initEdit();
+  renderCoachbar(item);
   $("editbar").hidden = true;
   $("editToggle").classList.remove("on");
   setStudioMode("reel");
   cancelAnimationFrame(studio.raf);
   studioTick();
+}
+
+function renderCoachbar(item) {
+  const bar = $("coachbar");
+  const vision = item.vision;
+  const coach = item.coach;
+  if (!vision && !coach) {
+    bar.hidden = true;
+    bar.innerHTML = "";
+    return;
+  }
+  const s = (vision && vision.summary) || {};
+  const parts = [];
+  if (coach && coach.status === "ok") {
+    const strength = (coach.strengths || [])[0];
+    const focus = (coach.work_on || [])[0];
+    const frames = (((coach.evidence || {}).frames) || []).length;
+    const racquet = (((coach.summary || {}).racquet_evidence || {}).mode);
+    parts.push(`<span class="coach-pill ok">Gemini coach</span>`);
+    parts.push(`<span class="coach-main">${esc(coach.headline || "Coach notes ready")}</span>`);
+    if (frames) parts.push(`<span class="coach-metric">Evidence: measured CV + ${frames} frames</span>`);
+    if (racquet === "measured") parts.push(`<span class="coach-metric">Racquet evidence: measured boxes</span>`);
+    if (racquet === "pose_guided_candidate") parts.push(`<span class="coach-metric">Racquet evidence: pose-guided candidates</span>`);
+    if (racquet === "frame_context_only") parts.push(`<span class="coach-metric">Racquet evidence: frame context only</span>`);
+    if (strength) parts.push(`<span class="coach-note">Good: ${esc(strength)}</span>`);
+    if (focus) parts.push(`<span class="coach-note">Focus: ${esc(focus)}</span>`);
+  } else if (coach && coach.status && coach.status !== "disabled") {
+    parts.push(`<span class="coach-pill">Coach notes</span>`);
+    parts.push(`<span class="coach-note muted">${esc(coach.message || "not enough measured signal yet")}</span>`);
+  }
+  if (vision) {
+    const models = vision.models || {};
+    const modelText = modelSummaryText(models);
+    parts.push(`
+      <span class="coach-pill ${vision.status === "ok" ? "ok" : ""}">${vision.status === "ok" ? "Runpod vision" : "CPU tracker"}</span>
+      <span class="coach-metric">Players ${fmtPct(s.player_quality)}</span>
+      <span class="coach-metric">Pose ${fmtPct(s.pose_quality)}</span>
+      <span class="coach-metric">Racquet ${fmtPct(s.racquet_quality)}</span>
+      ${Number(s.racquet_candidate_quality) > 0 ? `<span class="coach-metric">Racquet candidate ${fmtPct(s.racquet_candidate_quality)}</span>` : ""}
+      <span class="coach-metric">Shuttle ${fmtPct(s.shuttle_quality)}${s.shuttle_engine === "tracknetv3" ? " · TrackNetV3" : ""}${s.shuttle_mask ? " · mask on" : ""}</span>
+      ${modelText ? `<span class="coach-metric">Models: ${esc(modelText)}</span>` : ""}
+      ${models.tracknet && models.tracknet.error ? `<span class="coach-metric warn">TrackNet: ${esc(models.tracknet.error)}</span>` : ""}
+      <span class="muted">${esc(vision.message || "")}</span>`);
+  }
+  if (!parts.length) {
+    bar.hidden = true;
+    bar.innerHTML = "";
+    return;
+  }
+  bar.hidden = false;
+  bar.innerHTML = parts.join("");
 }
 
 function setStudioMode(mode) {
@@ -278,10 +445,12 @@ function buildTimeline() {
     dur = item.duration || 1;
     let acc = 0;
     segs = (item.rallies || []).map((r, i) => {
+      const signal = rallyVisionText(r.vision);
       const seg = { t0: acc, t1: acc + (r.clip_dur || r.dur || 0),
         label: `RALLY ${i + 1}`,
-        sub: `${Math.round(r.dur || r.clip_dur || 0)}s${r.note ? " · " + r.note : ""}${r.trimmed ? " · trimmed" : ""}`,
-        skip: false };
+        sub: `${Math.round(r.dur || r.clip_dur || 0)}s${r.note ? " · " + r.note : ""}${r.trimmed ? " · trimmed" : ""}${signal ? " · " + signal : ""}`,
+        skip: false,
+        vision: r.vision };
       acc = seg.t1;
       return seg;
     });
@@ -304,10 +473,13 @@ function buildTimeline() {
   }
   segs.forEach(s => {
     const el = document.createElement("div");
-    el.className = "seg" + (s.skip ? " skip" : "");
+    el.className = "seg" + (s.skip ? " skip" : "") +
+      (s.vision && s.vision.status === "ok" ? " vision-ok" : "") +
+      (s.vision && s.vision.mask_enabled ? " mask-on" : "");
     el.style.left = `${s.t0 / dur * 100}%`;
     el.style.width = `${Math.max((s.t1 - s.t0) / dur * 100, 1.4)}%`;
     el.innerHTML = `<b>${esc(s.label)}</b><span>${esc(s.sub)}</span>`;
+    if (s.vision) el.title = rallyVisionTitle(s.vision);
     el.onclick = (e) => {
       e.stopPropagation();
       const v = $("stVideo");
@@ -389,6 +561,7 @@ async function rebuildReel() {
           : "rebuilt ✓ — fast rebuilds keep original badge numbers; mirror rebuild renumbers";
         $("stVideo").classList.remove("stVideo-mirror");
         initEdit();
+        renderCoachbar(studio.item);
         setStudioMode("reel");
         loadGallery();
       } else if (job.status === "error") {
@@ -513,6 +686,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { closeModal(); closeStudio(); }
 });
 
+initWorkerOptions();
 loadGallery().then(() => {
   const rid = new URLSearchParams(location.search).get("reel");
   if (rid) {

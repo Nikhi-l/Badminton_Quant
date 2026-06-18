@@ -29,7 +29,11 @@ fi
 echo ">> packaging code"
 TAR=$(mktemp /tmp/baddy.XXXXXX.tar.gz)
 tar czf "$TAR" --exclude .venv --exclude data --exclude __pycache__ \
-  app web requirements.txt .env deploy
+  --exclude 'vendor/TrackNetV3/.git' --exclude '*.pyc' \
+  --exclude 'runpod_worker/models/*.pt' --exclude 'runpod_worker/models/**/*.pt' \
+  --exclude 'runpod_worker/models/*.pth' --exclude 'runpod_worker/models/**/*.pth' \
+  app web requirements.txt requirements-vision.txt .env deploy scripts \
+  runpod_worker vendor docs README.md
 
 echo ">> pushing to VM"
 for i in 1 2 3 4 5; do
