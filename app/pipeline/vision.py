@@ -23,7 +23,7 @@ def _local(proxy_path, rallies, tasks, log):
     """Run the on-device engine for `tasks` and canonicalize, or a disabled dict."""
     from . import vision_local
 
-    ok, why = vision_local.available()
+    ok, why = vision_local.available(need_shuttle="shuttle" in tasks)
     if not ok:
         return gpu._disabled(f"on-device vision unavailable: {why}")
     raw = vision_local.analyze_raw(proxy_path, "", rallies, tasks=tasks, log=log)

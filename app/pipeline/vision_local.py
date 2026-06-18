@@ -68,18 +68,20 @@ def _yolo_device(dev: str) -> str:
     return "0" if dev == "cuda" else dev
 
 
-def available() -> tuple[bool, str]:
-    """Whether on-device vision can run here (deps + repo + weights present)."""
+def available(need_shuttle: bool = False) -> tuple[bool, str]:
+    """Whether on-device vision can run here. Pose needs only torch+ultralytics;
+    CPU shuttle (TrackNetV3) additionally needs the vendored repo + weights."""
     try:
         import cv2  # noqa: F401
         import torch  # noqa: F401
         import ultralytics  # noqa: F401
     except Exception as e:  # noqa: BLE001
-        return False, f"local vision deps not installed ({type(e).__name__})"
-    if not (REPO / "predict.py").exists():
-        return False, "TrackNetV3 repo not vendored at vendor/TrackNetV3"
-    if not TNET_WEIGHTS.exists():
-        return False, "TrackNet weights missing under runpod_worker/models/tracknet"
+        return False, f"vision deps not installed ({type(e).__name__})"
+    if need_shuttle:
+        if not (REPO / "predict.py").exists():
+            return False, "TrackNetV3 repo not vendored at vendor/TrackNetV3"
+        if not TNET_WEIGHTS.exists():
+            return False, "TrackNet weights missing under runpod_worker/models/tracknet"
     return True, "ok"
 
 

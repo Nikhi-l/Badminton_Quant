@@ -42,6 +42,9 @@ RUNPOD_ENDPOINT_ID = os.environ.get("RUNPOD_ENDPOINT_ID", "")
 RUNPOD_BASE_URL = os.environ.get("RUNPOD_BASE_URL", "https://api.runpod.ai")
 RUNPOD_TIMEOUT_SEC = float(os.environ.get("RUNPOD_TIMEOUT_SEC", "1200"))
 RUNPOD_POLL_SEC = float(os.environ.get("RUNPOD_POLL_SEC", "5"))
+# If a job sits IN_QUEUE this long with zero workers being provisioned, give up
+# and fall back to the CPU camera instead of hanging the whole reel.
+RUNPOD_QUEUE_STALL_SEC = float(os.environ.get("RUNPOD_QUEUE_STALL_SEC", "150"))
 GPU_ARTIFACT_TOKEN = os.environ.get("GPU_ARTIFACT_TOKEN", "")
 GPU_ARTIFACT_TTL_SEC = int(os.environ.get("GPU_ARTIFACT_TTL_SEC", "7200"))
 SHUTTLE_MASK_MIN_CONF = float(os.environ.get("SHUTTLE_MASK_MIN_CONF", "0.55"))

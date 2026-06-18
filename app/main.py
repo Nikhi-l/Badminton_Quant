@@ -242,22 +242,24 @@ def capabilities():
     gpu_ready = bool(config.RUNPOD_ENDPOINT_ID and config.RUNPOD_API_KEY)
     try:
         from .pipeline import vision_local
-        local_ok, local_why = vision_local.available()
+        pose_ok, pose_why = vision_local.available(need_shuttle=False)
+        cpu_shuttle_ok, _ = vision_local.available(need_shuttle=True)
     except Exception as e:  # noqa: BLE001
-        local_ok, local_why = False, str(e)
+        pose_ok, pose_why, cpu_shuttle_ok = False, str(e), False
+    cpu_shuttle = cpu_shuttle_ok and config.VISION_ALLOW_CPU_TRACKNET
     return {
         "shuttle": {
             "tracknetv3": {
-                "available": gpu_ready or (local_ok and config.VISION_ALLOW_CPU_TRACKNET),
-                "backend": "runpod" if gpu_ready else ("cpu" if local_ok else "none"),
+                "available": gpu_ready or cpu_shuttle,
+                "backend": "runpod" if gpu_ready else ("cpu" if cpu_shuttle else "none"),
                 "note": "GPU shuttle tracking" if gpu_ready
-                        else "on-device (slow) " if local_ok else "not configured",
+                        else "on-device (slow)" if cpu_shuttle else "needs GPU (not configured)",
             },
         },
         "pose": {
-            "yolo11": {"available": local_ok or gpu_ready,
-                       "backend": "cpu" if local_ok else ("runpod" if gpu_ready else "none"),
-                       "note": local_why if not local_ok else "on-device YOLO11 pose"},
+            "yolo11": {"available": pose_ok or gpu_ready,
+                       "backend": "cpu" if pose_ok else ("runpod" if gpu_ready else "none"),
+                       "note": "on-device YOLO11 pose" if pose_ok else pose_why},
         },
         "coach": {"available": bool(config.GEMINI_API_KEY)},
         "defaults": {"shuttle": config.VISION_DEFAULT_SHUTTLE,

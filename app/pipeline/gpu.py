@@ -418,6 +418,7 @@ def _runpod_request(payload: dict, log=print) -> dict:
     if not run_id:
         raise RuntimeError(f"Runpod did not return a job id: {json.dumps(data)[:300]}")
     deadline = time.time() + config.RUNPOD_TIMEOUT_SEC
+    queued_since = time.time()
     last_status = ""
     while time.time() < deadline:
         time.sleep(config.RUNPOD_POLL_SEC)
@@ -432,6 +433,24 @@ def _runpod_request(payload: dict, log=print) -> dict:
             return status.get("output") or status.get("result") or {}
         if state in {"FAILED", "CANCELLED", "TIMED_OUT"}:
             raise RuntimeError(f"Runpod {run_id} {state}: {json.dumps(status)[:500]}")
+        # Fast-fail a stalled queue: if no worker ever picks the job up, the
+        # endpoint has no available workers (max-workers=0 or out of credits).
+        # Don't hang the whole reel for 20 min — fall back to the CPU camera.
+        if state == "IN_QUEUE":
+            if time.time() - queued_since > config.RUNPOD_QUEUE_STALL_SEC:
+                try:
+                    h = requests.get(f"{endpoint}/health", headers=headers, timeout=20).json()
+                    w = h.get("workers", {})
+                    active = sum(int(w.get(k, 0)) for k in ("idle", "running", "initializing", "throttled"))
+                except Exception:  # noqa: BLE001
+                    active = 0
+                if active == 0:
+                    raise RuntimeError(
+                        f"Runpod endpoint has no available workers after "
+                        f"{config.RUNPOD_QUEUE_STALL_SEC:.0f}s (max-workers=0 or out of "
+                        f"credits). Falling back to CPU camera.")
+        else:
+            queued_since = time.time()  # running/processing: reset the stall clock
     raise TimeoutError(f"Runpod job timed out after {config.RUNPOD_TIMEOUT_SEC:.0f}s")
 
 
