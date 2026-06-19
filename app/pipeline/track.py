@@ -458,54 +458,127 @@ def _nearest(samples: list[dict], t: float, max_gap: float = 0.8) -> dict | None
     return best if abs(float(best.get("t", 0.0)) - t) <= max_gap else None
 
 
+def _two_player_tracks(player_frames: list, times) -> list:
+    """Per-frame [near, far] player [cx, cy, hw, hh] with memory, so a player is
+    held in place when YOLO misses it for a few frames. 'near' = lower in the
+    frame (closer to a back-court camera)."""
+    slots = [None, None]
+    res = []
+    for t in times:
+        pf = _nearest(player_frames, float(t), max_gap=0.6)
+        dets = []
+        for b in (pf or {}).get("boxes", []):
+            if b.get("confidence", 0) < 0.10:
+                continue
+            dets.append([(float(b["x1"]) + float(b["x2"])) / 2,
+                         (float(b["y1"]) + float(b["y2"])) / 2,
+                         (float(b["x2"]) - float(b["x1"])) / 2,
+                         (float(b["y2"]) - float(b["y1"])) / 2])
+        if dets:
+            if slots[0] is None and slots[1] is None:
+                dets.sort(key=lambda d: d[1])
+                slots[1] = list(dets[0])                              # far = highest
+                slots[0] = list(dets[-1]) if len(dets) > 1 else None  # near = lowest
+            else:
+                taken = [False] * len(dets)
+                for s in range(2):
+                    if slots[s] is None:
+                        continue
+                    best, bd = -1, 0.16 ** 2
+                    for k, d in enumerate(dets):
+                        if taken[k]:
+                            continue
+                        dd = (d[0] - slots[s][0]) ** 2 + (d[1] - slots[s][1]) ** 2
+                        if dd < bd:
+                            bd, best = dd, k
+                    if best >= 0:
+                        taken[best] = True
+                        slots[s] = [0.4 * slots[s][j] + 0.6 * dets[best][j] for j in range(4)]
+                for k, d in enumerate(dets):
+                    if taken[k]:
+                        continue
+                    if slots[0] is None:
+                        slots[0] = list(d)
+                    elif slots[1] is None:
+                        slots[1] = list(d)
+        a, b = slots
+        if a and b and a[1] < b[1]:        # keep near = lower (larger cy)
+            slots = [b, a]
+        res.append((list(slots[0]) if slots[0] else None,
+                    list(slots[1]) if slots[1] else None))
+    return res
+
+
 def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
                 fps: int = config.PROXY_FPS) -> FocusPath | None:
-    """Build a camera path from GPU player boxes + confident shuttle points.
+    """Camera path from player boxes (+ shuttle when available).
 
-    This is deliberately conservative: if the worker only returns sparse or weak
-    tracks, the caller should use the existing CPU motion path.
+    Guarantees: the closest player is always in frame; both players are framed
+    whenever the 9:16 crop can fit them; the shuttle (when tracked) is centred.
     """
-    if not vision_rally or vision_rally.get("player_quality", 0.0) < 0.35:
+    if not vision_rally or vision_rally.get("player_quality", 0.0) < 0.28:
         return None
     player_frames = vision_rally.get("players") or []
     shuttle_frames = vision_rally.get("shuttle") or []
-    use_shuttle = vision_rally.get("shuttle_quality", 0.0) >= config.SHUTTLE_MASK_MIN_QUALITY
+    shuttle_ok = vision_rally.get("shuttle_quality", 0.0) >= 0.22
     n = max(2, int(round((t1 - t0) * fps)))
     times = t0 + np.arange(n, dtype=np.float32) / fps
-    cw_norm, ch_norm = _crop_norms(proxy_path)
+    cw, ch = _crop_norms(proxy_path)
+    tracks = _two_player_tracks(player_frames, times)
+
+    PAD_X, PAD_T, PAD_B = 0.05, 0.10, 0.13   # body padding around a player box
+    SH_BAND = 0.34                           # shuttle kept within the central band
 
     xs = np.full(n, 0.5, np.float32)
     ys = np.full(n, 0.55, np.float32)
     zs = np.full(n, Z_HARD, np.float32)
     seen = np.zeros(n, dtype=bool)
 
-    for i, t in enumerate(times):
-        pf = _nearest(player_frames, float(t))
-        boxes = sorted((pf or {}).get("boxes", []), key=lambda b: b.get("confidence", 0), reverse=True)[:2]
-        if not boxes:
-            continue
-        pts_x, pts_y = [], []
-        for b in boxes:
-            pts_x.extend([float(b["x1"]), float(b["x2"])])
-            pts_y.extend([float(b["y1"]), float(b["y2"])])
-        sf = _nearest(shuttle_frames, float(t), max_gap=0.35) if use_shuttle else None
-        if sf and sf.get("confidence", 0.0) >= config.SHUTTLE_MASK_MIN_CONF:
-            pts_x.append(float(sf["x"]))
-            pts_y.append(float(sf["y"]))
+    def extent(p):
+        return (p[0] - p[2] - PAD_X, p[0] + p[2] + PAD_X,
+                p[1] - p[3] - PAD_T, p[1] + p[3] + PAD_B)
 
-        lo_x, hi_x = max(0.0, min(pts_x) - 0.08), min(1.0, max(pts_x) + 0.08)
-        lo_y, hi_y = max(0.0, min(pts_y) - 0.10), min(1.0, max(pts_y) + 0.13)
-        span_x = max(0.18, hi_x - lo_x)
-        span_y = max(0.28, hi_y - lo_y)
-        z = min(cw_norm / span_x, ch_norm / span_y) * 0.86
-        z = float(np.clip(z, Z_HARD, Z_MAX))
-        hw, hh = cw_norm / (2 * z), ch_norm / (2 * z)
-        xs[i] = np.clip((lo_x + hi_x) / 2, hw, 1.0 - hw)
-        ys[i] = np.clip((lo_y + hi_y) / 2, hh, 1.0 - hh)
+    def zoom_for(a, b, c, d):
+        return min(cw / max(b - a, 0.12), ch / max(d - c, 0.18))
+
+    for i in range(n):
+        near, far = tracks[i]
+        anchor = near or far
+        if anchor is None:
+            continue
+        nxlo, nxhi, nylo, nyhi = extent(anchor)          # closest player (must contain)
+        bxlo, bxhi, bylo, byhi = nxlo, nxhi, nylo, nyhi   # both players
+        if near and far:
+            fxlo, fxhi, fylo, fyhi = extent(far)
+            bxlo, bxhi = min(bxlo, fxlo), max(bxhi, fxhi)
+            bylo, byhi = min(bylo, fylo), max(byhi, fyhi)
+
+        sx = sy = None
+        if shuttle_ok:
+            sf = _nearest(shuttle_frames, float(times[i]), max_gap=0.3)
+            if sf and sf.get("confidence", 0.0) >= 0.3:
+                sx, sy = float(sf["x"]), float(sf["y"])
+        if sx is not None:
+            nxlo, nxhi, nylo, nyhi = min(nxlo, sx), max(nxhi, sx), min(nylo, sy), max(nyhi, sy)
+            bxlo, bxhi, bylo, byhi = min(bxlo, sx), max(bxhi, sx), min(bylo, sy), max(byhi, sy)
+
+        z_both = zoom_for(bxlo, bxhi, bylo, byhi)
+        if z_both >= Z_HARD:                              # both players fit → frame both
+            cx, cy, z = (bxlo + bxhi) / 2, (bylo + byhi) / 2, z_both
+        else:                                             # can't fit both → closest + shuttle
+            z = max(zoom_for(nxlo, nxhi, nylo, nyhi), Z_HARD)
+            cx, cy = (nxlo + nxhi) / 2, (nylo + nyhi) / 2
+        z = float(np.clip(z * 0.97, Z_HARD, Z_MAX))
+        hw, hh = cw / (2 * z), ch / (2 * z)
+        if sx is not None:                                # pull the shuttle toward centre
+            cx = float(np.clip(cx, sx - hw * SH_BAND, sx + hw * SH_BAND))
+            cy = float(np.clip(cy, sy - hh * SH_BAND, sy + hh * SH_BAND))
+        xs[i] = np.clip(cx, hw, 1.0 - hw)
+        ys[i] = np.clip(cy, hh, 1.0 - hh)
         zs[i] = z
         seen[i] = True
 
-    if seen.mean() < 0.20:
+    if seen.mean() < 0.15:
         return None
 
     for arr, fill in ((xs, 0.5), (ys, 0.55), (zs, Z_HARD)):
@@ -526,10 +599,10 @@ def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
     xs = _hann_smooth(xs, win)
     ys = _hann_smooth(ys, win)
     zs = _hann_smooth(zs, win)
-    hw = cw_norm / (2 * zs)
-    hh = ch_norm / (2 * zs)
+    hw = cw / (2 * zs)
+    hh = ch / (2 * zs)
     xs = _solve_smooth_path(xs.astype(np.float64), hw.astype(np.float64),
-                            (1.0 - hw).astype(np.float64), beta=5e4, w_bound=500.0)
+                            (1.0 - hw).astype(np.float64), beta=5e4, w_bound=600.0)
     ys = _solve_smooth_path(ys.astype(np.float64), hh.astype(np.float64),
-                            (1.0 - hh).astype(np.float64), beta=2e4, w_bound=500.0)
+                            (1.0 - hh).astype(np.float64), beta=2e4, w_bound=600.0)
     return FocusPath(t0=t0, fps=fps, xs=xs, ys=ys, zs=zs.astype(np.float32))
