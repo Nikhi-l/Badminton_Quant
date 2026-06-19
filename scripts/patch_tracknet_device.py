@@ -13,6 +13,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent / "vendor" / "TrackNetV3"
 TARGETS = ["predict.py", "test.py"]
 MARKER = "# >>> baddy device shim"
+DATASET_MARKER = "# baddy: video ended on a window boundary"
 
 SHIM = f'''{MARKER}
 import os as _os
@@ -66,6 +67,31 @@ def patch(path: Path) -> bool:
     return True
 
 
+def patch_dataset() -> bool:
+    """Guard Video_IterableDataset against the empty-frame_list boundary crash.
+
+    Upstream's __iter__ runs one phantom iteration past the end when the clip's
+    frame count is an exact multiple of seq_len, then does `frame_list[-1]` on an
+    empty list -> IndexError. We stop the loop when no frames remain. Idempotent.
+    """
+    p = REPO / "dataset.py"
+    if not p.exists():
+        print("warning: dataset.py missing", file=sys.stderr)
+        return False
+    src = p.read_text()
+    if DATASET_MARKER in src:
+        return False
+    anchor = ("            # Form a sequence\n"
+              "            data_idx = [(0, i) for i in range(start_f_id, end_f_id)]")
+    if anchor not in src:
+        raise RuntimeError("dataset.py: __iter__ anchor not found (upstream changed?)")
+    guard = ("            " + DATASET_MARKER + " -> no frames left, stop.\n"
+             "            if not frame_list:\n"
+             "                break\n\n" + anchor)
+    p.write_text(src.replace(anchor, guard, 1))
+    return True
+
+
 def main() -> int:
     if not REPO.exists():
         print(f"TrackNetV3 repo not found at {REPO}", file=sys.stderr)
@@ -78,6 +104,8 @@ def main() -> int:
             continue
         if patch(p):
             changed.append(name)
+    if patch_dataset():
+        changed.append("dataset.py")
     print(f"patched: {changed or 'nothing (already device-agnostic)'}")
     # Verify no bare .cuda() remain in inference files.
     leftover = []

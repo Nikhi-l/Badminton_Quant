@@ -1,6 +1,7 @@
 """ffmpeg/ffprobe helpers: probing, proxy creation, raw-frame piping."""
 import json
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,11 +23,24 @@ class VideoInfo:
 
 
 def probe(path: str | Path) -> VideoInfo:
-    out = subprocess.run(
-        [FFPROBE, "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=width,height,r_frame_rate,duration,side_data_list",
-         "-show_entries", "format=duration", "-of", "json", str(path)],
-        capture_output=True, text=True, check=True).stdout
+    cmd = [FFPROBE, "-v", "error", "-select_streams", "v:0",
+           "-show_entries", "stream=width,height,r_frame_rate,duration,side_data_list",
+           "-show_entries", "format=duration", "-of", "json", str(path)]
+    # ffprobe can transiently fail to spawn when the box is saturated (parallel
+    # ffmpeg + model inference). Retry a few times before giving up so one busy
+    # moment doesn't sink a whole render.
+    last = None
+    for attempt in range(4):
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode == 0 and res.stdout.strip():
+            out = res.stdout
+            break
+        last = res
+        time.sleep(0.4 * (attempt + 1))
+    else:
+        raise RuntimeError(
+            f"ffprobe failed for {path} after retries: "
+            f"{(last.stderr or '').strip()[:300]}")
     d = json.loads(out)
     s = d["streams"][0]
     num, den = s["r_frame_rate"].split("/")

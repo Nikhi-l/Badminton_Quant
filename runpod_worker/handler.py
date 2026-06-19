@@ -37,6 +37,9 @@ TRACKNET_TRACKNET_FILE = os.environ.get("TRACKNET_TRACKNET_FILE", "")
 TRACKNET_INPAINTNET_FILE = os.environ.get("TRACKNET_INPAINTNET_FILE", "")
 TRACKNET_TIMEOUT_SEC = int(os.environ.get("TRACKNET_TIMEOUT_SEC", "900"))
 TRACKNET_BATCH_SIZE = int(os.environ.get("TRACKNET_BATCH_SIZE", "8"))
+# 'nonoverlap' samples each frame once (~8x fewer windows than 'weight'); far
+# cheaper GPU time per reel, plenty for camera framing. Matches the local engine.
+TRACKNET_EVAL_MODE = os.environ.get("TRACKNET_EVAL_MODE", "nonoverlap")
 
 _pose_model = None
 _racquet_model = None
@@ -330,6 +333,7 @@ def _run_tracknet(video: Path, source_start: float) -> tuple[list[dict], float, 
         "--tracknet_file", TRACKNET_TRACKNET_FILE,
         "--save_dir", str(save_dir),
         "--batch_size", str(TRACKNET_BATCH_SIZE),
+        "--eval_mode", TRACKNET_EVAL_MODE,
         "--large_video",
     ]
     if TRACKNET_INPAINTNET_FILE:

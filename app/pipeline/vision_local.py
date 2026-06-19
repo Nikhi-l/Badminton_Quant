@@ -34,6 +34,12 @@ YOLO_CONF = float(os.environ.get("VISION_YOLO_CONF", "0.25"))
 YOLO_IMGSZ = int(os.environ.get("VISION_YOLO_IMGSZ", "640"))
 TRACKNET_BATCH = int(os.environ.get("VISION_TRACKNET_BATCH", "8"))
 TRACKNET_TIMEOUT = int(os.environ.get("VISION_TRACKNET_TIMEOUT", "1800"))
+# 'nonoverlap' samples each frame once (≈8x fewer windows than the default
+# 'weight' temporal ensemble) — far faster on CPU/MPS, plenty for camera framing.
+TRACKNET_EVAL_MODE = os.environ.get("VISION_TRACKNET_EVAL_MODE", "nonoverlap")
+# InpaintNet fills gaps but doubles the passes; off by default for speed.
+TRACKNET_INPAINT = os.environ.get("VISION_TRACKNET_INPAINT", "0").lower() \
+    not in {"0", "false", "no", "off"}
 WORKER_VERSION = "local-tracknetv3-yolo11-20260618"
 
 _pose_model = None
@@ -162,6 +168,10 @@ def _detect_pose(frame, device: str):
 
 def _run_tracknet(clip: Path, source_start: float, log) -> tuple[list[dict], float, str]:
     """Invoke the vendored, device-patched TrackNetV3 predict.py on one clip."""
+    # predict.py runs with cwd=REPO, so a relative clip path resolves against the
+    # repo dir and OpenCV silently reads an empty stream (median -> scalar crash).
+    # Always hand the subprocess absolute paths.
+    clip = Path(clip).resolve()
     save_dir = clip.parent / f"tnt_{clip.stem}"
     save_dir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
@@ -172,15 +182,19 @@ def _run_tracknet(clip: Path, source_start: float, log) -> tuple[list[dict], flo
            "--tracknet_file", str(TNET_WEIGHTS),
            "--save_dir", str(save_dir),
            "--batch_size", str(TRACKNET_BATCH),
+           "--eval_mode", TRACKNET_EVAL_MODE,
            "--large_video"]
-    if INET_WEIGHTS.exists():
+    if TRACKNET_INPAINT and INET_WEIGHTS.exists():
         cmd += ["--inpaintnet_file", str(INET_WEIGHTS)]
     try:
         subprocess.run(cmd, cwd=str(REPO), check=True, timeout=TRACKNET_TIMEOUT,
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as e:
-        tail = (e.stderr or b"").decode("utf-8", "ignore").strip().splitlines()[-1:] or ["?"]
-        log(f"tracknet failed: {tail[0][:160]}")
+        err = (e.stderr or b"").decode("utf-8", "ignore").strip()
+        (save_dir / "stderr.txt").write_text(err)  # full traceback for diagnosis
+        lines = err.splitlines()
+        log(f"tracknet failed: {(lines[-1] if lines else '?')[:160]} "
+            f"(full: {save_dir / 'stderr.txt'})")
         return [], 0.0, "failed"
     except subprocess.TimeoutExpired:
         return [], 0.0, "timeout"
@@ -302,7 +316,7 @@ def analyze_raw(proxy_path: str | Path, sport: str, rallies: list[dict],
     import cv2
 
     task_set = set(tasks or ["shuttle", "pose"])
-    proxy_path = Path(proxy_path)
+    proxy_path = Path(proxy_path).resolve()  # clips inherit this dir; keep it absolute
     device = torch_device()
     log(f"on-device vision ({'+'.join(sorted(task_set))}) on {device}")
     if "pose" in task_set or "players" in task_set:
