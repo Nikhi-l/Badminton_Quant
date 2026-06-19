@@ -516,18 +516,27 @@ def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
     Guarantees: the closest player is always in frame; both players are framed
     whenever the 9:16 crop can fit them; the shuttle (when tracked) is centred.
     """
-    if not vision_rally or vision_rally.get("player_quality", 0.0) < 0.28:
+    if not vision_rally:
+        return None
+    pq = float(vision_rally.get("player_quality", 0.0) or 0.0)
+    sq = float(vision_rally.get("shuttle_quality", 0.0) or 0.0)
+    if pq < 0.28 and sq < 0.22:          # neither players nor shuttle trustworthy
         return None
     player_frames = vision_rally.get("players") or []
     shuttle_frames = vision_rally.get("shuttle") or []
-    shuttle_ok = vision_rally.get("shuttle_quality", 0.0) >= 0.22
+    shuttle_ok = sq >= 0.22
+    # When pose is too weak to trust the boxes (e.g. a soft proxy) but the shuttle
+    # is well tracked, follow the shuttle directly instead of framing noise.
+    shuttle_led = shuttle_ok and pq < 0.28
     n = max(2, int(round((t1 - t0) * fps)))
     times = t0 + np.arange(n, dtype=np.float32) / fps
     cw, ch = _crop_norms(proxy_path)
     tracks = _two_player_tracks(player_frames, times)
 
     PAD_X, PAD_T, PAD_B = 0.05, 0.10, 0.13   # body padding around a player box
-    SH_BAND = 0.34                           # shuttle kept within the central band
+    SH_BAND = 0.22                           # shuttle kept within the central band
+    SHUTTLE_LED_Z = Z_HARD                   # widest tall slice: full court height,
+    SHUTTLE_LED_CY = 0.55                    # so both court halves stay in frame
 
     xs = np.full(n, 0.5, np.float32)
     ys = np.full(n, 0.55, np.float32)
@@ -542,10 +551,28 @@ def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
         return min(cw / max(b - a, 0.12), ch / max(d - c, 0.18))
 
     for i in range(n):
+        sx = sy = None
+        if shuttle_ok:
+            sf = _nearest(shuttle_frames, float(times[i]), max_gap=0.3)
+            if sf and sf.get("confidence", 0.0) >= 0.3:
+                sx, sy = float(sf["x"]), float(sf["y"])
+
         near, far = tracks[i]
         anchor = near or far
-        if anchor is None:
+
+        # Shuttle-led (weak pose) or no player this frame: centre the shuttle
+        # horizontally in the full-height slice; both court halves stay framed.
+        if shuttle_led or anchor is None:
+            if sx is None:
+                continue
+            z = float(np.clip(SHUTTLE_LED_Z, Z_HARD, Z_MAX))
+            hw, hh = cw / (2 * z), ch / (2 * z)
+            xs[i] = np.clip(sx, hw, 1.0 - hw)
+            ys[i] = np.clip(0.5 * sy + 0.5 * SHUTTLE_LED_CY, hh, 1.0 - hh)
+            zs[i] = z
+            seen[i] = True
             continue
+
         nxlo, nxhi, nylo, nyhi = extent(anchor)          # closest player (must contain)
         bxlo, bxhi, bylo, byhi = nxlo, nxhi, nylo, nyhi   # both players
         if near and far:
@@ -553,11 +580,6 @@ def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
             bxlo, bxhi = min(bxlo, fxlo), max(bxhi, fxhi)
             bylo, byhi = min(bylo, fylo), max(byhi, fyhi)
 
-        sx = sy = None
-        if shuttle_ok:
-            sf = _nearest(shuttle_frames, float(times[i]), max_gap=0.3)
-            if sf and sf.get("confidence", 0.0) >= 0.3:
-                sx, sy = float(sf["x"]), float(sf["y"])
         if sx is not None:
             nxlo, nxhi, nylo, nyhi = min(nxlo, sx), max(nxhi, sx), min(nylo, sy), max(nyhi, sy)
             bxlo, bxhi, bylo, byhi = min(bxlo, sx), max(bxhi, sx), min(bylo, sy), max(byhi, sy)

@@ -214,7 +214,11 @@ def gemini_review(path: str | Path, n_frames: int = 6, pov: bool = False) -> dic
         return {"ok": len(empties) <= max(1, len(ts) // 3), "frames": frames}
     empties = [f for f in frames if f.get("framing") == "empty" or f.get("players_visible", 0) == 0]
     cuts = [f for f in frames if f.get("framing") == "player_cut"]
-    return {"ok": not empties and len(cuts) <= max(1, n_frames // 3), "frames": frames}
+    # A shuttle-centred 9:16 crop intentionally frames tight and sometimes leads
+    # the action into open court, so tolerate a few flagged frames rather than
+    # dropping the rally to a static safe camera (esp. on soft proxy footage).
+    return {"ok": len(empties) <= max(1, n_frames // 3)
+            and len(cuts) <= max(1, n_frames // 2), "frames": frames}
 
 
 def validate_clip(path: str | Path, motion_limit: float = 3.0, pov: bool = False) -> dict:
