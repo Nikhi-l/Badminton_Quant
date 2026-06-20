@@ -509,12 +509,49 @@ def _two_player_tracks(player_frames: list, times) -> list:
     return res
 
 
+def _shuttle_track(shuttle_frames: list, times, max_gap_s: float = 0.5):
+    """Per-frame interpolated shuttle (x, y), NaN where there is no confident
+    detection within `max_gap_s`. Linear interpolation across short gaps keeps the
+    camera following continuously instead of snapping back on every missed frame."""
+    pts = sorted(((float(s["t"]), float(s["x"]), float(s["y"]))
+                  for s in (shuttle_frames or [])
+                  if float(s.get("confidence", 0.0)) >= 0.3
+                  and float(s.get("x", 0)) > 0 and float(s.get("y", 0)) > 0),
+                 key=lambda r: r[0])
+    n = len(times)
+    sx = np.full(n, np.nan, np.float32)
+    sy = np.full(n, np.nan, np.float32)
+    if not pts:
+        return sx, sy
+    ts = np.array([p[0] for p in pts])
+    px = np.array([p[1] for p in pts])
+    py = np.array([p[2] for p in pts])
+    for i, t in enumerate(times):
+        t = float(t)
+        j = int(np.searchsorted(ts, t))
+        left = j - 1 if j - 1 >= 0 else None
+        right = j if j < len(ts) else None
+        if left is not None and right is not None and (ts[right] - ts[left]) <= 2 * max_gap_s:
+            span = float(ts[right] - ts[left])
+            w = 0.0 if span <= 1e-6 else (t - ts[left]) / span
+            sx[i] = px[left] * (1 - w) + px[right] * w
+            sy[i] = py[left] * (1 - w) + py[right] * w
+        elif left is not None and (t - ts[left]) <= max_gap_s:
+            sx[i], sy[i] = px[left], py[left]
+        elif right is not None and (ts[right] - t) <= max_gap_s:
+            sx[i], sy[i] = px[right], py[right]
+    return sx, sy
+
+
 def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
                 fps: int = config.PROXY_FPS) -> FocusPath | None:
-    """Camera path from player boxes (+ shuttle when available).
+    """Camera path that follows the shuttle.
 
-    Guarantees: the closest player is always in frame; both players are framed
-    whenever the 9:16 crop can fit them; the shuttle (when tracked) is centred.
+    The shuttle is the primary follow target: when it is tracked, the camera pans
+    so the shuttle sits at frame centre and zooms only as wide as needed to keep
+    the nearest player contained (and the far player too when it still fits 9:16).
+    Falls back to framing the player(s) on frames with no shuttle, and to a
+    shuttle-led full-height slice when pose is too weak to trust the boxes.
     """
     if not vision_rally:
         return None
@@ -534,9 +571,14 @@ def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
     tracks = _two_player_tracks(player_frames, times)
 
     PAD_X, PAD_T, PAD_B = 0.05, 0.10, 0.13   # body padding around a player box
-    SH_BAND = 0.22                           # shuttle kept within the central band
-    SHUTTLE_LED_Z = Z_HARD                   # widest tall slice: full court height,
-    SHUTTLE_LED_CY = 0.55                    # so both court halves stay in frame
+    SHUTTLE_LED_Z = Z_HARD                   # widest tall slice when following alone
+    SHUTTLE_LED_CY = 0.55                    # bias vertical so both court halves show
+    MIN_HW, MIN_HH = 0.085, 0.135            # zoom floor: don't punch onto the shuttle
+
+    if shuttle_ok:
+        shu_x, shu_y = _shuttle_track(shuttle_frames, times)
+    else:
+        shu_x = shu_y = np.full(n, np.nan, np.float32)
 
     xs = np.full(n, 0.5, np.float32)
     ys = np.full(n, 0.55, np.float32)
@@ -550,55 +592,61 @@ def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
     def zoom_for(a, b, c, d):
         return min(cw / max(b - a, 0.12), ch / max(d - c, 0.18))
 
-    for i in range(n):
-        sx = sy = None
-        if shuttle_ok:
-            sf = _nearest(shuttle_frames, float(times[i]), max_gap=0.3)
-            if sf and sf.get("confidence", 0.0) >= 0.3:
-                sx, sy = float(sf["x"]), float(sf["y"])
+    def fit_zoom(half_w, half_h):
+        return min(cw / (2 * max(half_w, MIN_HW)), ch / (2 * max(half_h, MIN_HH)))
 
+    for i in range(n):
+        sx, sy = float(shu_x[i]), float(shu_y[i])
+        has_shuttle = not np.isnan(sx)
         near, far = tracks[i]
         anchor = near or far
 
-        # Shuttle-led (weak pose) or no player this frame: centre the shuttle
-        # horizontally in the full-height slice; both court halves stay framed.
-        if shuttle_led or anchor is None:
-            if sx is None:
-                continue
+        # (a) Follow the shuttle: centre on it, zoom only as wide as needed to keep
+        #     the nearest player contained (and the far player too when it fits).
+        if has_shuttle and anchor is not None and not shuttle_led:
+            nxlo, nxhi, nylo, nyhi = extent(anchor)
+            need_w = max(abs(sx - nxlo), abs(nxhi - sx))
+            need_h = max(abs(sy - nylo), abs(nyhi - sy))
+            if near and far:
+                fxlo, fxhi, fylo, fyhi = extent(far)
+                fw, fh = max(abs(sx - fxlo), abs(fxhi - sx)), max(abs(sy - fylo), abs(fyhi - sy))
+                if fit_zoom(max(need_w, fw), max(need_h, fh)) >= Z_HARD:
+                    need_w, need_h = max(need_w, fw), max(need_h, fh)
+            z = float(np.clip(fit_zoom(need_w, need_h), Z_HARD, Z_MAX))
+            hw, hh = cw / (2 * z), ch / (2 * z)
+            # centre = shuttle, slid only enough to keep the player box in frame
+            cx = float(np.clip(sx, nxhi - hw, nxlo + hw)) if (nxhi - nxlo) <= 2 * hw else sx
+            cy = float(np.clip(sy, nyhi - hh, nylo + hh)) if (nyhi - nylo) <= 2 * hh else sy
+            xs[i], ys[i], zs[i], seen[i] = np.clip(cx, hw, 1 - hw), np.clip(cy, hh, 1 - hh), z, True
+            continue
+
+        # (b) Shuttle-led (weak pose) or no player: centre the shuttle in the slice.
+        if has_shuttle and (shuttle_led or anchor is None):
             z = float(np.clip(SHUTTLE_LED_Z, Z_HARD, Z_MAX))
             hw, hh = cw / (2 * z), ch / (2 * z)
             xs[i] = np.clip(sx, hw, 1.0 - hw)
             ys[i] = np.clip(0.5 * sy + 0.5 * SHUTTLE_LED_CY, hh, 1.0 - hh)
-            zs[i] = z
-            seen[i] = True
+            zs[i], seen[i] = z, True
             continue
 
-        nxlo, nxhi, nylo, nyhi = extent(anchor)          # closest player (must contain)
-        bxlo, bxhi, bylo, byhi = nxlo, nxhi, nylo, nyhi   # both players
+        # (c) No shuttle this frame: frame the player(s).
+        if anchor is None:
+            continue
+        nxlo, nxhi, nylo, nyhi = extent(anchor)
+        bxlo, bxhi, bylo, byhi = nxlo, nxhi, nylo, nyhi
         if near and far:
             fxlo, fxhi, fylo, fyhi = extent(far)
             bxlo, bxhi = min(bxlo, fxlo), max(bxhi, fxhi)
             bylo, byhi = min(bylo, fylo), max(byhi, fyhi)
-
-        if sx is not None:
-            nxlo, nxhi, nylo, nyhi = min(nxlo, sx), max(nxhi, sx), min(nylo, sy), max(nyhi, sy)
-            bxlo, bxhi, bylo, byhi = min(bxlo, sx), max(bxhi, sx), min(bylo, sy), max(byhi, sy)
-
         z_both = zoom_for(bxlo, bxhi, bylo, byhi)
-        if z_both >= Z_HARD:                              # both players fit → frame both
+        if z_both >= Z_HARD:
             cx, cy, z = (bxlo + bxhi) / 2, (bylo + byhi) / 2, z_both
-        else:                                             # can't fit both → closest + shuttle
+        else:
             z = max(zoom_for(nxlo, nxhi, nylo, nyhi), Z_HARD)
             cx, cy = (nxlo + nxhi) / 2, (nylo + nyhi) / 2
         z = float(np.clip(z * 0.97, Z_HARD, Z_MAX))
         hw, hh = cw / (2 * z), ch / (2 * z)
-        if sx is not None:                                # pull the shuttle toward centre
-            cx = float(np.clip(cx, sx - hw * SH_BAND, sx + hw * SH_BAND))
-            cy = float(np.clip(cy, sy - hh * SH_BAND, sy + hh * SH_BAND))
-        xs[i] = np.clip(cx, hw, 1.0 - hw)
-        ys[i] = np.clip(cy, hh, 1.0 - hh)
-        zs[i] = z
-        seen[i] = True
+        xs[i], ys[i], zs[i], seen[i] = np.clip(cx, hw, 1 - hw), np.clip(cy, hh, 1 - hh), z, True
 
     if seen.mean() < 0.15:
         return None
