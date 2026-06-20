@@ -135,16 +135,18 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
         note("tracking", f"rally {i}/{len(picked)}: tracking action {t0:.0f}s-{t1:.0f}s")
         vision_rally = vision_engine.rally(vision, i)
         path = track.from_vision(proxy, t0, t1, vision_rally) if not pov else None
+        shuttle_cam = path is not None   # shuttle-follow camera → lenient framing audit
         if path is None:
             path = track.track(proxy, t0, t1, force_gentle=pov)
         else:
-            note("tracking", f"rally {i}: using GPU player/pose path")
+            note("tracking", f"rally {i}: using shuttle-follow camera")
         cw_norm, ch_norm = track._crop_norms(proxy)
         ps = validate.path_smoothness(path, cw_norm, ch_norm)
         if not ps["ok"]:
             note("tracking", f"rally {i}: camera path too jerky "
                              f"(pan {ps['ax99']:.4f}, zoom {ps['az99']:.4f}) — extra smoothing")
             path = track.track(proxy, t0, t1, extra_smooth=True, force_gentle=pov)
+            shuttle_cam = False  # replaced with a motion path → strict audit
             if not validate.path_smoothness(path, cw_norm, ch_norm)["ok"]:
                 note("tracking", f"rally {i}: falling back to static wide camera")
                 path = track.safe_path(proxy, t0, t1)
@@ -155,7 +157,7 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
                                   annotations=vision_rally)
 
         note("validate", f"rally {i}/{len(picked)}: checking frames")
-        v = validate.validate_clip(out, motion_limit, pov)
+        v = validate.validate_clip(out, motion_limit, pov, lenient_framing=shuttle_cam)
         attempt = {"rally": i, "pass": "tracked", "ok": v["ok"]}
         trim_range = None
         if not v["ok"]:
@@ -165,11 +167,12 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
                 note("validate", f"rally {i}: failed ({_why(v)}) — trimming to clean "
                                  f"window {win[0]:.1f}-{win[1]:.1f}s")
                 path = track.from_vision(proxy, nt0, nt1, vision_rally) if not pov else None
+                trim_shuttle_cam = path is not None
                 if path is None:
                     path = track.track(proxy, nt0, nt1, force_gentle=pov)
                 dur = render.render_rally(input_path, info, nt0, nt1, path, out, *label,
                                           annotations=vision_rally)
-                v = validate.validate_clip(out, motion_limit, pov)
+                v = validate.validate_clip(out, motion_limit, pov, lenient_framing=trim_shuttle_cam)
                 attempt = {"rally": i, "pass": "trimmed", "ok": v["ok"]}
                 if v["ok"]:
                     trim_range = (nt0, nt1)

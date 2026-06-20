@@ -184,8 +184,14 @@ def _grab_jpeg(path: str | Path, t: float) -> bytes:
     return out.stdout
 
 
-def gemini_review(path: str | Path, n_frames: int = 6, pov: bool = False) -> dict:
-    """Ask Gemini to eyeball sampled frames. Returns {'ok': bool, 'frames': [...]}."""
+def gemini_review(path: str | Path, n_frames: int = 6, pov: bool = False,
+                  lenient: bool = False) -> dict:
+    """Ask Gemini to eyeball sampled frames. Returns {'ok': bool, 'frames': [...]}.
+
+    `lenient` (shuttle-follow camera): only genuine off-court views (wall / ceiling
+    / floor: framing=='empty') count against the clip — a frame where the soft
+    proxy simply has no clearly-visible player is fine, since the shuttle is the
+    subject. Strict mode also fails frames with no visible player."""
     dur = media.probe(path).duration
     parts: list[dict] = [{"text": GEMINI_PROMPT_POV if pov else GEMINI_PROMPT}]
     ts = []
@@ -212,24 +218,32 @@ def gemini_review(path: str | Path, n_frames: int = 6, pov: bool = False) -> dic
     if pov:   # wearer is never in frame — only true off-court views count as empty
         empties = [f for f in frames if f.get("framing") == "empty"]
         return {"ok": len(empties) <= max(1, len(ts) // 3), "frames": frames}
-    empties = [f for f in frames if f.get("framing") == "empty" or f.get("players_visible", 0) == 0]
+    if lenient:   # shuttle-follow: only true off-court frames count as empty
+        empties = [f for f in frames if f.get("framing") == "empty"]
+        empty_tol = max(1, n_frames // 2)
+    else:
+        empties = [f for f in frames if f.get("framing") == "empty"
+                   or f.get("players_visible", 0) == 0]
+        empty_tol = max(1, n_frames // 3)
     cuts = [f for f in frames if f.get("framing") == "player_cut"]
-    # A shuttle-centred 9:16 crop intentionally frames tight and sometimes leads
-    # the action into open court, so tolerate a few flagged frames rather than
-    # dropping the rally to a static safe camera (esp. on soft proxy footage).
-    return {"ok": len(empties) <= max(1, n_frames // 3)
+    # A tight 9:16 crop frames aggressively, so tolerate some flagged frames
+    # rather than dropping the rally to a static safe camera.
+    return {"ok": len(empties) <= empty_tol
             and len(cuts) <= max(1, n_frames // 2), "frames": frames}
 
 
-def validate_clip(path: str | Path, motion_limit: float = 3.0, pov: bool = False) -> dict:
+def validate_clip(path: str | Path, motion_limit: float = 3.0, pov: bool = False,
+                  lenient_framing: bool = False) -> dict:
     """motion_limit: 3.0 for tripod footage; raised for POV sources whose
     shake is in the recording itself, not a rendering defect. pov also relaxes
-    the content audit (the wearer is never visible in first-person footage)."""
+    the content audit (the wearer is never visible in first-person footage).
+    lenient_framing: relax the framing audit for the shuttle-follow camera (only
+    true off-court frames count, not soft-proxy 'no player visible')."""
     h = heuristics(path)
     if not h["ok"]:
         return {"ok": False, "heuristics": h, "motion": None, "gemini": None}
     mj = motion_jerk(path, limit=motion_limit)
     if not mj["ok"]:
         return {"ok": False, "heuristics": h, "motion": mj, "gemini": None}
-    g = gemini_review(path, pov=pov)
+    g = gemini_review(path, pov=pov, lenient=lenient_framing)
     return {"ok": g["ok"], "heuristics": h, "motion": mj, "gemini": g}

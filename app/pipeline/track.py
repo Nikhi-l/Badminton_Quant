@@ -601,22 +601,25 @@ def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
         near, far = tracks[i]
         anchor = near or far
 
-        # (a) Follow the shuttle: centre on it, zoom only as wide as needed to keep
-        #     the nearest player contained (and the far player too when it fits).
+        # (a) Follow the shuttle HORIZONTALLY; keep the nearest player contained and
+        #     stay anchored to the court vertically (never chase a high shuttle into
+        #     the ceiling — the tall 9:16 crop contains the airborne shuttle anyway).
         if has_shuttle and anchor is not None and not shuttle_led:
             nxlo, nxhi, nylo, nyhi = extent(anchor)
-            need_w = max(abs(sx - nxlo), abs(nxhi - sx))
-            need_h = max(abs(sy - nylo), abs(nyhi - sy))
-            if near and far:
+            need_w = max(abs(sx - nxlo), abs(nxhi - sx))    # contain near player around shuttle x
+            vlo, vhi = min(nylo, sy), max(nyhi, sy)         # vertical span: player + shuttle
+            if near and far:                                # include far player if it still fits
                 fxlo, fxhi, fylo, fyhi = extent(far)
-                fw, fh = max(abs(sx - fxlo), abs(fxhi - sx)), max(abs(sy - fylo), abs(fyhi - sy))
-                if fit_zoom(max(need_w, fw), max(need_h, fh)) >= Z_HARD:
-                    need_w, need_h = max(need_w, fw), max(need_h, fh)
-            z = float(np.clip(fit_zoom(need_w, need_h), Z_HARD, Z_MAX))
+                fw = max(abs(sx - fxlo), abs(fxhi - sx))
+                fvlo, fvhi = min(vlo, fylo), max(vhi, fyhi)
+                if fit_zoom(max(need_w, fw), (fvhi - fvlo) / 2) >= Z_HARD:
+                    need_w, vlo, vhi = max(need_w, fw), fvlo, fvhi
+            z = float(np.clip(fit_zoom(need_w, (vhi - vlo) / 2), Z_HARD, Z_MAX))
             hw, hh = cw / (2 * z), ch / (2 * z)
-            # centre = shuttle, slid only enough to keep the player box in frame
+            # x centres on the shuttle (slides only to keep the player in frame);
+            # y centres on the player+shuttle span, so the court stays anchored.
             cx = float(np.clip(sx, nxhi - hw, nxlo + hw)) if (nxhi - nxlo) <= 2 * hw else sx
-            cy = float(np.clip(sy, nyhi - hh, nylo + hh)) if (nyhi - nylo) <= 2 * hh else sy
+            cy = (vlo + vhi) / 2
             xs[i], ys[i], zs[i], seen[i] = np.clip(cx, hw, 1 - hw), np.clip(cy, hh, 1 - hh), z, True
             continue
 
