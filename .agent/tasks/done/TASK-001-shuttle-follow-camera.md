@@ -1,6 +1,9 @@
 # TASK-001: Camera actively follows + centers the shuttle
 
-**Status:** active
+**Status:** done (Cycle 1, 2026-06-20) — follows the shuttle horizontally, anchored
+vertically; regression-tested (6 tests). On the soft proxy 3/5 rallies follow,
+2/5 safe-fallback (hard source angle). See docs/dev-cycle-log.md Cycle 1.
+**Status (orig):** active
 **Branch:** `feat/TASK-001-shuttle-follow-camera`
 **Base SHA:** `5f1c165`
 **PRD section:** §16 remediation P0 (camera follows shuttle)
