@@ -10,3 +10,8 @@ runpod_worker/models/**/*.zip
 yolo*.pt
 vendor/TrackNetV3/__pycache__/
 vendor/TrackNetV3/**/__pycache__/
+
+# delivered/exported reels and local agent run logs
+/baddy_shuttle_reel.mp4
+*.local.mp4
+.agent/runs/
