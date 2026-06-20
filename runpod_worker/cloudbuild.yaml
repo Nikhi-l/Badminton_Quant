@@ -1,0 +1,25 @@
+# Clean single-arch (linux/amd64) build of the RunPod vision worker FROM SOURCE.
+# Use this instead of a local docker/buildx build: it avoids the multi-arch OCI
+# attestation index that previously confused the RunPod runtime, and it is a true
+# from-source build (fresh TrackNetV3 clone + deps, dataset boundary patch applied
+# in the Dockerfile) rather than a re-wrap of the broken image.
+#
+# Run:  gcloud builds submit --config runpod_worker/cloudbuild.yaml runpod_worker/
+substitutions:
+  _IMAGE: us-central1-docker.pkg.dev/project-69911bc1-7fd5-4fb1-913/baddy-runpod/baddy-vision-worker
+  _TAG: tracknet-src
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg
+      - INSTALL_TRACKNET=1
+      - -t
+      - ${_IMAGE}:${_TAG}
+      - .
+images:
+  - ${_IMAGE}:${_TAG}
+timeout: 2400s
+options:
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 80

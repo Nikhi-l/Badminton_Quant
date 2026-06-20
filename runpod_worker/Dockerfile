@@ -21,25 +21,11 @@ RUN if [ "$INSTALL_TRACKNET" = "1" ]; then \
       git clone --depth 1 "$TRACKNET_REPO_URL" /opt/TrackNetV3; \
     fi
 
-# Patch upstream's Video_IterableDataset: it runs one phantom iteration past the
-# end when frame_count is an exact multiple of seq_len, then indexes an empty
-# list -> IndexError. Guard it. Idempotent; device-independent (bites GPU too).
-RUN if [ -f /opt/TrackNetV3/dataset.py ]; then python - <<'PY'; fi
-from pathlib import Path
-p = Path("/opt/TrackNetV3/dataset.py")
-src = p.read_text()
-anchor = ("            # Form a sequence\n"
-          "            data_idx = [(0, i) for i in range(start_f_id, end_f_id)]")
-marker = "# baddy: video ended on a window boundary"
-if marker not in src and anchor in src:
-    guard = ("            " + marker + " -> no frames left, stop.\n"
-             "            if not frame_list:\n"
-             "                break\n\n" + anchor)
-    p.write_text(src.replace(anchor, guard, 1))
-    print("dataset.py patched")
-else:
-    print("dataset.py: already patched or anchor missing")
-PY
+# Patch upstream's Video_IterableDataset boundary crash (see patch_dataset.py).
+# A script COPY+RUN (not a heredoc) so the classic non-BuildKit builder Cloud Build
+# uses can parse the Dockerfile.
+COPY patch_dataset.py /tmp/patch_dataset.py
+RUN python /tmp/patch_dataset.py
 
 COPY models /models
 
