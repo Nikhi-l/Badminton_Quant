@@ -13,10 +13,17 @@ tracking works on baddyai.com.
 ## Acceptance criteria
 - [x] Clean from-source image built + pushed (single-arch docker v2 manifest).
       → `baddy-vision-worker:tracknet-src-20260621` (sha256:972b95f2…), verified.
-- [ ] RunPod endpoint `radst7uhhhl6q0` points at the new image and a worker boots
-      healthy. **Blocked:** `RUNPOD_API_KEY` in `.env` returns 401.
-- [ ] A test job returns real TrackNetV3 shuttle points from the GPU.
-- [ ] baddyai.com runs a `shuttle=tracknetv3` job end-to-end.
+- [x] RunPod endpoint `radst7uhhhl6q0` points at the new image and a worker boots
+      healthy. → fresh key set; created template `lwjbpdx6qf`; PATCH endpoint
+      templateId + `workersMax: 2` (was 0!). Health: `ready:2, unhealthy:0`.
+- [x] Worker handler runs. → boot-test job FAILED only on the dummy proxy URL
+      (`404 example.com/proxy.mp4` from `handler.py:498 _download`), executionTime
+      257ms — proves container boots + RunPod SDK + handler execute.
+- [ ] A real job returns TrackNetV3 shuttle points from the GPU. → do via
+      baddyai.com (token-gated proxy hosting); public-bucket shortcut correctly
+      blocked (don't expose user video).
+- [ ] baddyai.com runs a `shuttle=tracknetv3` job end-to-end. → needs the SERVER's
+      `.env` RUNPOD_API_KEY refreshed too (old key 401s) + redeploy.
 
 ## Deploy steps (once a valid RUNPOD_API_KEY is set, or via console)
 - API: update endpoint template image → `…/baddy-runpod/baddy-vision-worker:tracknet-src-20260621`.

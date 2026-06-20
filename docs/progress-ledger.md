@@ -14,7 +14,7 @@ docs commit after each functional slice.
 |---|---|---|---|
 | 2026-06-20 | Harness adoption | Done | Pragmatic subset scaffolded (Cycle 1) |
 | 2026-06-20 | Camera: follow shuttle | Done | TASK-001, Cycle 1 — follows on 3/5 (soft proxy); regression-tested |
-| 2026-06-21 | RunPod worker rebuild | Image ready | TASK-002, Cycle 2 — clean from-source image `tracknet-src-20260621` built+verified (docker v2, single-arch); deploy to endpoint pending a valid RUNPOD_API_KEY |
+| 2026-06-21 | RunPod worker rebuild | Worker healthy | TASK-002, Cycle 3 — `tracknet-src-20260621` deployed (template `lwjbpdx6qf`, workersMax 0→2); workers boot `ready:2 unhealthy:0`; handler runs (boot-test failed only on dummy URL). Full GPU shuttle e2e pending via baddyai.com + server key refresh |
 | 2026-06-20 | CPU/GPU pipelines + gen-time | Todo | TASK-003 (P1) |
 | 2026-06-20 | Job model (timing, failed) | Todo | TASK-004 (P1) |
 | 2026-06-20 | Queue UI + /api/jobs | Todo | TASK-005 (P1) |
