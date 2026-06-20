@@ -350,7 +350,6 @@ const studio = {
   mode: "reel",
   raf: 0,
   selectedLayer: "reel",
-  tool: "select",
   zoom: 1,
   dur: 1,
   timelineSegments: [],
@@ -363,7 +362,6 @@ function openStudio(item) {
   studio.item = item;
   studio.mode = "reel";
   studio.selectedLayer = "reel";
-  studio.tool = "select";
   studio.zoom = 1;
   studio.editorState = loadEditorState(item);
   $("studio").hidden = false;
@@ -374,7 +372,6 @@ function openStudio(item) {
   document.body.style.overflow = "hidden";
   initEdit();
   renderCoachbar(item);
-  renderStudioTools();
   renderLayerList();
   renderInspector();
   setStudioMode("reel");
@@ -397,7 +394,7 @@ function defaultEditorState(item) {
       shuttle: { enabled: true, style: "ring", size: 54, opacity: 0.92, trail: true },
       pose: { enabled: !!(item.options && item.options.pose === "yolo11"), style: "glow", lineWidth: 3, opacity: 0.82 },
     },
-    music: { track: "kinetic-120", volume: 0.42, ducking: true },
+    audio: { bed: "current-stitch", editable: false },
   };
 }
 
@@ -412,7 +409,7 @@ function mergeEditorState(base, saved) {
       shuttle: { ...base.overlays.shuttle, ...((saved.overlays || {}).shuttle || {}) },
       pose: { ...base.overlays.pose, ...((saved.overlays || {}).pose || {}) },
     },
-    music: { ...base.music, ...(saved.music || {}) },
+    audio: { ...base.audio, ...(saved.audio || {}) },
   };
 }
 
@@ -422,29 +419,8 @@ function loadEditorState(item) {
   return mergeEditorState(defaultEditorState(item), saved);
 }
 
-function saveEditorState(feedback = true) {
+function saveEditorState() {
   localStorage.setItem(editorKey(), JSON.stringify(studio.editorState));
-  if (feedback) {
-    $("saveEditBtn").classList.add("saved");
-    $("editMsg").textContent = "edit state saved locally";
-    setTimeout(() => $("saveEditBtn").classList.remove("saved"), 900);
-  }
-}
-
-function renderStudioTools() {
-  $("studioTools").querySelectorAll(".tool").forEach(btn => {
-    btn.classList.toggle("active", btn.dataset.tool === studio.tool);
-  });
-}
-
-function selectTool(tool) {
-  if (tool === "undo" || tool === "redo") {
-    $("editMsg").textContent = `${styleLabel(tool)} is reserved for the next editor slice`;
-    return;
-  }
-  studio.tool = tool;
-  if (["shuttle", "pose", "music"].includes(tool)) selectLayer(tool);
-  renderStudioTools();
 }
 
 function renderCoachbar(item) {
@@ -560,8 +536,8 @@ function buildTimeline() {
         segs: shuttleOn ? cuts.map(s => ({ ...s, layer: "shuttle", label: studio.editorState.overlays.shuttle.style, sub: rallyVisionText(s.vision) || "overlay" })) : [] },
       { id: "pose", label: "Pose", count: poseOn ? cuts.length : 0, type: "pose",
         segs: poseOn ? cuts.map(s => ({ ...s, layer: "pose", label: studio.editorState.overlays.pose.style, sub: "skeleton" })) : [] },
-      { id: "music", label: "Music", count: 1, type: "music",
-        segs: [{ t0: 0, t1: dur, label: musicTitle(), sub: `${Math.round(studio.editorState.music.volume * 100)}% mix`, layer: "music" }] },
+      { id: "soundtrack", label: "Soundtrack", count: 1, type: "audio",
+        segs: [{ t0: 0, t1: dur, label: "Current bed", sub: "from reel stitch", layer: "soundtrack" }] },
     ];
   } else {
     dur = item.source_duration || 1;
@@ -575,7 +551,7 @@ function buildTimeline() {
       { id: "shuttle", label: "Shuttle FX", count: trackedRallies().length, type: "shuttle",
         segs: trackedRallies().map(s => ({ ...s, layer: "shuttle", label: "Track", sub: rallyVisionText(s.vision) || "source coordinates" })) },
       { id: "pose", label: "Pose", count: poseReadyCount(), type: "pose", segs: [] },
-      { id: "music", label: "Music", count: 0, type: "music", segs: [] },
+      { id: "soundtrack", label: "Soundtrack", count: 0, type: "audio", segs: [] },
     ];
   }
   studio.dur = dur;
@@ -639,14 +615,6 @@ function poseReadyCount() {
   return (studio.item.rallies || []).filter(r => Number(((r.vision || {}).pose_quality) || 0) > 0).length;
 }
 
-function musicTitle() {
-  return ({
-    "kinetic-120": "Kinetic 120",
-    "arena-128": "Arena 128",
-    "clean-cuts": "Clean Cuts",
-  })[studio.editorState.music.track] || "Kinetic 120";
-}
-
 function renderLayerList() {
   const state = studio.editorState;
   const pool = studio.item.rally_pool || studio.item.rallies || [];
@@ -655,7 +623,7 @@ function renderLayerList() {
     { id: "reel", ico: "▤", title: "Reel cuts", sub: `${included}/${pool.length || included} rallies`, state: "live" },
     { id: "shuttle", ico: "◉", title: "Shuttle FX", sub: `${styleLabel(state.overlays.shuttle.style)} · ${Math.round(state.overlays.shuttle.opacity * 100)}%`, state: state.overlays.shuttle.enabled ? "on" : "off" },
     { id: "pose", ico: "◇", title: "Pose skeleton", sub: `${styleLabel(state.overlays.pose.style)} · ${poseReadyCount()} rallies`, state: state.overlays.pose.enabled ? "on" : "off" },
-    { id: "music", ico: "♪", title: "Music bed", sub: `${musicTitle()} · ${Math.round(state.music.volume * 100)}%`, state: state.music.ducking ? "duck" : "mix" },
+    { id: "soundtrack", ico: "♪", title: "Soundtrack", sub: "Current stitch bed", state: "fixed" },
   ];
   $("layerList").innerHTML = layers.map(l => `
     <button class="layer-row ${studio.selectedLayer === l.id ? "active" : ""}" data-layer="${l.id}">
@@ -670,8 +638,6 @@ function renderLayerList() {
 
 function selectLayer(layer) {
   studio.selectedLayer = layer;
-  studio.tool = ["shuttle", "pose", "music"].includes(layer) ? layer : "select";
-  renderStudioTools();
   renderLayerList();
   renderInspector();
   buildTimeline();
@@ -721,24 +687,14 @@ function renderInspector() {
       po.style = btn.dataset.poseStyle;
       stateChanged();
     });
-  } else if (studio.selectedLayer === "music") {
-    const mu = state.music;
+  } else if (studio.selectedLayer === "soundtrack") {
     panel.innerHTML = `
       <div class="control-group">
-        <div class="control-title"><span>Music timeline</span><span>${esc(musicTitle())}</span></div>
-        <div class="choice-row">
-          ${["kinetic-120", "arena-128", "clean-cuts"].map(v => `<button class="choice-btn ${mu.track === v ? "active" : ""}" data-music-track="${v}">${styleLabel(v)}</button>`).join("")}
-        </div>
-        <div class="control-row"><label>Volume</label><input type="range" id="musicVolume" min="0" max="100" value="${Math.round(mu.volume * 100)}"></div>
-        <div class="control-row"><label>Court audio ducking</label><input type="checkbox" id="musicDucking" ${mu.ducking ? "checked" : ""}></div>
+        <div class="control-title"><span>Soundtrack</span><span>Fixed</span></div>
+        <div class="control-row"><label>Source</label><span>Current stitched reel bed</span></div>
+        <div class="control-row"><label>Edit path</label><span>Future render contract</span></div>
       </div>
       <div class="control-group"><div class="control-title"><span>Export target</span><span>MP4</span></div><div class="control-row"><label>Codec</label><span>H.264</span></div><div class="control-row"><label>Aspect</label><span>9:16</span></div></div>`;
-    $("musicVolume").oninput = (e) => { mu.volume = Number(e.target.value) / 100; stateChanged(false); };
-    $("musicDucking").onchange = (e) => { mu.ducking = e.target.checked; stateChanged(); };
-    panel.querySelectorAll("[data-music-track]").forEach(btn => btn.onclick = () => {
-      mu.track = btn.dataset.musicTrack;
-      stateChanged();
-    });
   } else {
     panel.innerHTML = `
       <div class="control-group">
@@ -783,7 +739,7 @@ function stateChanged(save = true) {
   renderInspector();
   buildTimeline();
   updateOverlayPreview();
-  if (save) saveEditorState(false);
+  if (save) saveEditorState();
 }
 
 function videoFitPoint(x, y) {
@@ -891,7 +847,7 @@ async function rebuildReel() {
   if (!order.length) { $("editMsg").textContent = "keep at least one rally"; return; }
   const mirror = $("mirrorChk").checked;
   studio.editorState.remix = { order, mirror };
-  saveEditorState(false);
+  saveEditorState();
   $("rebuildBtn").disabled = true;
   $("editMsg").textContent = mirror ? "rendering mirrored reel..." : "rendering reel...";
   try {
@@ -934,7 +890,6 @@ async function rebuildReel() {
   }
 }
 
-$("editToggle").onclick = () => { selectLayer("reel"); };
 $("rebuildBtn").onclick = rebuildReel;
 $("mirrorChk").onchange = () => {
   studio.editorState.remix.mirror = $("mirrorChk").checked;
@@ -947,8 +902,6 @@ $("speedToggle").querySelectorAll("button").forEach(b => b.onclick = () => {
   b.classList.add("active");
   $("stVideo").playbackRate = parseFloat(b.dataset.rate);
 });
-$("studioTools").querySelectorAll(".tool").forEach(b => b.onclick = () => selectTool(b.dataset.tool));
-$("saveEditBtn").onclick = () => saveEditorState(true);
 $("zoomOut").onclick = () => {
   studio.zoom = Math.max(0.68, Math.round((studio.zoom - 0.08) * 100) / 100);
   $("stageFrame").style.setProperty("--stage-zoom", studio.zoom);
@@ -960,8 +913,6 @@ $("zoomIn").onclick = () => {
   $("zoomLabel").textContent = `${Math.round(studio.zoom * 100)}%`;
 };
 $("timelineZoom").oninput = () => buildTimeline();
-$("magnetToggle").onclick = () => $("magnetToggle").classList.toggle("on");
-$("splitBtn").onclick = () => { $("editMsg").textContent = "split will bind to clip handles in the next editor slice"; };
 $("tpScrub").oninput = () => {
   const v = $("stVideo");
   const dur = v.duration || studio.dur || 1;

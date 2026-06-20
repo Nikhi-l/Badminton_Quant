@@ -63,19 +63,19 @@ gallery / My Reels. Queue shows failed jobs with the error.
 ### 8a. Reel editor UI
 After a reel is done, **Studio** opens as a professional AI reel editor, not just
 a video viewer. Required editor anatomy:
-- top tool ribbon for select, trim, shuttle FX, pose, text, music, undo/redo,
-  save, and export;
-- left layer rail for Reel cuts, Shuttle FX, Pose skeleton, and Music bed;
+- top-level actions for Reel/Source analysis view, export, and close;
+- left layer rail for Reel cuts, Shuttle FX, Pose skeleton, and Soundtrack;
 - central 9:16 canvas preview;
 - right inspector with controls for the selected layer;
 - bottom multi-lane timeline synchronized to video playback.
 
 Editor state uses `baddy.editor.v1` (see
 `docs/roadmap/REEL_EDITOR_UX_RESEARCH.md`) and must cover rally order, mirror,
-shuttle graphic style (ring/fire/square/trail), pose skeleton style, and music
-track/volume/ducking. Today the remix API renders rally order + mirror; shuttle,
-pose, and music style controls are preview/persisted client state until the
-backend render contract accepts overlay style props.
+shuttle graphic style (ring/fire/square/trail), and pose skeleton style. Today
+the remix API renders rally order + mirror; shuttle and pose style controls are
+preview/persisted client state until the backend render contract accepts overlay
+style props. Music selection/ducking controls are intentionally absent until a
+server-rendered audio-track contract exists.
 
 ## 9–12. Auth / observability / local dev / testing
 No auth yet (single-tenant). Logs via stage/message on the job. Local dev: run

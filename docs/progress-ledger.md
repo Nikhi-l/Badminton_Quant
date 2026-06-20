@@ -5,9 +5,9 @@ docs commit after each functional slice.
 
 ## Current branch / mission
 - Main branch: `main` (protected; releasable; live at baddyai.com)
-- Active branch: `feat/TASK-001-shuttle-follow-camera`
+- Active branch: `feat/TASK-007-reel-editor-ui`
 - UI branch: `feat/TASK-007-reel-editor-ui`
-- Base SHA: `5f1c165`
+- Base SHA: `883786f` for TASK-007 UI work
 
 ## Ledger
 | Date | Area | Status | Notes |
@@ -19,13 +19,13 @@ docs commit after each functional slice.
 | 2026-06-20 | Job model (timing, failed) | Todo | TASK-004 (P1) |
 | 2026-06-20 | Queue UI + /api/jobs | Todo | TASK-005 (P1) |
 | 2026-06-20 | Instance sizing | Decided | TASK-006: c2d-standard-8 Mumbai 1yr CUD (PRD §P1-INSTANCE) |
-| 2026-06-20 | Reel editor UI | Done | TASK-007: Studio editor shell, `baddy.editor.v1`, shuttle/pose/music lanes; overlay render contract still future |
+| 2026-06-21 | Reel editor UI | Reasoned UI complete | TASK-007, Cycle 4 — component rationale added; dead controls removed; Soundtrack is read-only until backend audio render props exist; overlay render contract still future |
 
 ## Active priorities
 1. TASK-001 — camera actively follows + centers the shuttle (regression-tested).
 2. TASK-002 — rebuild RunPod worker from source; verify baddyai.com.
 3. TASK-003/004/005 — dual pipelines + job timing + queue UI.
-4. Next editor backend slice — persist `baddy.editor.v1` to jobs and render shuttle/pose/music styles into MP4 output.
+4. Next editor backend slice — persist `baddy.editor.v1` to jobs and render shuttle/pose/audio styles into MP4 output; keep trim/text/music edits hidden until contracts exist.
 
 ## Open risks
 | Risk | Severity | Source | Mitigation / next task |
@@ -36,6 +36,8 @@ docs commit after each functional slice.
 | `if not pov` gates `from_vision` off for handheld clips | Med | track.py:137 | revisit in pipeline cycle |
 
 ## Next checkpoint
-- Goal: camera keeps the shuttle centered across a rally; regression test green.
-- Required tests: `tests/regression/test_camera_follows_shuttle.py`.
-- Expected docs update: this ledger + dev-cycle-log Cycle 1.
+- Goal: PR-review the reasoned TASK-007 editor UI and decide the next backend
+  render-contract slice.
+- Required tests: `node --check web/app.js`, `./scripts/check.sh`, and rendered
+  desktop/mobile Studio QA.
+- Expected docs update: this ledger + dev-cycle-log Cycle 4.

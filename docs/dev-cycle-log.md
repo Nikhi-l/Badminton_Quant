@@ -5,6 +5,50 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 4: Reasoned reel editor controls + dead-flow removal
+**Date:** 2026-06-21
+**Goal:** Audit every visible Studio editor control, remove user flows that do
+not have a current preview/backend/evidence path, and document the reason each
+remaining component exists.
+**Roadmap alignment:** PRD §8a reel editor UI; §16 remediation P1 (TASK-007).
+**Branch:** `feat/TASK-007-reel-editor-ui`
+**Task file:** `.agent/tasks/active/TASK-007-reel-editor-ui.md`
+**Files changed:**
+- `web/index.html`, `web/style.css`, `web/app.js` — removed the non-functional
+  top tool ribbon, generic Editor button, manual save, split/snap controls, and
+  editable music controls; kept top actions, layer rail, inspector, transport,
+  and timeline controls that have concrete behavior.
+- `web/app.js` — changed `baddy.editor.v1` audio state to read-only
+  `audio.bed/current-stitch`; Soundtrack is context only until backend audio
+  render props exist.
+- `docs/roadmap/REEL_EDITOR_COMPONENT_RATIONALE.md` — new component-by-component
+  rationale and removed-flow ledger.
+- `docs/roadmap/PRIMARY_PRD.md`, `docs/roadmap/REEL_EDITOR_UX_RESEARCH.md`,
+  `.agent/tasks/active/TASK-007-reel-editor-ui.md` — updated product contract
+  language for reasoned controls and read-only Soundtrack.
+**Schema/API/interface changes:** no backend API change. Client editor state now
+models the current audio bed as read-only instead of exposing editable music
+choices that do not affect export.
+**Tests/verification performed:**
+- `node --check web/app.js` → OK.
+- `./scripts/check.sh` → compile OK, `6 passed`.
+- Static rendered QA via `python3 -m http.server 8018 --directory web` plus
+  bundled Playwright:
+  `/tmp/baddy-reasoned-editor-desktop.png`,
+  `/tmp/baddy-reasoned-editor-shuttle.png`, and
+  `/tmp/baddy-reasoned-editor-mobile.png`; verified `topToolButtons: 0`,
+  `timelineDeadButtons: 0`, `editButton: 0`, no horizontal overflow, four
+  layers/tracks (`Reel cuts`, `Shuttle FX`, `Pose skeleton`, `Soundtrack`), and
+  Shuttle Fire preview state.
+**Docs updated:** this log, `docs/progress-ledger.md`, PRD §8a, research/schema
+doc, component rationale doc, TASK-007 file.
+**Open risks / next steps:**
+- Export still renders only rally order + mirror. Baking shuttle FX, pose
+  skeletons, text/graphics, and soundtrack choices into MP4 remains a backend
+  render-contract slice.
+- Trim/split, undo/redo, text, and editable music should stay hidden until the
+  corresponding persisted edit document and render contracts exist.
+
 ## Cycle 3: Clean from-source RunPod worker image + tracking confirmation
 **Date:** 2026-06-21
 **Goal:** Rebuild the GPU worker so it boots (every prior "clean" image was a

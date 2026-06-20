@@ -35,13 +35,20 @@ The editor should feel like a production tool for a completed AI reel, not a
 generic upload/gallery page.
 
 Primary regions:
-- Top toolbar: select, trim, shuttle overlay, pose overlay, text, music, undo,
-  redo, save, export.
-- Left layer rail: Reel cuts, Shuttle FX, Pose skeleton, Music bed.
+- Top actions: switch Reel/Source view, export current MP4, close Studio.
+- Left layer rail: Reel cuts, Shuttle FX, Pose skeleton, Soundtrack.
 - Center canvas: 9:16 preview with Baddy AI overlays.
 - Right inspector: context controls for selected layer.
-- Bottom timeline: labeled tracks for Reel cuts, Shuttle FX, Pose, Music, with
-  a playhead synchronized to the video.
+- Bottom timeline: labeled tracks for Reel cuts, Shuttle FX, Pose, Soundtrack,
+  with a playhead synchronized to the video.
+
+Removed from the current UI until the backend supports them:
+- Trim/split/snap tools: no clip-handle edit model exists yet.
+- Text tools: no text layer schema or renderer exists yet.
+- Undo/redo: no edit history exists yet.
+- Manual save: editor state auto-saves to local storage on changes.
+- Music track/volume/ducking choices: the stitcher owns the soundtrack today;
+  show the Soundtrack as read-only until audio-track render props exist.
 
 ## `baddy.editor.v1`
 
@@ -75,10 +82,9 @@ Client-side state used by the Studio editor:
       "opacity": 0.82
     }
   },
-  "music": {
-    "track": "kinetic-120",
-    "volume": 0.42,
-    "ducking": true
+  "audio": {
+    "bed": "current-stitch",
+    "editable": false
   }
 }
 ```
@@ -111,7 +117,7 @@ Future backend/render contract should add:
 - `pose_track`: per-time keypoints with normalized coordinates, confidence, and
   player id.
 - `audio_tracks`: chosen music id, beat grid, volume automation, and ducking.
-- `overlay_style`: serialized shuttle/pose/text style choices consumed by
+- `overlay_style`: serialized shuttle/pose style choices consumed by
   `render.render_rally()`.
 
 ## Implementation decision
