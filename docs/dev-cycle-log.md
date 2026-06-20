@@ -5,6 +5,46 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 2: Professional reel editor UI
+**Date:** 2026-06-20
+**Goal:** Turn Studio from a rally viewer into a professional AI reel editor for
+badminton highlights.
+**Roadmap alignment:** PRD §8a reel editor UI; §16 remediation P1 (TASK-007).
+**Branch:** `feat/TASK-007-reel-editor-ui` (base `883786f`)
+**Task file:** `.agent/tasks/active/TASK-007-reel-editor-ui.md`
+**Files changed:**
+- `web/index.html`, `web/style.css`, `web/app.js` — Remotion-style editor shell:
+  tool ribbon, layer rail, central 9:16 canvas, right inspector, transport, and
+  multi-lane timeline.
+- `web/app.js` — local `baddy.editor.v1` state for rally order, mirror, shuttle
+  FX, pose skeleton, and music choices; inspector controls for shuttle
+  ring/fire/square/trail, pose styles, and music settings.
+- `app/main.py` — bounded `vision.shuttle_track` public payload for editor
+  overlay preview.
+- `docs/roadmap/REEL_EDITOR_UX_RESEARCH.md` — reference review and editor schema.
+- `tests/unit/test_public_editor_tracks.py` — regression for public shuttle track
+  exposure.
+**Schema/API/interface changes:** public rally vision objects may include
+`shuttle_track` with up to 180 normalized source-time samples:
+`{t,x,y,confidence}`. Client editor state uses `baddy.editor.v1`.
+**Tests/verification performed:**
+- `.venv/bin/python -m pytest tests/unit/test_public_editor_tracks.py -q` →
+  `1 passed`
+- `node --check web/app.js` → OK
+- `./scripts/check.sh` → compile OK, `6 passed`
+- Static visual QA via `python3 -m http.server 8018 --directory web` plus
+  bundled Playwright mock Studio:
+  desktop `/tmp/baddy-editor-ui.png` and `/tmp/baddy-editor-shuttle.png` checked;
+  mobile `/tmp/baddy-editor-mobile.png` checked; no horizontal overflow; 4 layers,
+  4 timeline tracks, Shuttle FX inspector and Fire preview verified.
+**Docs updated:** this log, `docs/progress-ledger.md`, PRD §8a, research/schema doc.
+**Open risks / next steps:**
+- FastAPI startup begins queued background jobs; for visual QA use static serving
+  or add a dev flag to disable the worker.
+- Current backend remix endpoint renders rally order + mirror only. Persisting
+  `baddy.editor.v1` server-side and baking shuttle/pose/music choices into MP4 is
+  the next editor backend slice.
+
 ## Cycle 1: Camera follows the shuttle + harness adoption
 **Date:** 2026-06-20
 **Goal:** Make the virtual camera actively follow/centre the shuttle (it tracked

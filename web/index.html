@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=16">
+<link rel="stylesheet" href="/style.css?v=17">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🏸</text></svg>">
 </head>
 <body>
@@ -145,40 +145,100 @@
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2L8 10l-4 9c-.4.9.5 1.8 1.4 1.4l9-4 8-4-2.5-2.5L12 2z" stroke="url(#g2)" stroke-width="1.6" stroke-linejoin="round"/><circle cx="6.5" cy="17.5" r="2.2" fill="url(#g2)"/><defs><linearGradient id="g2" x1="0" y1="0" x2="24" y2="24"><stop stop-color="#b7f542"/><stop offset="1" stop-color="#46e3ff"/></linearGradient></defs></svg>
       <b>STUDIO</b><span class="muted" id="studioFile"></span>
     </div>
+    <div class="studio-tools" id="studioTools" aria-label="Editor tools">
+      <button class="tool active" data-tool="select" title="Select">↖</button>
+      <button class="tool" data-tool="trim" title="Trim">⌘</button>
+      <button class="tool" data-tool="shuttle" title="Shuttle overlay">◉</button>
+      <button class="tool" data-tool="pose" title="Pose overlay">◇</button>
+      <button class="tool" data-tool="text" title="Text">T</button>
+      <button class="tool" data-tool="music" title="Music">♪</button>
+      <span class="tool-sep"></span>
+      <button class="tool" data-tool="undo" title="Undo">↶</button>
+      <button class="tool" data-tool="redo" title="Redo">↷</button>
+    </div>
     <div class="studio-right">
       <div class="src-toggle">
         <button class="active" data-mode="reel" id="modeReel">Reel</button>
         <button data-mode="source" id="modeSource">Source rallies</button>
       </div>
-      <a class="btn btn-small" id="studioDownload" download="baddy-reel.mp4">Download</a>
-      <button class="studio-x" id="studioX">✕</button>
+      <button class="icon-btn" id="saveEditBtn" title="Save edit state">▣</button>
+      <a class="btn btn-small" id="studioDownload" download="baddy-reel.mp4">Export</a>
+      <button class="studio-x" id="studioX" title="Close">×</button>
     </div>
   </div>
-  <div class="studio-stage"><video id="stVideo" playsinline></video></div>
-  <div class="coachbar" id="coachbar" hidden></div>
+
+  <div class="studio-workspace">
+    <aside class="studio-layers">
+      <div class="rail-title">Layers</div>
+      <div class="layer-list" id="layerList"></div>
+      <div class="rail-title rail-title-secondary">Rally order</div>
+      <div class="edit-chips" id="editChips"></div>
+      <div class="edit-actions">
+        <label class="mirror-l"><input type="checkbox" id="mirrorChk"> Mirror</label>
+        <button class="btn btn-small" id="rebuildBtn">Render</button>
+      </div>
+      <div class="edit-msg muted" id="editMsg"></div>
+    </aside>
+
+    <main class="studio-center">
+      <div class="canvas-bar">
+        <div><span class="canvas-tag">1080 × 1920</span><span class="muted" id="tpHint"></span></div>
+        <div class="canvas-zoom">
+          <button class="tool compact" id="zoomOut" title="Zoom out">−</button>
+          <span id="zoomLabel">Fit</span>
+          <button class="tool compact" id="zoomIn" title="Zoom in">+</button>
+        </div>
+      </div>
+      <div class="studio-stage">
+        <div class="stage-frame" id="stageFrame">
+          <video id="stVideo" playsinline></video>
+          <div class="ai-overlays" id="aiOverlays"></div>
+        </div>
+      </div>
+      <div class="coachbar" id="coachbar" hidden></div>
+    </main>
+
+    <aside class="studio-inspector">
+      <div class="inspector-head">
+        <span>Inspector</span>
+        <span class="muted" id="selectedLayerMeta"></span>
+      </div>
+      <div class="inspector-panel" id="inspectorPanel"></div>
+    </aside>
+  </div>
+
   <div class="transport">
     <button class="tp-play" id="tpPlay">▶</button>
     <span class="tp-time" id="tpTime">0:00 / 0:00</span>
-    <span class="tp-hint muted" id="tpHint"></span>
+    <div class="transport-scrub"><input type="range" id="tpScrub" min="0" max="1000" value="0"></div>
     <div class="tp-right">
       <div class="speed-toggle" id="speedToggle">
         <button data-rate="0.5">0.5×</button><button class="active" data-rate="1">1×</button><button data-rate="1.5">1.5×</button>
       </div>
-      <button class="edit-toggle" id="editToggle">✂️ Edit reel</button>
+      <button class="edit-toggle on" id="editToggle">Editor</button>
     </div>
   </div>
-  <div class="editbar" id="editbar" hidden>
-    <div class="edit-chips" id="editChips"></div>
-    <div class="edit-actions">
-      <label class="mirror-l"><input type="checkbox" id="mirrorChk"> 🪞 Mirror</label>
-      <button class="btn btn-small" id="rebuildBtn">Rebuild reel</button>
-      <span class="muted" id="editMsg">toggle rallies, reorder with ‹ ›, then rebuild</span>
+
+  <div class="timeline timeline-pro" id="tl">
+    <div class="timeline-top">
+      <div>
+        <b>Timeline</b>
+        <span class="muted" id="timelineMeta"></span>
+      </div>
+      <div class="timeline-tools">
+        <button class="tool compact" id="magnetToggle" title="Snap">⌁</button>
+        <button class="tool compact" id="splitBtn" title="Split">╎</button>
+        <input type="range" id="timelineZoom" min="80" max="180" value="100" aria-label="Timeline zoom">
+      </div>
     </div>
-  </div>
-  <div class="timeline" id="tl">
-    <div class="ruler" id="tlRuler"></div>
-    <div class="lane" id="tlLane"></div>
-    <div class="playhead" id="tlHead"></div>
+    <div class="timeline-grid">
+      <div class="track-labels" id="tlLabels"></div>
+      <div class="timeline-board" id="tlBoard">
+        <div class="ruler" id="tlRuler"></div>
+        <div class="lane" id="tlLane"></div>
+        <div class="playhead" id="tlHead"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -191,6 +251,6 @@
   </div>
 </div>
 
-<script src="/app.js?v=16"></script>
+<script src="/app.js?v=17"></script>
 </body>
 </html>

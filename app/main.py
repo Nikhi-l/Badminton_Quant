@@ -1,5 +1,6 @@
 """Baddy — AI sports highlight generator. FastAPI app serving API + frontend."""
 import json
+import math
 import shutil
 import time
 import uuid
@@ -194,6 +195,35 @@ def _compact_vision(v: dict | None) -> dict | None:
         out["tracknet"] = {k: tracknet.get(k) for k in (
             "enabled", "status", "points", "quality"
         ) if k in tracknet}
+    track = _sample_shuttle_track(shuttle)
+    if track:
+        out["shuttle_track"] = track
+    return out
+
+
+def _sample_shuttle_track(points: list | None, max_points: int = 180) -> list[dict]:
+    """Public, bounded time-level shuttle track for editor overlays.
+
+    Internal vision output can contain dense frame-by-frame points. The editor only
+    needs enough normalized samples to place/preview shuttle graphics, so keep the
+    response small and strip non-coordinate vendor details.
+    """
+    if not isinstance(points, list) or not points:
+        return []
+    step = max(1, math.ceil(len(points) / max_points))
+    out = []
+    for p in points[::step]:
+        if not isinstance(p, dict):
+            continue
+        try:
+            out.append({
+                "t": round(float(p.get("t")), 3),
+                "x": round(float(p.get("x")), 5),
+                "y": round(float(p.get("y")), 5),
+                "confidence": round(float(p.get("confidence", 0.0)), 3),
+            })
+        except (TypeError, ValueError):
+            continue
     return out
 
 

@@ -60,6 +60,23 @@ generation time = `finished_at − started_at`.
 Upload → job appears in **Queue** with live status + timer → on done moves to
 gallery / My Reels. Queue shows failed jobs with the error.
 
+### 8a. Reel editor UI
+After a reel is done, **Studio** opens as a professional AI reel editor, not just
+a video viewer. Required editor anatomy:
+- top tool ribbon for select, trim, shuttle FX, pose, text, music, undo/redo,
+  save, and export;
+- left layer rail for Reel cuts, Shuttle FX, Pose skeleton, and Music bed;
+- central 9:16 canvas preview;
+- right inspector with controls for the selected layer;
+- bottom multi-lane timeline synchronized to video playback.
+
+Editor state uses `baddy.editor.v1` (see
+`docs/roadmap/REEL_EDITOR_UX_RESEARCH.md`) and must cover rally order, mirror,
+shuttle graphic style (ring/fire/square/trail), pose skeleton style, and music
+track/volume/ducking. Today the remix API renders rally order + mirror; shuttle,
+pose, and music style controls are preview/persisted client state until the
+backend render contract accepts overlay style props.
+
 ## 9–12. Auth / observability / local dev / testing
 No auth yet (single-tenant). Logs via stage/message on the job. Local dev: run
 uvicorn against the venv. Testing: `tests/` with regression coverage for camera
@@ -86,6 +103,7 @@ Source: user request 2026-06-20 (this session) + harness PDF.
 | P1 | Job model: add `started_at`/`finished_at`, `failed` status; submission-time tracking | Accept | TASK-004 |
 | P1 | Queue UI + `GET /api/jobs`: live status, failed jobs, CPU/GPU gen time | Accept | TASK-005 |
 | P1 | **Instance sizing** — see decision below | Accept | TASK-006 |
+| P1 | Professional reel editor UI: layer rail, inspector, multi-lane timeline, overlay/music controls | Accept | TASK-007 |
 
 ### P1-INSTANCE decision (research 2026-06-20)
 Budget 10k INR/mo (~$120). **Recommended: `c2d-standard-8`, region `asia-south1`

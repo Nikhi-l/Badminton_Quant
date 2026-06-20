@@ -19,13 +19,13 @@ docs commit after each functional slice.
 | 2026-06-20 | Job model (timing, failed) | Todo | TASK-004 (P1) |
 | 2026-06-20 | Queue UI + /api/jobs | Todo | TASK-005 (P1) |
 | 2026-06-20 | Instance sizing | Decided | TASK-006: c2d-standard-8 Mumbai 1yr CUD (PRD §P1-INSTANCE) |
-| 2026-06-20 | Reel editor UI | In progress | TASK-007: Studio editor shell, `baddy.editor.v1`, shuttle/pose/music lanes |
+| 2026-06-20 | Reel editor UI | Done | TASK-007: Studio editor shell, `baddy.editor.v1`, shuttle/pose/music lanes; overlay render contract still future |
 
 ## Active priorities
 1. TASK-001 — camera actively follows + centers the shuttle (regression-tested).
 2. TASK-002 — rebuild RunPod worker from source; verify baddyai.com.
 3. TASK-003/004/005 — dual pipelines + job timing + queue UI.
-4. TASK-007 — professional reel editor UI once TASK-001 edits are preserved.
+4. Next editor backend slice — persist `baddy.editor.v1` to jobs and render shuttle/pose/music styles into MP4 output.
 
 ## Open risks
 | Risk | Severity | Source | Mitigation / next task |

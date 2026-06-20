@@ -344,23 +344,107 @@ document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
   renderGallery();
 });
 
-/* ---------- studio: editor-style rally timeline ---------- */
-const studio = { item: null, mode: "reel", raf: 0 };
+/* ---------- studio: AI reel editor ---------- */
+const studio = {
+  item: null,
+  mode: "reel",
+  raf: 0,
+  selectedLayer: "reel",
+  tool: "select",
+  zoom: 1,
+  dur: 1,
+  timelineSegments: [],
+  editorState: null,
+};
 const fmtT = (s) => { s = Math.max(0, s || 0); return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`; };
+const styleLabel = (s = "") => s.replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 
 function openStudio(item) {
   studio.item = item;
+  studio.mode = "reel";
+  studio.selectedLayer = "reel";
+  studio.tool = "select";
+  studio.zoom = 1;
+  studio.editorState = loadEditorState(item);
   $("studio").hidden = false;
   $("studioFile").textContent = [item.filename, item.sport].filter(Boolean).join(" · ");
   $("studioDownload").href = item.video;
+  $("stageFrame").style.setProperty("--stage-zoom", studio.zoom);
+  $("zoomLabel").textContent = "Fit";
   document.body.style.overflow = "hidden";
   initEdit();
   renderCoachbar(item);
-  $("editbar").hidden = true;
-  $("editToggle").classList.remove("on");
+  renderStudioTools();
+  renderLayerList();
+  renderInspector();
   setStudioMode("reel");
   cancelAnimationFrame(studio.raf);
   studioTick();
+}
+
+function editorKey(item = studio.item) {
+  return `baddy_editor_state_${item && item.id ? item.id : "draft"}`;
+}
+
+function defaultEditorState(item) {
+  const pool = item.rally_pool || item.rallies || [];
+  const order = (item.remix && item.remix.order) || pool.map((_, i) => i + 1);
+  return {
+    schema: "baddy.editor.v1",
+    canvas: { width: 1080, height: 1920, fps: 30, format: "vertical-reel" },
+    remix: { order, mirror: !!(item.remix && item.remix.mirror) },
+    overlays: {
+      shuttle: { enabled: true, style: "ring", size: 54, opacity: 0.92, trail: true },
+      pose: { enabled: !!(item.options && item.options.pose === "yolo11"), style: "glow", lineWidth: 3, opacity: 0.82 },
+    },
+    music: { track: "kinetic-120", volume: 0.42, ducking: true },
+  };
+}
+
+function mergeEditorState(base, saved) {
+  if (!saved || saved.schema !== "baddy.editor.v1") return base;
+  return {
+    ...base,
+    ...saved,
+    canvas: { ...base.canvas, ...(saved.canvas || {}) },
+    remix: { ...base.remix, ...(saved.remix || {}) },
+    overlays: {
+      shuttle: { ...base.overlays.shuttle, ...((saved.overlays || {}).shuttle || {}) },
+      pose: { ...base.overlays.pose, ...((saved.overlays || {}).pose || {}) },
+    },
+    music: { ...base.music, ...(saved.music || {}) },
+  };
+}
+
+function loadEditorState(item) {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(editorKey(item)) || "null"); } catch {}
+  return mergeEditorState(defaultEditorState(item), saved);
+}
+
+function saveEditorState(feedback = true) {
+  localStorage.setItem(editorKey(), JSON.stringify(studio.editorState));
+  if (feedback) {
+    $("saveEditBtn").classList.add("saved");
+    $("editMsg").textContent = "edit state saved locally";
+    setTimeout(() => $("saveEditBtn").classList.remove("saved"), 900);
+  }
+}
+
+function renderStudioTools() {
+  $("studioTools").querySelectorAll(".tool").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.tool === studio.tool);
+  });
+}
+
+function selectTool(tool) {
+  if (tool === "undo" || tool === "redo") {
+    $("editMsg").textContent = `${styleLabel(tool)} is reserved for the next editor slice`;
+    return;
+  }
+  studio.tool = tool;
+  if (["shuttle", "pose", "music"].includes(tool)) selectLayer(tool);
+  renderStudioTools();
 }
 
 function renderCoachbar(item) {
@@ -430,39 +514,73 @@ function setStudioMode(mode) {
   buildTimeline();
   const hasAll = studio.item.all_rallies && studio.item.all_rallies.length;
   $("tpHint").textContent = mode === "reel"
-    ? "click a block to jump to that rally"
+    ? "Reel preview"
     : hasAll
-      ? "every rally the AI found in your video — dashed blocks didn't make the reel"
-      : "showing reel rallies only (older job)";
+      ? "Source rally analysis"
+      : "Reel rally analysis";
+  updateOverlayPreview();
+}
+
+function reelSegments() {
+  let acc = 0;
+  return (studio.item.rallies || []).map((r, i) => {
+    const dur = r.clip_dur || r.dur || 0;
+    const seg = {
+      t0: acc,
+      t1: acc + dur,
+      label: `R${i + 1}`,
+      sub: `${Math.round(r.dur || dur)}s${r.note ? " · " + r.note : ""}`,
+      layer: "reel",
+      r,
+      idx: i + 1,
+      sourceStart: Number(r.start ?? r.src_start ?? 0),
+      vision: r.vision,
+    };
+    acc = seg.t1;
+    return seg;
+  });
 }
 
 function buildTimeline() {
   const item = studio.item;
-  const lane = $("tlLane"), ruler = $("tlRuler");
-  lane.innerHTML = ""; ruler.innerHTML = "";
-  let dur, segs;
+  const lane = $("tlLane"), labels = $("tlLabels"), ruler = $("tlRuler");
+  lane.innerHTML = ""; labels.innerHTML = ""; ruler.innerHTML = "";
+  const timelineScale = Math.max(0.8, Math.min(1.8, Number($("timelineZoom").value || 100) / 100));
+  lane.style.minWidth = `${timelineScale * 100}%`;
+  ruler.style.minWidth = `${timelineScale * 100}%`;
+  let dur, tracks;
   if (studio.mode === "reel") {
     dur = item.duration || 1;
-    let acc = 0;
-    segs = (item.rallies || []).map((r, i) => {
-      const signal = rallyVisionText(r.vision);
-      const seg = { t0: acc, t1: acc + (r.clip_dur || r.dur || 0),
-        label: `RALLY ${i + 1}`,
-        sub: `${Math.round(r.dur || r.clip_dur || 0)}s${r.note ? " · " + r.note : ""}${r.trimmed ? " · trimmed" : ""}${signal ? " · " + signal : ""}`,
-        skip: false,
-        vision: r.vision };
-      acc = seg.t1;
-      return seg;
-    });
+    const cuts = reelSegments();
+    const shuttleOn = studio.editorState.overlays.shuttle.enabled;
+    const poseOn = studio.editorState.overlays.pose.enabled;
+    tracks = [
+      { id: "reel", label: "Reel cuts", count: cuts.length, type: "clip", segs: cuts },
+      { id: "shuttle", label: "Shuttle FX", count: shuttleOn ? cuts.length : 0, type: "shuttle",
+        segs: shuttleOn ? cuts.map(s => ({ ...s, layer: "shuttle", label: studio.editorState.overlays.shuttle.style, sub: rallyVisionText(s.vision) || "overlay" })) : [] },
+      { id: "pose", label: "Pose", count: poseOn ? cuts.length : 0, type: "pose",
+        segs: poseOn ? cuts.map(s => ({ ...s, layer: "pose", label: studio.editorState.overlays.pose.style, sub: "skeleton" })) : [] },
+      { id: "music", label: "Music", count: 1, type: "music",
+        segs: [{ t0: 0, t1: dur, label: musicTitle(), sub: `${Math.round(studio.editorState.music.volume * 100)}% mix`, layer: "music" }] },
+    ];
   } else {
     dur = item.source_duration || 1;
     const list = (item.all_rallies && item.all_rallies.length)
       ? item.all_rallies
       : (item.rallies || []).map(r => ({ ...r, used: true }));
-    segs = list.map((r, i) => ({ t0: r.start || 0, t1: r.end || (r.start || 0) + (r.dur || 0),
-      label: `R${i + 1} · ${Math.round(r.dur || 0)}s`, sub: r.note || "", skip: !r.used }));
+    tracks = [
+      { id: "source", label: "Source rallies", count: list.length, type: "source",
+        segs: list.map((r, i) => ({ t0: r.start || 0, t1: r.end || (r.start || 0) + (r.dur || 0),
+          label: `R${i + 1}`, sub: `${Math.round(r.dur || 0)}s${r.note ? " · " + r.note : ""}`, skip: !r.used, layer: "reel" })) },
+      { id: "shuttle", label: "Shuttle FX", count: trackedRallies().length, type: "shuttle",
+        segs: trackedRallies().map(s => ({ ...s, layer: "shuttle", label: "Track", sub: rallyVisionText(s.vision) || "source coordinates" })) },
+      { id: "pose", label: "Pose", count: poseReadyCount(), type: "pose", segs: [] },
+      { id: "music", label: "Music", count: 0, type: "music", segs: [] },
+    ];
   }
   studio.dur = dur;
+  studio.timelineSegments = tracks.flatMap(t => t.segs.map(s => ({ ...s, type: t.type })));
+  $("timelineMeta").textContent = `· ${fmtT(dur)} · ${tracks.length} tracks`;
   const step = dur > 200 ? 30 : dur > 90 ? 15 : dur > 40 ? 10 : 5;
   for (let t = 0; t <= dur; t += step) {
     const el = document.createElement("div");
@@ -471,45 +589,273 @@ function buildTimeline() {
     el.textContent = fmtT(t);
     ruler.appendChild(el);
   }
-  segs.forEach(s => {
-    const el = document.createElement("div");
-    el.className = "seg" + (s.skip ? " skip" : "") +
-      (s.vision && s.vision.status === "ok" ? " vision-ok" : "") +
-      (s.vision && s.vision.mask_enabled ? " mask-on" : "");
-    el.style.left = `${s.t0 / dur * 100}%`;
-    el.style.width = `${Math.max((s.t1 - s.t0) / dur * 100, 1.4)}%`;
-    el.innerHTML = `<b>${esc(s.label)}</b><span>${esc(s.sub)}</span>`;
-    if (s.vision) el.title = rallyVisionTitle(s.vision);
-    el.onclick = (e) => {
-      e.stopPropagation();
-      const v = $("stVideo");
-      v.currentTime = s.t0 + 0.05;
-      v.play().catch(() => {});
-    };
-    lane.appendChild(el);
+  tracks.forEach(track => {
+    labels.insertAdjacentHTML("beforeend", `<div class="track-label">${esc(track.label)} <span>${track.count}</span></div>`);
+    const row = document.createElement("div");
+    row.className = "lane-row";
+    row.dataset.track = track.id;
+    lane.appendChild(row);
+    track.segs.forEach(s => {
+      const el = document.createElement("div");
+      el.className = `seg ${track.type}` + (s.skip ? " skip" : "") +
+        (s.vision && s.vision.status === "ok" ? " vision-ok" : "") +
+        (s.vision && s.vision.mask_enabled ? " mask-on" : "") +
+        (s.layer === studio.selectedLayer ? " active-seg" : "");
+      el.style.left = `${Math.max(0, s.t0) / dur * 100}%`;
+      el.style.width = `${Math.max((s.t1 - s.t0) / dur * 100, 1.4)}%`;
+      el.innerHTML = `<b>${esc(s.label)}</b><span>${esc(s.sub || "")}</span>`;
+      if (s.vision) el.title = rallyVisionTitle(s.vision);
+      el.onclick = (e) => {
+        e.stopPropagation();
+        selectLayer(s.layer || track.id);
+        const v = $("stVideo");
+        v.currentTime = Math.min(s.t0 + 0.05, v.duration || dur);
+        v.play().catch(() => {});
+      };
+      row.appendChild(el);
+    });
   });
+  updateOverlayPreview();
 }
 
 function studioTick() {
   if ($("studio").hidden) return;
   const v = $("stVideo");
   const dur = v.duration || studio.dur || 1;
-  $("tlHead").style.left = `${Math.min(v.currentTime / dur, 1) * 100}%`;
+  const timelineScale = Math.max(0.8, Math.min(1.8, Number($("timelineZoom").value || 100) / 100));
+  $("tlHead").style.left = `${Math.min(v.currentTime / dur, 1) * timelineScale * 100}%`;
   $("tpTime").textContent = `${fmtT(v.currentTime)} / ${fmtT(dur)}`;
   $("tpPlay").textContent = v.paused ? "▶" : "⏸";
+  $("tpScrub").value = String(Math.round(Math.min(v.currentTime / dur, 1) * 1000));
+  updateOverlayPreview();
   studio.raf = requestAnimationFrame(studioTick);
+}
+
+function trackedRallies() {
+  return reelSegments().filter(s => ((s.vision || {}).shuttle_track || []).length);
+}
+
+function poseReadyCount() {
+  return (studio.item.rallies || []).filter(r => Number(((r.vision || {}).pose_quality) || 0) > 0).length;
+}
+
+function musicTitle() {
+  return ({
+    "kinetic-120": "Kinetic 120",
+    "arena-128": "Arena 128",
+    "clean-cuts": "Clean Cuts",
+  })[studio.editorState.music.track] || "Kinetic 120";
+}
+
+function renderLayerList() {
+  const state = studio.editorState;
+  const pool = studio.item.rally_pool || studio.item.rallies || [];
+  const included = (studio.edit || []).filter(e => e.on).length || state.remix.order.length;
+  const layers = [
+    { id: "reel", ico: "▤", title: "Reel cuts", sub: `${included}/${pool.length || included} rallies`, state: "live" },
+    { id: "shuttle", ico: "◉", title: "Shuttle FX", sub: `${styleLabel(state.overlays.shuttle.style)} · ${Math.round(state.overlays.shuttle.opacity * 100)}%`, state: state.overlays.shuttle.enabled ? "on" : "off" },
+    { id: "pose", ico: "◇", title: "Pose skeleton", sub: `${styleLabel(state.overlays.pose.style)} · ${poseReadyCount()} rallies`, state: state.overlays.pose.enabled ? "on" : "off" },
+    { id: "music", ico: "♪", title: "Music bed", sub: `${musicTitle()} · ${Math.round(state.music.volume * 100)}%`, state: state.music.ducking ? "duck" : "mix" },
+  ];
+  $("layerList").innerHTML = layers.map(l => `
+    <button class="layer-row ${studio.selectedLayer === l.id ? "active" : ""}" data-layer="${l.id}">
+      <span class="layer-ico">${l.ico}</span>
+      <span><b>${esc(l.title)}</b><span>${esc(l.sub)}</span></span>
+      <span class="layer-state">${esc(l.state)}</span>
+    </button>`).join("");
+  $("layerList").querySelectorAll(".layer-row").forEach(row => {
+    row.onclick = () => selectLayer(row.dataset.layer);
+  });
+}
+
+function selectLayer(layer) {
+  studio.selectedLayer = layer;
+  studio.tool = ["shuttle", "pose", "music"].includes(layer) ? layer : "select";
+  renderStudioTools();
+  renderLayerList();
+  renderInspector();
+  buildTimeline();
+}
+
+function renderInspector() {
+  const panel = $("inspectorPanel");
+  const state = studio.editorState;
+  $("selectedLayerMeta").textContent = styleLabel(studio.selectedLayer);
+  if (studio.selectedLayer === "shuttle") {
+    const sh = state.overlays.shuttle;
+    panel.innerHTML = `
+      <div class="control-group">
+        <div class="control-title"><span>Shuttle graphic</span><label><input type="checkbox" id="shuttleEnabled" ${sh.enabled ? "checked" : ""}> Visible</label></div>
+        <div class="choice-row">
+          ${["ring", "fire", "square", "trail"].map(v => `<button class="choice-btn ${sh.style === v ? "active" : ""}" data-shuttle-style="${v}">${styleLabel(v)}</button>`).join("")}
+        </div>
+        <div class="control-row"><label>Size</label><input type="range" id="shuttleSize" min="34" max="82" value="${sh.size}"></div>
+        <div class="control-row"><label>Opacity</label><input type="range" id="shuttleOpacity" min="35" max="100" value="${Math.round(sh.opacity * 100)}"></div>
+        <div class="control-row"><label>Trail</label><input type="checkbox" id="shuttleTrail" ${sh.trail ? "checked" : ""}></div>
+      </div>
+      ${qualityMetrics()}`;
+    $("shuttleEnabled").onchange = (e) => { sh.enabled = e.target.checked; stateChanged(); };
+    $("shuttleSize").oninput = (e) => { sh.size = Number(e.target.value); stateChanged(false); };
+    $("shuttleOpacity").oninput = (e) => { sh.opacity = Number(e.target.value) / 100; stateChanged(false); };
+    $("shuttleTrail").onchange = (e) => { sh.trail = e.target.checked; stateChanged(); };
+    panel.querySelectorAll("[data-shuttle-style]").forEach(btn => btn.onclick = () => {
+      sh.style = btn.dataset.shuttleStyle;
+      stateChanged();
+    });
+  } else if (studio.selectedLayer === "pose") {
+    const po = state.overlays.pose;
+    panel.innerHTML = `
+      <div class="control-group">
+        <div class="control-title"><span>Pose skeleton</span><label><input type="checkbox" id="poseEnabled" ${po.enabled ? "checked" : ""}> Visible</label></div>
+        <div class="choice-row">
+          ${["glow", "minimal", "heat", "velocity"].map(v => `<button class="choice-btn ${po.style === v ? "active" : ""}" data-pose-style="${v}">${styleLabel(v)}</button>`).join("")}
+        </div>
+        <div class="control-row"><label>Line width</label><input type="range" id="poseWidth" min="2" max="8" value="${po.lineWidth}"></div>
+        <div class="control-row"><label>Opacity</label><input type="range" id="poseOpacity" min="25" max="100" value="${Math.round(po.opacity * 100)}"></div>
+      </div>
+      ${qualityMetrics()}`;
+    $("poseEnabled").onchange = (e) => { po.enabled = e.target.checked; stateChanged(); };
+    $("poseWidth").oninput = (e) => { po.lineWidth = Number(e.target.value); stateChanged(false); };
+    $("poseOpacity").oninput = (e) => { po.opacity = Number(e.target.value) / 100; stateChanged(false); };
+    panel.querySelectorAll("[data-pose-style]").forEach(btn => btn.onclick = () => {
+      po.style = btn.dataset.poseStyle;
+      stateChanged();
+    });
+  } else if (studio.selectedLayer === "music") {
+    const mu = state.music;
+    panel.innerHTML = `
+      <div class="control-group">
+        <div class="control-title"><span>Music timeline</span><span>${esc(musicTitle())}</span></div>
+        <div class="choice-row">
+          ${["kinetic-120", "arena-128", "clean-cuts"].map(v => `<button class="choice-btn ${mu.track === v ? "active" : ""}" data-music-track="${v}">${styleLabel(v)}</button>`).join("")}
+        </div>
+        <div class="control-row"><label>Volume</label><input type="range" id="musicVolume" min="0" max="100" value="${Math.round(mu.volume * 100)}"></div>
+        <div class="control-row"><label>Court audio ducking</label><input type="checkbox" id="musicDucking" ${mu.ducking ? "checked" : ""}></div>
+      </div>
+      <div class="control-group"><div class="control-title"><span>Export target</span><span>MP4</span></div><div class="control-row"><label>Codec</label><span>H.264</span></div><div class="control-row"><label>Aspect</label><span>9:16</span></div></div>`;
+    $("musicVolume").oninput = (e) => { mu.volume = Number(e.target.value) / 100; stateChanged(false); };
+    $("musicDucking").onchange = (e) => { mu.ducking = e.target.checked; stateChanged(); };
+    panel.querySelectorAll("[data-music-track]").forEach(btn => btn.onclick = () => {
+      mu.track = btn.dataset.musicTrack;
+      stateChanged();
+    });
+  } else {
+    panel.innerHTML = `
+      <div class="control-group">
+        <div class="control-title"><span>Composition</span><span>${fmtT(studio.item.duration || 0)}</span></div>
+        <div class="metric-list">
+          <div class="metric"><b>${studio.item.n_rallies_used || 0}</b><span>used rallies</span></div>
+          <div class="metric"><b>${studio.item.n_rallies_found || 0}</b><span>found rallies</span></div>
+          <div class="metric"><b>${fmtPct(((studio.item.vision || {}).summary || {}).shuttle_quality)}</b><span>shuttle</span></div>
+          <div class="metric"><b>${fmtPct(((studio.item.vision || {}).summary || {}).pose_quality)}</b><span>pose</span></div>
+        </div>
+      </div>
+      <div class="control-group">
+        <div class="control-title"><span>Render controls</span><span>Remix</span></div>
+        <div class="control-row"><label>Mirror</label><input type="checkbox" id="inspectMirror" ${state.remix.mirror ? "checked" : ""}></div>
+        <div class="control-row"><label>Selected order</label><span>${state.remix.order.join(", ")}</span></div>
+      </div>`;
+    $("inspectMirror").onchange = (e) => {
+      state.remix.mirror = e.target.checked;
+      $("mirrorChk").checked = state.remix.mirror;
+      $("stVideo").classList.toggle("stVideo-mirror", state.remix.mirror);
+      stateChanged();
+    };
+  }
+}
+
+function qualityMetrics() {
+  const summary = ((studio.item.vision || {}).summary) || {};
+  return `<div class="control-group">
+    <div class="control-title"><span>AI signal</span><span>${esc((studio.item.vision || {}).backend || "local")}</span></div>
+    <div class="metric-list">
+      <div class="metric"><b>${fmtPct(summary.shuttle_quality)}</b><span>shuttle</span></div>
+      <div class="metric"><b>${fmtPct(summary.pose_quality)}</b><span>pose</span></div>
+      <div class="metric"><b>${fmtPct(summary.player_quality)}</b><span>players</span></div>
+      <div class="metric"><b>${fmtPct(summary.racquet_quality)}</b><span>racquet</span></div>
+    </div>
+  </div>`;
+}
+
+function stateChanged(save = true) {
+  studio.editorState.remix.mirror = $("mirrorChk").checked;
+  renderLayerList();
+  renderInspector();
+  buildTimeline();
+  updateOverlayPreview();
+  if (save) saveEditorState(false);
+}
+
+function videoFitPoint(x, y) {
+  const frame = $("stageFrame");
+  const v = $("stVideo");
+  const fw = frame.clientWidth || 1, fh = frame.clientHeight || 1;
+  const vw = v.videoWidth || 9, vh = v.videoHeight || 16;
+  const frameAspect = fw / fh, videoAspect = vw / vh;
+  let w = fw, h = fh, ox = 0, oy = 0;
+  if (videoAspect > frameAspect) {
+    h = fw / videoAspect; oy = (fh - h) / 2;
+  } else {
+    w = fh * videoAspect; ox = (fw - w) / 2;
+  }
+  return { left: (ox + x * w) / fw * 100, top: (oy + y * h) / fh * 100 };
+}
+
+function nearestTrackPoint(track, t) {
+  if (!track || !track.length) return null;
+  let best = null, delta = Infinity;
+  track.forEach(p => {
+    const d = Math.abs(Number(p.t || 0) - t);
+    if (d < delta) { best = p; delta = d; }
+  });
+  return delta <= 0.55 ? best : null;
+}
+
+function currentShuttlePoint() {
+  const v = $("stVideo");
+  if (!studio.item || !v.duration) return null;
+  if (studio.mode === "source") {
+    for (const seg of reelSegments()) {
+      const p = nearestTrackPoint(((seg.vision || {}).shuttle_track || []), v.currentTime);
+      if (p) return p;
+    }
+    return null;
+  }
+  const seg = reelSegments().find(s => v.currentTime >= s.t0 && v.currentTime <= s.t1);
+  if (!seg) return null;
+  const sourceT = seg.sourceStart + (v.currentTime - seg.t0);
+  return nearestTrackPoint(((seg.vision || {}).shuttle_track || []), sourceT);
+}
+
+function updateOverlayPreview() {
+  const wrap = $("aiOverlays");
+  const state = studio.editorState;
+  if (!wrap || !state) return;
+  const parts = [];
+  const p = currentShuttlePoint();
+  let pos = p ? videoFitPoint(Number(p.x || 0.58), Number(p.y || 0.31)) : { left: 58, top: 31 };
+  const sh = state.overlays.shuttle;
+  if (sh.enabled) {
+    const trail = sh.trail ? `<div class="shuttle-trail" style="left:${Math.max(3, pos.left - 30)}%;top:${Math.min(92, pos.top + 10)}%"></div>` : "";
+    parts.push(`${trail}<div class="shuttle-mark ${esc(sh.style)}" style="left:${pos.left}%;top:${pos.top}%;width:${sh.size}px;height:${sh.size}px;margin-left:${-sh.size / 2}px;margin-top:${-sh.size / 2}px;--overlay-opacity:${sh.opacity}"></div>`);
+  }
+  const po = state.overlays.pose;
+  if (po.enabled) {
+    parts.push(`<div class="pose-figure ${esc(po.style)}" style="opacity:${po.opacity};--pose-width:${po.lineWidth}px"><span class="head"></span><span class="torso"></span><span class="arm-a"></span><span class="arm-b"></span><span class="leg-a"></span><span class="leg-b"></span></div>`);
+  }
+  wrap.innerHTML = parts.join("");
 }
 
 /* ---------- studio edit mode: pick / reorder / mirror / rebuild ---------- */
 function initEdit() {
   // Edit against the full pool of rendered rallies; mark which are currently in.
   const pool = studio.item.rally_pool || studio.item.rallies || [];
-  const current = new Set((studio.item.remix && studio.item.remix.order) || pool.map((_, i) => i + 1));
-  const inOrder = (studio.item.remix && studio.item.remix.order) || [];
+  const current = new Set(studio.editorState.remix.order || pool.map((_, i) => i + 1));
+  const inOrder = studio.editorState.remix.order || [];
   const seq = [...inOrder, ...pool.map((_, i) => i + 1).filter(i => !current.has(i) || !inOrder.includes(i))]
     .filter((v, i, a) => a.indexOf(v) === i);
   studio.edit = seq.map(idx => ({ idx, on: current.has(idx), r: pool[idx - 1] })).filter(e => e.r);
-  $("mirrorChk").checked = !!(studio.item.remix && studio.item.remix.mirror);
+  $("mirrorChk").checked = !!studio.editorState.remix.mirror;
   $("stVideo").classList.remove("stVideo-mirror");
   renderEditChips();
 }
@@ -523,13 +869,18 @@ function renderEditChips() {
     chip.innerHTML = `<span class="mv" data-mv="-1">‹</span>
       <b title="click to include/exclude">R${e.idx} · ${Math.round(e.r.dur || 0)}s</b>
       <span class="mv" data-mv="1">›</span>`;
-    chip.querySelector("b").onclick = () => { e.on = !e.on; renderEditChips(); };
+    chip.querySelector("b").onclick = () => {
+      e.on = !e.on;
+      studio.editorState.remix.order = studio.edit.filter(x => x.on).map(x => x.idx);
+      renderEditChips(); stateChanged();
+    };
     chip.querySelectorAll(".mv").forEach(mv => mv.onclick = (ev) => {
       ev.stopPropagation();
       const to = pos + parseInt(mv.dataset.mv, 10);
       if (to < 0 || to >= studio.edit.length) return;
       [studio.edit[pos], studio.edit[to]] = [studio.edit[to], studio.edit[pos]];
-      renderEditChips();
+      studio.editorState.remix.order = studio.edit.filter(x => x.on).map(x => x.idx);
+      renderEditChips(); stateChanged();
     });
     wrap.appendChild(chip);
   });
@@ -539,8 +890,10 @@ async function rebuildReel() {
   const order = studio.edit.filter(e => e.on).map(e => e.idx);
   if (!order.length) { $("editMsg").textContent = "keep at least one rally"; return; }
   const mirror = $("mirrorChk").checked;
+  studio.editorState.remix = { order, mirror };
+  saveEditorState(false);
   $("rebuildBtn").disabled = true;
-  $("editMsg").textContent = mirror ? "re-rendering mirrored clips…" : "re-stitching…";
+  $("editMsg").textContent = mirror ? "rendering mirrored reel..." : "rendering reel...";
   try {
     await jfetch(`/api/jobs/${studio.item.id}/remix`, {
       method: "POST",
@@ -557,11 +910,14 @@ async function rebuildReel() {
                         video: job.result.video + bust, thumb: job.result.thumb + bust };
         $("rebuildBtn").disabled = false;
         $("editMsg").textContent = mirror
-          ? "rebuilt ✓ (overlays re-rendered)"
-          : "rebuilt ✓ — fast rebuilds keep original badge numbers; mirror rebuild renumbers";
+          ? "rendered with mirror"
+          : "rendered from selected rallies";
         $("stVideo").classList.remove("stVideo-mirror");
+        studio.editorState = loadEditorState(studio.item);
         initEdit();
         renderCoachbar(studio.item);
+        renderLayerList();
+        renderInspector();
         setStudioMode("reel");
         loadGallery();
       } else if (job.status === "error") {
@@ -578,22 +934,39 @@ async function rebuildReel() {
   }
 }
 
-$("editToggle").onclick = () => {
-  const bar = $("editbar");
-  bar.hidden = !bar.hidden;
-  $("editToggle").classList.toggle("on", !bar.hidden);
-};
+$("editToggle").onclick = () => { selectLayer("reel"); };
 $("rebuildBtn").onclick = rebuildReel;
 $("mirrorChk").onchange = () => {
-  $("stVideo").classList.toggle("stVideo-mirror", $("mirrorChk").checked);
-  $("editMsg").textContent = $("mirrorChk").checked
-    ? "mirror preview on — rebuild to bake it in (overlays re-rendered)" : "";
+  studio.editorState.remix.mirror = $("mirrorChk").checked;
+  $("stVideo").classList.toggle("stVideo-mirror", studio.editorState.remix.mirror);
+  $("editMsg").textContent = studio.editorState.remix.mirror ? "mirror preview enabled" : "";
+  stateChanged();
 };
 $("speedToggle").querySelectorAll("button").forEach(b => b.onclick = () => {
   $("speedToggle").querySelectorAll("button").forEach(x => x.classList.remove("active"));
   b.classList.add("active");
   $("stVideo").playbackRate = parseFloat(b.dataset.rate);
 });
+$("studioTools").querySelectorAll(".tool").forEach(b => b.onclick = () => selectTool(b.dataset.tool));
+$("saveEditBtn").onclick = () => saveEditorState(true);
+$("zoomOut").onclick = () => {
+  studio.zoom = Math.max(0.68, Math.round((studio.zoom - 0.08) * 100) / 100);
+  $("stageFrame").style.setProperty("--stage-zoom", studio.zoom);
+  $("zoomLabel").textContent = `${Math.round(studio.zoom * 100)}%`;
+};
+$("zoomIn").onclick = () => {
+  studio.zoom = Math.min(1.24, Math.round((studio.zoom + 0.08) * 100) / 100);
+  $("stageFrame").style.setProperty("--stage-zoom", studio.zoom);
+  $("zoomLabel").textContent = `${Math.round(studio.zoom * 100)}%`;
+};
+$("timelineZoom").oninput = () => buildTimeline();
+$("magnetToggle").onclick = () => $("magnetToggle").classList.toggle("on");
+$("splitBtn").onclick = () => { $("editMsg").textContent = "split will bind to clip handles in the next editor slice"; };
+$("tpScrub").oninput = () => {
+  const v = $("stVideo");
+  const dur = v.duration || studio.dur || 1;
+  v.currentTime = Number($("tpScrub").value) / 1000 * dur;
+};
 document.addEventListener("keydown", (e) => {
   if ($("studio").hidden || !$("modal").hidden) return;
   if (["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(e.target.tagName)) return;
@@ -610,6 +983,7 @@ function closeStudio() {
   v.pause(); v.removeAttribute("src"); v.load();
   v.classList.remove("stVideo-mirror");
   v.playbackRate = 1;
+  $("aiOverlays").innerHTML = "";
   $("studio").hidden = true;
   document.body.style.overflow = "";
 }
