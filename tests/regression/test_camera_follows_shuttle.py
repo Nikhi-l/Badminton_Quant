@@ -83,6 +83,18 @@ def test_no_shuttle_still_frames_players():
     assert path is not None
 
 
+def test_high_shuttle_does_not_point_at_ceiling():
+    """A high clear (shuttle near the top of frame) must NOT pull the camera up
+    off the court — vertical stays anchored to the players' court band."""
+    t0, t1, fps = 0.0, 3.0, 30
+    times = [t0 + i / fps for i in range(round((t1 - t0) * fps))]
+    # players on the court (lower half); shuttle held high in the air the whole time
+    vr = _rally(times, shuttle_x=lambda t: 0.5, near_x=lambda t: 0.5, far_x=0.5, sy=0.06)
+    path = track.from_vision("p.mp4", t0, t1, vr, fps=fps)
+    cam_y = np.array([path.at(t)[1] for t in times])
+    assert cam_y.min() > 0.35, f"camera drifted toward the ceiling (min cy={cam_y.min():.2f})"
+
+
 def test_camera_path_stays_smooth():
     """Following the shuttle must not produce a jerky path (acceleration bounded)."""
     t0, t1, fps = 0.0, 4.0, 30
