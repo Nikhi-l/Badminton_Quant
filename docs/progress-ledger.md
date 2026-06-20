@@ -14,7 +14,7 @@ docs commit after each functional slice.
 |---|---|---|---|
 | 2026-06-20 | Harness adoption | Done | Pragmatic subset scaffolded (Cycle 1) |
 | 2026-06-20 | Camera: follow shuttle | Done | TASK-001, Cycle 1 — follows on 3/5 (soft proxy); regression-tested |
-| 2026-06-20 | RunPod worker rebuild | Todo | TASK-002 (P0) |
+| 2026-06-21 | RunPod worker rebuild | Image ready | TASK-002, Cycle 2 — clean from-source image `tracknet-src-20260621` built+verified (docker v2, single-arch); deploy to endpoint pending a valid RUNPOD_API_KEY |
 | 2026-06-20 | CPU/GPU pipelines + gen-time | Todo | TASK-003 (P1) |
 | 2026-06-20 | Job model (timing, failed) | Todo | TASK-004 (P1) |
 | 2026-06-20 | Queue UI + /api/jobs | Todo | TASK-005 (P1) |
@@ -30,7 +30,8 @@ docs commit after each functional slice.
 ## Open risks
 | Risk | Severity | Source | Mitigation / next task |
 |---|---|---|---|
-| RunPod worker won't boot (re-wrapped image inherits defect) | High | session 2026-06-19 | TASK-002: clean Cloud Build from Dockerfile |
+| RunPod worker won't boot (re-wrapped image inherited defect) | Resolved? | session 2026-06-19 | TASK-002 Cycle 2: clean from-source `tracknet-src-20260621` built (single-arch docker v2) — confirm health after deploy |
+| RunPod API key in .env returns 401 (expired) | Med | 2026-06-21 | blocks API deploy + GPU jobs; user to refresh key, then redeploy + verify |
 | Original upload soft (rendered from 480p proxy; ~/Downloads TCC-blocked) | Med | session 2026-06-19 | re-run on sharp source when file access restored |
 | `if not pov` gates `from_vision` off for handheld clips | Med | track.py:137 | revisit in pipeline cycle |
 

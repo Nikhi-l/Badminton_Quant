@@ -5,6 +5,33 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 3: Clean from-source RunPod worker image + tracking confirmation
+**Date:** 2026-06-21
+**Goal:** Rebuild the GPU worker so it boots (every prior "clean" image was a
+re-wrap that inherited the OCI-attestation defect); confirm shuttle tracking works
+independent of the camera.
+**Roadmap alignment:** PRD §16 P0 (worker rebuild); §4a (GPU pipeline).
+**Branch:** `feat/TASK-001-shuttle-follow-camera`
+**Files changed:** `runpod_worker/cloudbuild.yaml` (new), `runpod_worker/patch_dataset.py`
+(new), `runpod_worker/Dockerfile` (heredoc → COPY+RUN patch script).
+**Schema/API/interface changes:** none (worker image + build only).
+**Tests/verification performed:**
+- `gcloud builds submit --config runpod_worker/cloudbuild.yaml runpod_worker/` →
+  build `e13cb560` SUCCESS; pushed `baddy-vision-worker:tracknet-src-20260621`.
+- manifest check → `application/vnd.docker.distribution.manifest.v2+json`,
+  single-arch (no OCI index / no unknown/unknown attestation — the prior defect).
+- tracking confirmation: drew saved `vision.shuttle` coords on the proxy
+  (`/tmp/overlay.py` → `baddy_shuttle_tracking_overlay.mp4`); crosshair tracks the
+  shuttle in the play area (146 tracked frames in one rally). Coords are persisted
+  in `result.json` `rallies[].vision.shuttle` and exposed via `vision.shuttle_track`.
+- `./scripts/check.sh` → `6 passed`.
+**Docs updated:** progress-ledger.
+**Open risks / next steps:**
+- Deploy: point the RunPod endpoint at `tracknet-src-20260621` and verify health +
+  a test job. Blocked: `RUNPOD_API_KEY` in `.env` returns 401 → needs a fresh key
+  (then API deploy) or a console release.
+- Then verify baddyai.com runs a GPU shuttle job end-to-end.
+
 ## Cycle 2: Professional reel editor UI
 **Date:** 2026-06-20
 **Goal:** Turn Studio from a rally viewer into a professional AI reel editor for
