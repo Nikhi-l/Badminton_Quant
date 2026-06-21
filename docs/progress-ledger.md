@@ -5,9 +5,9 @@ docs commit after each functional slice.
 
 ## Current branch / mission
 - Main branch: `main` (protected; releasable; live at baddyai.com)
-- Active branch: `feat/TASK-003-004-006-pipeline-jobs-instance`
+- Active branch: none — TASK-003/004/006 merged via PR #2
 - UI branch: `feat/TASK-007-reel-editor-ui`
-- Base SHA: `9675536`
+- Current main SHA: `dc9920d`
 
 ## Ledger
 | Date | Area | Status | Notes |
