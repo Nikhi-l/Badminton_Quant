@@ -1,6 +1,6 @@
 # TASK-003/004/006: Pipeline metadata, job timing, and instance sizing
 
-**Status:** TASK-003/TASK-004 deployed; TASK-006 migration decision guarded
+**Status:** done (Cycle 7, 2026-06-21)
 **Branch:** `feat/TASK-003-004-006-pipeline-jobs-instance`
 **Base SHA:** `9675536`
 **PRD section:** §4a two inference pipelines, §6 job model, §16 P1 remediation,
@@ -26,10 +26,8 @@ state must be verified against the TASK-006 decision.
 - [x] Current GCP instance shape is verified.
 - [x] Current production IP is promoted to a reserved static IP before any
       stop/start resize risk.
-- [ ] Full TASK-006 cutover to the PRD target
-      (`c2d-standard-8`, `asia-south1-a`) is executed. This still needs DNS
-      cutover/region migration choice because `baddyai.com` currently points to
-      the existing us-central1 VM IP.
+- [x] TASK-006 production sizing is applied: live VM is `c2d-standard-8` with
+      the existing static production IP preserved.
 
 ## Verification commands
 - `.venv/bin/python -m pytest tests/unit/test_job_model.py -q`
@@ -39,6 +37,10 @@ state must be verified against the TASK-006 decision.
 - `gcloud compute ssh baddy-agent --zone us-central1-a --command '...'`
 - `python3 - <<'PY' ... https://baddyai.com/api/jobs/989cdb218317 ... PY`
 - `gcloud compute addresses list --format='table(name,address,region.basename(),status,users.basename())'`
+- `gcloud compute instances stop baddy-agent --zone us-central1-a --quiet`
+- `gcloud compute instances set-machine-type baddy-agent --zone us-central1-a --machine-type c2d-standard-8 --quiet`
+- `gcloud compute instances start baddy-agent --zone us-central1-a --quiet`
+- `curl -fsS https://baddyai.com/api/health`
 
 ## Production evidence
 - Live DB columns now include `pipeline`, `started_at`, `finished_at`.
@@ -47,12 +49,14 @@ state must be verified against the TASK-006 decision.
 - All 14 live terminal jobs have timing backfilled.
 - Latest GPU job `989cdb218317` reports `gen_seconds=424.6` and
   `expected_gen_seconds=600` through `https://baddyai.com/api/jobs/{id}`.
-- Live VM remains `baddy-agent`, `us-central1-a`, `e2-standard-4`.
+- Live VM is now `baddy-agent`, `us-central1-a`, `c2d-standard-8`.
 - `136.113.208.173` is reserved as static regional address `baddy-agent-ip`.
+- `baddyai.com` still resolves to `136.113.208.173` and returns `HTTP/2 200`.
 
 ## Risks / rollback
-- Full Mumbai migration needs a new regional VM/IP and DNS cutover for
-  `baddyai.com`; current repo defaults point new deployments at TASK-006 target
-  but production was updated in-place with explicit old-zone overrides.
+- Mumbai remains a future DNS-backed migration option. DNS is hosted at GoDaddy
+  (`domaincontrol.com`), not in this GCP project, so TASK-006 was completed as an
+  in-place `c2d-standard-8` resize on the existing static production IP.
 - rollback code: deploy `origin/main` back to the current VM with
-  `ZONE=us-central1-a MACHINE=e2-standard-4 bash deploy/deploy.sh`.
+  `ZONE=us-central1-a MACHINE=c2d-standard-8 bash deploy/deploy.sh`.
+- rollback machine type: stop the VM, set `--machine-type e2-standard-4`, start.

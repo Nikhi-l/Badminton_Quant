@@ -18,19 +18,19 @@ docs commit after each functional slice.
 | 2026-06-21 | CPU/GPU pipelines + gen-time | Deployed | TASK-003, Cycle 6 — `pipeline=cpu|gpu` recorded from job options; API exposes separate expected gen-time budgets |
 | 2026-06-21 | Job model (timing, failed) | Deployed | TASK-004, Cycle 6 — `started_at`/`finished_at` migrated live; legacy `error` rows now `failed`; latest GPU job reports `gen_seconds=424.6` |
 | 2026-06-20 | Queue UI + /api/jobs | Todo | TASK-005 (P1) |
-| 2026-06-21 | Instance sizing | Guarded, cutover pending | TASK-006, Cycle 6 — live VM verified as `e2-standard-4` in `us-central1-a`; target defaults set to `c2d-standard-8`/`asia-south1-a`; production IP `136.113.208.173` reserved as `baddy-agent-ip` before any resize |
+| 2026-06-21 | Instance sizing | Done | TASK-006, Cycle 7 — live VM resized in place to `c2d-standard-8` in `us-central1-a`; static production IP `136.113.208.173` preserved as `baddy-agent-ip`; health + DB/API verified |
 | 2026-06-21 | Reel editor UI | Reasoned UI complete | TASK-007, Cycle 4 — component rationale added; dead controls removed; Soundtrack is read-only until backend audio render props exist; overlay render contract still future |
 
 ## Active priorities
 1. TASK-005 — queue UI + `GET /api/jobs` list, now using TASK-003/004 timing fields.
-2. TASK-006 cutover choice — either in-place resize to `c2d-standard-8` on the
-   reserved us-central IP, or create Mumbai `c2d-standard-8` and cut DNS.
+2. Optional Mumbai migration — create Mumbai `c2d-standard-8` and cut GoDaddy DNS
+   if/when lower India latency is worth a domain cutover.
 3. Next editor backend slice — persist `baddy.editor.v1` to jobs and render shuttle/pose/audio styles into MP4 output; keep trim/text/music edits hidden until contracts exist.
 
 ## Open risks
 | Risk | Severity | Source | Mitigation / next task |
 |---|---|---|---|
-| Full TASK-006 Mumbai move needs DNS cutover | Med | Cycle 6 GCP audit | Current DNS points to static us-central IP; choose in-place resize or Mumbai VM + DNS update |
+| Mumbai move needs GoDaddy DNS cutover | Low | Cycle 7 GCP audit | TASK-006 completed in place; Mumbai remains optional future migration |
 | Original upload soft (rendered from 480p proxy; ~/Downloads TCC-blocked) | Med | session 2026-06-19 | re-run on sharp source when file access restored |
 | `if not pov` gates `from_vision` off for handheld clips | Med | track.py:137 | revisit in pipeline cycle |
 

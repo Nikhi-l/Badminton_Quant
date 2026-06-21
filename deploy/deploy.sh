@@ -3,10 +3,10 @@
 #   bash deploy/deploy.sh
 set -euo pipefail
 
-# TASK-006 target. Current production can still be updated in-place with:
-#   ZONE=us-central1-a MACHINE=e2-standard-4 bash deploy/deploy.sh
-# A Mumbai cutover also needs a static IP + DNS update for baddyai.com.
-ZONE="${ZONE:-asia-south1-a}"
+# TASK-006 production target: in-place C2D resize on the static baddyai.com IP.
+# Mumbai remains a future DNS-backed migration option; baddyai.com DNS is hosted
+# outside this GCP project (GoDaddy/domaincontrol.com).
+ZONE="${ZONE:-us-central1-a}"
 VM="${VM:-baddy-agent}"
 MACHINE="${MACHINE:-c2d-standard-8}"
 

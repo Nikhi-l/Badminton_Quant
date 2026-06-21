@@ -5,6 +5,45 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 7: TASK-006 production VM resized to c2d-standard-8
+**Date:** 2026-06-21
+**Goal:** Finish TASK-006 by applying the chosen C2D production sizing without
+breaking the live `baddyai.com` DNS target.
+**Roadmap alignment:** PRD §16 P1 (TASK-006); §P1-INSTANCE.
+**Branch:** `feat/TASK-003-004-006-pipeline-jobs-instance`
+**Task file:** `.agent/tasks/done/TASK-003-004-006-pipeline-jobs-instance.md`
+**Files changed:**
+- `deploy/deploy.sh` — production default is now the actual live target:
+  `us-central1-a` + `c2d-standard-8`. Mumbai remains a future DNS-backed
+  migration option.
+- `.agent/tasks/done/TASK-003-004-006-pipeline-jobs-instance.md`,
+  `docs/progress-ledger.md` — TASK-006 evidence updated from guarded to applied.
+**Schema/API/interface changes:** none.
+**Tests/verification performed:**
+- Pre-resize queue check via SSH: no `queued` or `processing` jobs.
+- `gcloud compute instances stop baddy-agent --zone us-central1-a --quiet` → OK.
+- `gcloud compute instances set-machine-type baddy-agent --zone us-central1-a --machine-type c2d-standard-8 --quiet`
+  → OK.
+- `gcloud compute instances start baddy-agent --zone us-central1-a --quiet` → OK.
+- `gcloud compute instances describe baddy-agent --zone us-central1-a --format='table(...)'`
+  → `MACHINE_TYPE c2d-standard-8`, `NAT_IP 136.113.208.173`.
+- `gcloud compute addresses list --filter='name=baddy-agent-ip'` →
+  `136.113.208.173`, `IN_USE`, `baddy-agent`.
+- SSH systemd check → `baddy` and `caddy` active.
+- `curl -fsS https://baddyai.com/api/health` → `{"ok":true}`.
+- `dig +short baddyai.com A` → `136.113.208.173`.
+- `https://baddyai.com/api/jobs/989cdb218317` still reports
+  `pipeline=gpu`, `gen_seconds=424.6`, `expected_gen_seconds=600`.
+- Live DB after reboot: columns include `pipeline`, `started_at`,
+  `finished_at`; status counts `done=12`, `failed=2`; pipeline counts `cpu=9`,
+  `gpu=5`; no active jobs.
+- `./scripts/check.sh` → compile OK, `9 passed`.
+**Docs updated:** this log, `docs/progress-ledger.md`, TASK-003/004/006 file.
+**Open risks / next steps:**
+- Mumbai remains a future migration/cost-latency optimization, not the current
+  deployment, because `baddyai.com` DNS is hosted at GoDaddy
+  (`domaincontrol.com`) outside this GCP project.
+
 ## Cycle 6: Pipeline metadata + job timing deployed; instance sizing guarded
 **Date:** 2026-06-21
 **Goal:** Complete TASK-003/TASK-004 runtime metadata and verify TASK-006 GCP
@@ -12,7 +51,7 @@ state without risking the live DNS target.
 **Roadmap alignment:** PRD §4a two inference pipelines; §6 job model; §16 P1
 (TASK-003, TASK-004, TASK-006); §P1-INSTANCE.
 **Branch:** `feat/TASK-003-004-006-pipeline-jobs-instance`
-**Task file:** `.agent/tasks/active/TASK-003-004-006-pipeline-jobs-instance.md`
+**Task file:** `.agent/tasks/done/TASK-003-004-006-pipeline-jobs-instance.md`
 **Files changed:**
 - `app/db.py`, `app/config.py`, `app/worker.py`, `app/pipeline/run.py` — additive
   SQLite migration for `pipeline`, `started_at`, `finished_at`; CPU/GPU pipeline
