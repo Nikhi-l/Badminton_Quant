@@ -1,6 +1,8 @@
 # TASK-002: Rebuild the RunPod GPU worker from source
 
-**Status:** image ready — deploy blocked (Cycle 3, 2026-06-21)
+**Status:** done — GPU TrackNetV3 verified e2e (Cycle 5, 2026-06-21). Image
+`tracknet-src-20260621b`, template `ic265brof1`; baddyai.com job returns
+`tracknet.status=ok` with 55–122 real points/rally. (orig: image ready, Cycle 3)
 **Branch:** `feat/TASK-001-shuttle-follow-camera`
 **PRD section:** §16 P0 (worker rebuild); §4a GPU pipeline
 

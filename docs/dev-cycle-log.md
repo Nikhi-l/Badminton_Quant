@@ -5,6 +5,31 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 5: GPU TrackNetV3 deps fix — shuttle tracking verified end-to-end
+**Date:** 2026-06-21
+**Goal:** TrackNetV3 ran on the rebuilt GPU worker but failed every rally (fell
+back to the motion shuttle). Fix it and verify real shuttle points flow through
+baddyai.com.
+**Roadmap alignment:** PRD §16 P0 (worker rebuild); §4a GPU pipeline.
+**Branch:** `feat/TASK-007-reel-editor-ui` (integrated)
+**Files changed:** `runpod_worker/requirements.txt` (+matplotlib, +pycocotools —
+predict.py's `utils.general` import chain needs them; without them predict.py
+exited 1 at import), `runpod_worker/handler.py` (surface predict.py stderr in
+`_tracknet_error` instead of a bare CalledProcessError).
+**Schema/API/interface changes:** none.
+**Tests/verification performed:**
+- rebuilt `tracknet-src-20260621b` (Cloud Build `f8c14a58`, single-arch); created
+  template `ic265brof1`; PATCHed endpoint to it.
+- e2e via baddyai.com (upload proxy → GPU): every rally `tracknet.status=ok`,
+  55–122 real TrackNetV3 points, quality 0.82, `backend=runpod`. (Was
+  `status=failed`/0 points → motion fallback before the fix.)
+- worker boots `ready:2 unhealthy:0`; scales to 0 when idle (no idle cost).
+**Docs updated:** this log, `docs/progress-ledger.md`.
+**Open risks / next steps:**
+- Soft-proxy framing still safe-cams some rallies (camera choice, not tracking).
+- Server `.env` now carries the live RunPod key (deployed); rotate if leaked.
+- Merge `feat/TASK-007` → `main` (worker verified end-to-end).
+
 ## Cycle 4: Reasoned reel editor controls + dead-flow removal
 **Date:** 2026-06-21
 **Goal:** Audit every visible Studio editor control, remove user flows that do
