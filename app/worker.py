@@ -49,6 +49,7 @@ def _loop():
                         db.set_done(job_id, _json.loads(old["result"]))
                     raise
             else:
+                db.set_pipeline(job_id, config.pipeline_for_options(db.job_options(job_id)))
                 result = pipeline_run.process(src, workdir, cb=cb,
                                               options=db.job_options(job_id))
                 db.set_done(job_id, result)

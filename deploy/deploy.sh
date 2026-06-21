@@ -3,9 +3,12 @@
 #   bash deploy/deploy.sh
 set -euo pipefail
 
-ZONE="${ZONE:-us-central1-a}"
+# TASK-006 target. Current production can still be updated in-place with:
+#   ZONE=us-central1-a MACHINE=e2-standard-4 bash deploy/deploy.sh
+# A Mumbai cutover also needs a static IP + DNS update for baddyai.com.
+ZONE="${ZONE:-asia-south1-a}"
 VM="${VM:-baddy-agent}"
-MACHINE="${MACHINE:-e2-standard-4}"
+MACHINE="${MACHINE:-c2d-standard-8}"
 
 if ! gcloud compute instances describe "$VM" --zone "$ZONE" >/dev/null 2>&1; then
   echo ">> creating VM $VM ($MACHINE) in $ZONE"

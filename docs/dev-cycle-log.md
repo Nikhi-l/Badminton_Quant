@@ -5,6 +5,62 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 6: Pipeline metadata + job timing deployed; instance sizing guarded
+**Date:** 2026-06-21
+**Goal:** Complete TASK-003/TASK-004 runtime metadata and verify TASK-006 GCP
+state without risking the live DNS target.
+**Roadmap alignment:** PRD §4a two inference pipelines; §6 job model; §16 P1
+(TASK-003, TASK-004, TASK-006); §P1-INSTANCE.
+**Branch:** `feat/TASK-003-004-006-pipeline-jobs-instance`
+**Task file:** `.agent/tasks/active/TASK-003-004-006-pipeline-jobs-instance.md`
+**Files changed:**
+- `app/db.py`, `app/config.py`, `app/worker.py`, `app/pipeline/run.py` — additive
+  SQLite migration for `pipeline`, `started_at`, `finished_at`; CPU/GPU pipeline
+  derivation from per-job options; canonical `failed` status; expected CPU/GPU
+  generation budgets.
+- `app/main.py` — job API now exposes submitted/start/finish timing,
+  `gen_seconds`, `pipeline`, and expected generation seconds.
+- `web/app.js`, `web/style.css` — polling handles `failed` jobs and displays
+  pipeline/timing context.
+- `deploy/deploy.sh` — default new-instance target updated to TASK-006
+  `asia-south1-a` + `c2d-standard-8`, with explicit override note for current
+  production until DNS cutover.
+- `tests/unit/test_job_model.py` — migration + timing lifecycle coverage.
+**Schema/API/interface changes:**
+- `jobs` table adds nullable `pipeline`, `started_at`, `finished_at`.
+- Legacy `status='error'` rows migrate to `status='failed'`.
+- `GET /api/jobs/{id}` includes `pipeline`, `submitted_at`, `started_at`,
+  `finished_at`, `gen_seconds`, and `expected_gen_seconds`.
+**Tests/verification performed:**
+- `.venv/bin/python -m pytest tests/unit/test_job_model.py -q` → `3 passed`.
+- `.venv/bin/python -m pytest tests/unit/test_job_model.py tests/unit/test_public_editor_tracks.py -q`
+  → `4 passed`.
+- `node --check web/app.js` → OK.
+- `python3 -m py_compile app/config.py app/db.py app/main.py app/worker.py app/pipeline/run.py`
+  → OK.
+- `./scripts/check.sh` → compile OK, `9 passed`.
+- Production deploy: `ZONE=us-central1-a MACHINE=e2-standard-4 bash deploy/deploy.sh`
+  → `{"ok":true} <- app healthy`.
+- Production DB verification via `gcloud compute ssh baddy-agent --zone us-central1-a`:
+  columns include `pipeline`, `started_at`, `finished_at`; status counts
+  `done=12`, `failed=2`; pipeline counts `cpu=9`, `gpu=5`; all 14 terminal
+  jobs timed.
+- Live API verification:
+  `https://baddyai.com/api/jobs/989cdb218317` reports `pipeline=gpu`,
+  `gen_seconds=424.6`, `expected_gen_seconds=600`.
+- TASK-006 GCP audit:
+  live VM is `baddy-agent`, `us-central1-a`, `e2-standard-4`,
+  `136.113.208.173`; DNS `baddyai.com` points to that IP; Mumbai supports
+  `c2d-standard-8`; current IP promoted to reserved static address
+  `baddy-agent-ip`.
+**Docs updated:** this log, `docs/progress-ledger.md`, active TASK-003/004/006 file.
+**Open risks / next steps:**
+- Full TASK-006 cutover is not applied yet: the PRD target is
+  `c2d-standard-8` in `asia-south1`, but production remains the existing
+  `e2-standard-4` in `us-central1-a` to avoid unplanned DNS/downtime. Next step:
+  choose either in-place `c2d-standard-8` resize on the now-static us-central IP,
+  or create a Mumbai VM and cut DNS to its new address.
+
 ## Cycle 5: GPU TrackNetV3 deps fix — shuttle tracking verified end-to-end
 **Date:** 2026-06-21
 **Goal:** TrackNetV3 ran on the rebuilt GPU worker but failed every rally (fell
