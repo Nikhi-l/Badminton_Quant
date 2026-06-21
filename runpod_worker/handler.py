@@ -348,6 +348,10 @@ def _run_tracknet(video: Path, source_start: float) -> tuple[list[dict], float, 
             text=True,
             timeout=TRACKNET_TIMEOUT_SEC,
         )
+    except subprocess.CalledProcessError as exc:  # surface predict.py's own error
+        tail = " | ".join((exc.output or "").strip().splitlines()[-4:])[:400]
+        _tracknet_error = f"tracknet exit {exc.returncode}: {tail or '(no output)'}"
+        return [], 0.0, "failed"
     except Exception as exc:  # noqa: BLE001 - worker can fall back to motion shuttle.
         _tracknet_error = f"{type(exc).__name__}: {exc}"
         return [], 0.0, "failed"
