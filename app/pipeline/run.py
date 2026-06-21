@@ -69,6 +69,7 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
     t_start = time.time()
     gemini.reset_usage()
     opt = config.normalize_options(options)
+    pipeline = config.pipeline_for_options(opt)
     paths = [Path(p) for p in (input_path if isinstance(input_path, (list, tuple)) else [input_path])]
     workdir = Path(workdir)
     clips_dir = workdir / "clips"
@@ -252,6 +253,7 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
         "clip_order": order_source,
         "pov_camera": pov,
         "options": opt,
+        "pipeline": pipeline,
         "vision": {k: vision.get(k) for k in ("enabled", "status", "engine", "contract",
                                               "worker_version", "message", "models", "summary",
                                               "backend")},

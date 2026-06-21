@@ -90,6 +90,8 @@ h1{font-size:clamp(44px,7vw,76px);line-height:1.02;letter-spacing:-.02em;font-we
 .stages li.done .dot{background:rgba(183,245,66,.15);border-color:var(--lime);color:var(--lime)}
 .stages li.active{color:var(--text)}
 .stages li.active .dot{border-color:var(--cyan);color:var(--cyan);animation:pulse 1.2s ease-in-out infinite}
+.stages li.failed{color:var(--text)}
+.stages li.failed .dot{background:rgba(255,125,125,.12);border-color:#ff7d7d;color:#ff7d7d}
 @keyframes pulse{50%{box-shadow:0 0 0 5px rgba(70,227,255,.12)}}
 .job-msg{margin-top:14px;font-size:13px;color:var(--muted);min-height:18px;font-family:ui-monospace,monospace}
 .job-msg.err{color:#ff7d7d}

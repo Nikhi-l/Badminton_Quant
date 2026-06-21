@@ -64,6 +64,8 @@ VISION_DEFAULT_POSE = os.environ.get("VISION_DEFAULT_POSE", "off")
 # the VM CPU? Off by default: it is ~1 hour/reel and would block the queue.
 VISION_ALLOW_CPU_TRACKNET = os.environ.get("VISION_ALLOW_CPU_TRACKNET", "0").lower() \
     not in {"0", "false", "no", "off"}
+EXPECTED_CPU_GEN_SEC = int(os.environ.get("EXPECTED_CPU_GEN_SEC", "1800"))
+EXPECTED_GPU_GEN_SEC = int(os.environ.get("EXPECTED_GPU_GEN_SEC", "600"))
 
 
 def normalize_options(opts: dict | None) -> dict:
@@ -76,6 +78,21 @@ def normalize_options(opts: dict | None) -> dict:
         "pose": pose if pose in POSE_ENGINES else "off",
         "coach": bool(opts.get("coach", COACH_ENABLED)),
     }
+
+
+def pipeline_for_options(opts: dict | None) -> str:
+    """cpu | gpu pipeline selected for this job's vision contract."""
+    opt = normalize_options(opts)
+    return "gpu" if opt["shuttle"] == "tracknetv3" else "cpu"
+
+
+def expected_gen_seconds(pipeline: str | None) -> int | None:
+    """Separate rough generation-time budgets for CPU and GPU queue displays."""
+    if pipeline == "cpu":
+        return EXPECTED_CPU_GEN_SEC
+    if pipeline == "gpu":
+        return EXPECTED_GPU_GEN_SEC
+    return None
 
 # Analysis runs on a downscaled proxy; final render samples the original file.
 PROXY_HEIGHT = int(os.environ.get("PROXY_HEIGHT", "480"))

@@ -266,6 +266,29 @@ def _public_result(job: dict) -> dict | None:
     }
 
 
+def _gen_seconds(job: dict) -> float | None:
+    try:
+        started = float(job.get("started_at"))
+        finished = float(job.get("finished_at"))
+    except (TypeError, ValueError):
+        return None
+    if finished < started:
+        return None
+    return round(finished - started, 1)
+
+
+def _job_meta(job: dict) -> dict:
+    pipeline = job.get("pipeline") or "unknown"
+    return {
+        "pipeline": pipeline,
+        "submitted_at": job.get("created_at"),
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "gen_seconds": _gen_seconds(job),
+        "expected_gen_seconds": config.expected_gen_seconds(pipeline),
+    }
+
+
 @app.get("/api/capabilities")
 def capabilities():
     """What vision workers this deployment can run, for the upload UI."""
@@ -305,19 +328,26 @@ def job_status(job_id: str):
     try:
         cur = STAGES.index(job["stage"])
     except ValueError:
-        cur = -1 if job["status"] == "queued" else len(STAGES)
+        cur = -1 if job["status"] == "queued" else 0
     stages = []
     for i, s in enumerate(STAGES):
         state = "pending"
-        if job["status"] == "done" or i < cur:
+        if job["status"] == "done":
             state = "done"
+        elif job["status"] == "failed":
+            if i < cur:
+                state = "done"
+            elif i == cur:
+                state = "failed"
         elif i == cur and job["status"] == "processing":
             state = "active"
+        elif i < cur:
+            state = "done"
         stages.append({"key": s, "state": state})
     return {
         "id": job["id"], "status": job["status"], "stage": job["stage"],
         "message": job["message"], "error": job["error"], "stages": stages,
-        "filename": job["filename"], "created_at": job["created_at"],
+        "filename": job["filename"], "created_at": job["created_at"], **_job_meta(job),
         "result": _public_result(job),
     }
 
@@ -352,7 +382,7 @@ def gallery():
         if not r:
             continue
         items.append({"id": job["id"], "filename": job["filename"],
-                      "created_at": job["updated_at"], **r})
+                      "created_at": job["updated_at"], **_job_meta(job), **r})
     return {"items": items}
 
 

@@ -5,9 +5,9 @@ docs commit after each functional slice.
 
 ## Current branch / mission
 - Main branch: `main` (protected; releasable; live at baddyai.com)
-- Active branch: `feat/TASK-007-reel-editor-ui`
+- Active branch: `feat/TASK-003-004-006-pipeline-jobs-instance`
 - UI branch: `feat/TASK-007-reel-editor-ui`
-- Base SHA: `883786f` for TASK-007 UI work
+- Base SHA: `9675536`
 
 ## Ledger
 | Date | Area | Status | Notes |
@@ -15,29 +15,26 @@ docs commit after each functional slice.
 | 2026-06-20 | Harness adoption | Done | Pragmatic subset scaffolded (Cycle 1) |
 | 2026-06-20 | Camera: follow shuttle | Done | TASK-001, Cycle 1 — follows on 3/5 (soft proxy); regression-tested |
 | 2026-06-21 | RunPod worker rebuild | Done | TASK-002, Cycle 5 — GPU TrackNetV3 verified e2e via baddyai.com (`tracknet.status=ok`, 55–122 real pts/rally, q0.82, backend=runpod). Fixed missing matplotlib/pycocotools (`tracknet-src-20260621b`, template `ic265brof1`); workers `ready:2 unhealthy:0`, scale to 0 idle |
-| 2026-06-20 | CPU/GPU pipelines + gen-time | Todo | TASK-003 (P1) |
-| 2026-06-20 | Job model (timing, failed) | Todo | TASK-004 (P1) |
+| 2026-06-21 | CPU/GPU pipelines + gen-time | Deployed | TASK-003, Cycle 6 — `pipeline=cpu|gpu` recorded from job options; API exposes separate expected gen-time budgets |
+| 2026-06-21 | Job model (timing, failed) | Deployed | TASK-004, Cycle 6 — `started_at`/`finished_at` migrated live; legacy `error` rows now `failed`; latest GPU job reports `gen_seconds=424.6` |
 | 2026-06-20 | Queue UI + /api/jobs | Todo | TASK-005 (P1) |
-| 2026-06-20 | Instance sizing | Decided | TASK-006: c2d-standard-8 Mumbai 1yr CUD (PRD §P1-INSTANCE) |
+| 2026-06-21 | Instance sizing | Done | TASK-006, Cycle 7 — live VM resized in place to `c2d-standard-8` in `us-central1-a`; static production IP `136.113.208.173` preserved as `baddy-agent-ip`; health + DB/API verified |
 | 2026-06-21 | Reel editor UI | Reasoned UI complete | TASK-007, Cycle 4 — component rationale added; dead controls removed; Soundtrack is read-only until backend audio render props exist; overlay render contract still future |
 
 ## Active priorities
-1. TASK-001 — camera actively follows + centers the shuttle (regression-tested).
-2. TASK-002 — rebuild RunPod worker from source; verify baddyai.com.
-3. TASK-003/004/005 — dual pipelines + job timing + queue UI.
-4. Next editor backend slice — persist `baddy.editor.v1` to jobs and render shuttle/pose/audio styles into MP4 output; keep trim/text/music edits hidden until contracts exist.
+1. TASK-005 — queue UI + `GET /api/jobs` list, now using TASK-003/004 timing fields.
+2. Optional Mumbai migration — create Mumbai `c2d-standard-8` and cut GoDaddy DNS
+   if/when lower India latency is worth a domain cutover.
+3. Next editor backend slice — persist `baddy.editor.v1` to jobs and render shuttle/pose/audio styles into MP4 output; keep trim/text/music edits hidden until contracts exist.
 
 ## Open risks
 | Risk | Severity | Source | Mitigation / next task |
 |---|---|---|---|
-| RunPod worker won't boot (re-wrapped image inherited defect) | Resolved? | session 2026-06-19 | TASK-002 Cycle 2: clean from-source `tracknet-src-20260621` built (single-arch docker v2) — confirm health after deploy |
-| RunPod API key in .env returns 401 (expired) | Med | 2026-06-21 | blocks API deploy + GPU jobs; user to refresh key, then redeploy + verify |
+| Mumbai move needs GoDaddy DNS cutover | Low | Cycle 7 GCP audit | TASK-006 completed in place; Mumbai remains optional future migration |
 | Original upload soft (rendered from 480p proxy; ~/Downloads TCC-blocked) | Med | session 2026-06-19 | re-run on sharp source when file access restored |
 | `if not pov` gates `from_vision` off for handheld clips | Med | track.py:137 | revisit in pipeline cycle |
 
 ## Next checkpoint
-- Goal: PR-review the reasoned TASK-007 editor UI and decide the next backend
-  render-contract slice.
-- Required tests: `node --check web/app.js`, `./scripts/check.sh`, and rendered
-  desktop/mobile Studio QA.
-- Expected docs update: this ledger + dev-cycle-log Cycle 4.
+- Goal: finish TASK-005 queue list/UI on top of the now-deployed job timing API.
+- Required tests: unit/API coverage for `GET /api/jobs`, frontend smoke, `./scripts/check.sh`.
+- Expected docs update: this ledger + dev-cycle-log Cycle 7.

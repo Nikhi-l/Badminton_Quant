@@ -3,9 +3,12 @@
 #   bash deploy/deploy.sh
 set -euo pipefail
 
+# TASK-006 production target: in-place C2D resize on the static baddyai.com IP.
+# Mumbai remains a future DNS-backed migration option; baddyai.com DNS is hosted
+# outside this GCP project (GoDaddy/domaincontrol.com).
 ZONE="${ZONE:-us-central1-a}"
 VM="${VM:-baddy-agent}"
-MACHINE="${MACHINE:-e2-standard-4}"
+MACHINE="${MACHINE:-c2d-standard-8}"
 
 if ! gcloud compute instances describe "$VM" --zone "$ZONE" >/dev/null 2>&1; then
   echo ">> creating VM $VM ($MACHINE) in $ZONE"

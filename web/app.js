@@ -163,7 +163,7 @@ function renderStages(stages) {
   $("stageList").innerHTML = Object.keys(STAGE_META).map(key => {
     const st = (stages.find(s => s.key === key) || {}).state || "pending";
     const [label, icon] = STAGE_META[key];
-    const mark = st === "done" ? "✓" : icon;
+    const mark = st === "done" ? "✓" : (st === "failed" ? "!" : icon);
     return `<li class="${st}"><span class="dot">${mark}</span>${label}</li>`;
   }).join("");
 }
@@ -174,17 +174,32 @@ function poll(id) {
     let job;
     try { job = await (await fetch(`/api/jobs/${id}`)).json(); } catch { return; }
     renderStages(job.stages || []);
-    $("jobMsg").textContent = job.message || "";
+    $("jobMsg").textContent = jobStatusText(job);
     if (job.status === "done") {
       clearInterval(pollTimer);
       showResult(job);
-    } else if (job.status === "error") {
+    } else if (job.status === "failed" || job.status === "error") {
       clearInterval(pollTimer);
       failJob(`Something broke: ${job.error}`);
     }
   };
   tick();
   pollTimer = setInterval(tick, 2500);
+}
+
+function genText(job) {
+  const pipe = (job.pipeline || "unknown").toUpperCase();
+  const elapsed = job.gen_seconds ? `${job.gen_seconds}s` : "";
+  const expected = job.expected_gen_seconds ? `target ~${Math.round(job.expected_gen_seconds / 60)}m` : "";
+  return [pipe, elapsed, expected].filter(Boolean).join(" · ");
+}
+
+function jobStatusText(job) {
+  const bits = [];
+  if (job.message) bits.push(job.message);
+  const meta = genText(job);
+  if (meta) bits.push(meta);
+  return bits.join(" — ");
 }
 
 function showResult(job) {
@@ -197,6 +212,7 @@ function showResult(job) {
   const u = r.gemini_usage;
   $("resultMeta").innerHTML =
     `${r.duration}s reel · ${r.n_rallies_used} of ${r.n_rallies_found} rallies (longest first)` +
+    (job.pipeline ? `<br>${esc(genText(job))}` : "") +
     (r.n_clips > 1 ? `<br>${r.n_clips} clips joined · ordered by ${esc(r.clip_order || "upload order")}` : "") +
     visionSummaryHtml(r.vision, "<br>") +
     coachSummaryHtml(r.coach, "<br>") +
