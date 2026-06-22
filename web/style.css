@@ -354,3 +354,5 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
   .coachbar{max-height:86px}
   .coach-main,.coach-note{max-width:100%;width:100%}
 }
+
+.control-hint{font-size:11px;line-height:1.45;margin-top:7px;color:#8b93a6}

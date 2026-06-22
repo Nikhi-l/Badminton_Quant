@@ -406,6 +406,7 @@ function defaultEditorState(item) {
     schema: "baddy.editor.v1",
     canvas: { width: 1080, height: 1920, fps: 30, format: "vertical-reel" },
     remix: { order, mirror: !!(item.remix && item.remix.mirror) },
+    framing: { fit: "fit", zoom: 1, x: 0, y: 0 },
     overlays: {
       shuttle: { enabled: true, style: "ring", size: 54, opacity: 0.92, trail: true },
       pose: { enabled: !!(item.options && item.options.pose === "yolo11"), style: "glow", lineWidth: 3, opacity: 0.82 },
@@ -421,6 +422,7 @@ function mergeEditorState(base, saved) {
     ...saved,
     canvas: { ...base.canvas, ...(saved.canvas || {}) },
     remix: { ...base.remix, ...(saved.remix || {}) },
+    framing: { ...base.framing, ...(saved.framing || {}) },
     overlays: {
       shuttle: { ...base.overlays.shuttle, ...((saved.overlays || {}).shuttle || {}) },
       pose: { ...base.overlays.pose, ...((saved.overlays || {}).pose || {}) },
@@ -777,8 +779,11 @@ function renderLayerList() {
   const state = studio.editorState;
   const pool = studio.item.rally_pool || studio.item.rallies || [];
   const included = (studio.edit || []).filter(e => e.on).length || state.remix.order.length;
+  const fr = state.framing || { fit: "fit", zoom: 1, x: 0, y: 0 };
+  const frEdited = fr.fit !== "fit" || (fr.zoom || 1) !== 1 || fr.x || fr.y;
   const layers = [
     { id: "reel", ico: "▤", title: "Reel cuts", sub: `${included}/${pool.length || included} rallies`, state: "live" },
+    { id: "framing", ico: "⛶", title: "Framing", sub: frEdited ? `${fr.fit === "fill" ? "Crop" : "Fit"} · ${Math.round((fr.zoom || 1) * 100)}%` : "Original frame", state: frEdited ? "edited" : "auto" },
     { id: "shuttle", ico: "◉", title: "Shuttle FX", sub: `${styleLabel(state.overlays.shuttle.style)} · ${Math.round(state.overlays.shuttle.opacity * 100)}%`, state: state.overlays.shuttle.enabled ? "on" : "off" },
     { id: "pose", ico: "◇", title: "Pose skeleton", sub: `${styleLabel(state.overlays.pose.style)} · ${poseReadyCount()} rallies`, state: state.overlays.pose.enabled ? "on" : "off" },
     { id: "soundtrack", ico: "♪", title: "Soundtrack", sub: "Current stitch bed", state: "fixed" },
@@ -796,6 +801,8 @@ function renderLayerList() {
 
 function selectLayer(layer) {
   studio.selectedLayer = layer;
+  const stage = $("stageFrame");
+  if (stage) stage.style.cursor = layer === "framing" ? "grab" : "";
   renderLayerList();
   renderInspector();
   buildTimeline();
@@ -805,7 +812,30 @@ function renderInspector() {
   const panel = $("inspectorPanel");
   const state = studio.editorState;
   $("selectedLayerMeta").textContent = styleLabel(studio.selectedLayer);
-  if (studio.selectedLayer === "shuttle") {
+  if (studio.selectedLayer === "framing") {
+    const f = framingState();
+    panel.innerHTML = `
+      <div class="control-group">
+        <div class="control-title"><span>Video framing</span><button class="btn btn-small" id="framingReset">Reset to original</button></div>
+        <div class="choice-row">
+          <button class="choice-btn ${f.fit === "fit" ? "active" : ""}" data-fit="fit">Original frame</button>
+          <button class="choice-btn ${f.fit === "fill" ? "active" : ""}" data-fit="fill">Crop to fill</button>
+        </div>
+        <div class="control-row"><label>Zoom</label><input type="range" id="framingZoom" min="100" max="300" value="${Math.round((f.zoom || 1) * 100)}"></div>
+        <div class="control-row"><label>Pan X</label><input type="range" id="framingX" min="-100" max="100" value="${Math.round((f.x || 0) * 100)}"></div>
+        <div class="control-row"><label>Pan Y</label><input type="range" id="framingY" min="-100" max="100" value="${Math.round((f.y || 0) * 100)}"></div>
+        <div class="control-hint muted">Drag the preview to reposition the crop. “Reset to original” restores the full video frame.</div>
+      </div>`;
+    const apply = (save) => { applyFraming(); updateOverlayPreview(); renderLayerList(); if (save) saveEditorState(); };
+    panel.querySelectorAll("[data-fit]").forEach(b => b.onclick = () => { f.fit = b.dataset.fit; apply(true); });
+    $("framingZoom").oninput = (e) => { f.zoom = Number(e.target.value) / 100; apply(false); };
+    $("framingZoom").onchange = () => saveEditorState();
+    $("framingX").oninput = (e) => { f.x = Number(e.target.value) / 100; apply(false); };
+    $("framingX").onchange = () => saveEditorState();
+    $("framingY").oninput = (e) => { f.y = Number(e.target.value) / 100; apply(false); };
+    $("framingY").onchange = () => saveEditorState();
+    $("framingReset").onclick = () => { studio.editorState.framing = { fit: "fit", zoom: 1, x: 0, y: 0 }; renderInspector(); apply(true); };
+  } else if (studio.selectedLayer === "shuttle") {
     const sh = state.overlays.shuttle;
     panel.innerHTML = `
       <div class="control-group">
@@ -872,7 +902,6 @@ function renderInspector() {
     $("inspectMirror").onchange = (e) => {
       state.remix.mirror = e.target.checked;
       $("mirrorChk").checked = state.remix.mirror;
-      $("stVideo").classList.toggle("stVideo-mirror", state.remix.mirror);
       stateChanged();
     };
   }
@@ -900,19 +929,46 @@ function stateChanged(save = true) {
   if (save) saveEditorState();
 }
 
+function framingState() {
+  const st = studio.editorState;
+  if (!st) return { fit: "fit", zoom: 1, x: 0, y: 0 };
+  if (!st.framing) st.framing = { fit: "fit", zoom: 1, x: 0, y: 0 };
+  return st.framing;
+}
+
+// Apply the manual framing (fit + zoom + pan) and mirror to the preview video.
+function applyFraming() {
+  const v = $("stVideo"), st = studio.editorState;
+  if (!v || !st) return;
+  const f = framingState();
+  v.style.objectFit = f.fit === "fill" ? "cover" : "contain";
+  const parts = [];
+  if (st.remix.mirror) parts.push("scaleX(-1)");
+  if ((f.x || 0) || (f.y || 0)) parts.push(`translate(${(f.x || 0) * 50}%, ${(f.y || 0) * 50}%)`);
+  if ((f.zoom || 1) !== 1) parts.push(`scale(${f.zoom})`);
+  v.style.transformOrigin = "center";
+  v.style.transform = parts.join(" ");
+}
+
 function videoFitPoint(x, y) {
   const frame = $("stageFrame");
   const v = $("stVideo");
   const fw = frame.clientWidth || 1, fh = frame.clientHeight || 1;
   const vw = v.videoWidth || 9, vh = v.videoHeight || 16;
   const frameAspect = fw / fh, videoAspect = vw / vh;
+  const f = framingState();
+  // object-fit base box (contain vs cover)
+  const fitWidth = (f.fit === "fill") ? (videoAspect < frameAspect) : (videoAspect > frameAspect);
   let w = fw, h = fh, ox = 0, oy = 0;
-  if (videoAspect > frameAspect) {
-    h = fw / videoAspect; oy = (fh - h) / 2;
-  } else {
-    w = fh * videoAspect; ox = (fw - w) / 2;
-  }
-  return { left: (ox + x * w) / fw * 100, top: (oy + y * h) / fh * 100 };
+  if (fitWidth) { h = fw / videoAspect; oy = (fh - h) / 2; }
+  else { w = fh * videoAspect; ox = (fw - w) / 2; }
+  let px = ox + x * w, py = oy + y * h;
+  // element transform: scale about centre, then translate, then mirror (matches applyFraming)
+  const s = f.zoom || 1, cx = fw / 2, cy = fh / 2;
+  px = (px - cx) * s + cx + (f.x || 0) * 0.5 * fw;
+  py = (py - cy) * s + cy + (f.y || 0) * 0.5 * fh;
+  if (studio.editorState && studio.editorState.remix.mirror) px = fw - px;
+  return { left: px / fw * 100, top: py / fh * 100 };
 }
 
 function nearestTrackPoint(track, t) {
@@ -945,6 +1001,7 @@ function updateOverlayPreview() {
   const wrap = $("aiOverlays");
   const state = studio.editorState;
   if (!wrap || !state) return;
+  applyFraming();
   const parts = [];
   const p = currentShuttlePoint();
   let pos = p ? videoFitPoint(Number(p.x || 0.58), Number(p.y || 0.31)) : { left: 58, top: 31 };
@@ -1051,10 +1108,35 @@ async function rebuildReel() {
 $("rebuildBtn").onclick = rebuildReel;
 $("mirrorChk").onchange = () => {
   studio.editorState.remix.mirror = $("mirrorChk").checked;
-  $("stVideo").classList.toggle("stVideo-mirror", studio.editorState.remix.mirror);
   $("editMsg").textContent = studio.editorState.remix.mirror ? "mirror preview enabled" : "";
   stateChanged();
 };
+
+// Drag the preview to pan the manual crop (active when the Framing layer is selected).
+(function initFramingDrag() {
+  const stage = $("stageFrame");
+  if (!stage) return;
+  let dragging = false, lx = 0, ly = 0;
+  stage.addEventListener("pointerdown", (e) => {
+    if (studio.selectedLayer !== "framing") return;
+    dragging = true; lx = e.clientX; ly = e.clientY;
+    stage.style.cursor = "grabbing"; stage.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  stage.addEventListener("pointermove", (e) => {
+    if (!dragging || !studio.editorState) return;
+    const f = framingState(), r = stage.getBoundingClientRect();
+    f.x = Math.max(-1, Math.min(1, (f.x || 0) + (e.clientX - lx) / (r.width / 2)));
+    f.y = Math.max(-1, Math.min(1, (f.y || 0) + (e.clientY - ly) / (r.height / 2)));
+    lx = e.clientX; ly = e.clientY;
+    applyFraming(); updateOverlayPreview();
+    const sx = $("framingX"), sy = $("framingY");
+    if (sx) sx.value = Math.round(f.x * 100);
+    if (sy) sy.value = Math.round(f.y * 100);
+  });
+  const end = () => { if (dragging) { dragging = false; stage.style.cursor = ""; renderLayerList(); saveEditorState(); } };
+  stage.addEventListener("pointerup", end);
+  stage.addEventListener("pointercancel", end);
+})();
 $("speedToggle").querySelectorAll("button").forEach(b => b.onclick = () => {
   $("speedToggle").querySelectorAll("button").forEach(x => x.classList.remove("active"));
   b.classList.add("active");
