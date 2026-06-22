@@ -6,6 +6,12 @@
       "runtimeExecutable": ".venv/bin/uvicorn",
       "runtimeArgs": ["app.main:app", "--port", "8011"],
       "port": 8011
+    },
+    {
+      "name": "baddy-web",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8019", "--directory", "web"],
+      "port": 8019
     }
   ]
 }

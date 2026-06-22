@@ -533,6 +533,29 @@ function reelSegments() {
   });
 }
 
+// Per-track icon + lane height (px). Drives the variable-height lanes.
+const TRACK_META = {
+  reel:       { ico: "🎞", h: 56 },
+  source:     { ico: "🎬", h: 56 },
+  caption:    { ico: "💬", h: 30 },
+  shuttle:    { ico: "🏸", h: 28 },
+  pose:       { ico: "🦴", h: 28 },
+  soundtrack: { ico: "🎵", h: 44 },
+};
+
+function captionTextOf(s) {
+  const note = (s.r && s.r.note) || s.note || "";
+  const t = (note || s.label || "").toString().trim();
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : (s.label || "Rally");
+}
+
+// Deterministic pseudo-random 0.18..0.95 so the waveform looks like audio before
+// the real peaks load (and as a fallback if decoding fails).
+function stylizedPeak(i) {
+  const x = Math.sin((i + 1) * 12.9898) * 43758.5453;
+  return 0.18 + 0.77 * Math.abs(x - Math.floor(x));
+}
+
 function buildTimeline() {
   const item = studio.item;
   const lane = $("tlLane"), labels = $("tlLabels"), ruler = $("tlRuler");
@@ -548,54 +571,106 @@ function buildTimeline() {
     const poseOn = studio.editorState.overlays.pose.enabled;
     tracks = [
       { id: "reel", label: "Reel cuts", count: cuts.length, type: "clip", segs: cuts },
+      { id: "caption", label: "Captions", type: "caption",
+        segs: cuts.map(s => ({ t0: s.t0, t1: s.t1, layer: s.layer || "reel", vision: s.vision, label: captionTextOf(s) })) },
       { id: "shuttle", label: "Shuttle FX", count: shuttleOn ? cuts.length : 0, type: "shuttle",
         segs: shuttleOn ? cuts.map(s => ({ ...s, layer: "shuttle", label: studio.editorState.overlays.shuttle.style, sub: rallyVisionText(s.vision) || "overlay" })) : [] },
       { id: "pose", label: "Pose", count: poseOn ? cuts.length : 0, type: "pose",
         segs: poseOn ? cuts.map(s => ({ ...s, layer: "pose", label: studio.editorState.overlays.pose.style, sub: "skeleton" })) : [] },
       { id: "soundtrack", label: "Soundtrack", count: 1, type: "audio",
-        segs: [{ t0: 0, t1: dur, label: "Current bed", sub: "from reel stitch", layer: "soundtrack" }] },
+        segs: [{ t0: 0, t1: dur, label: "Music bed", sub: "120 BPM · from stitch", layer: "soundtrack", wave: true }] },
     ];
   } else {
     dur = item.source_duration || 1;
     const list = (item.all_rallies && item.all_rallies.length)
       ? item.all_rallies
       : (item.rallies || []).map(r => ({ ...r, used: true }));
+    const srcSegs = list.map((r, i) => ({ t0: r.start || 0, t1: r.end || (r.start || 0) + (r.dur || 0),
+      label: `R${i + 1}`, sub: `${Math.round(r.dur || 0)}s${r.note ? " · " + r.note : ""}`, note: r.note, skip: !r.used, layer: "reel" }));
     tracks = [
-      { id: "source", label: "Source rallies", count: list.length, type: "source",
-        segs: list.map((r, i) => ({ t0: r.start || 0, t1: r.end || (r.start || 0) + (r.dur || 0),
-          label: `R${i + 1}`, sub: `${Math.round(r.dur || 0)}s${r.note ? " · " + r.note : ""}`, skip: !r.used, layer: "reel" })) },
+      { id: "source", label: "Source rallies", count: list.length, type: "clip", segs: srcSegs },
+      { id: "caption", label: "Captions", type: "caption",
+        segs: srcSegs.filter(s => !s.skip).map(s => ({ t0: s.t0, t1: s.t1, layer: "reel", label: captionTextOf(s) })) },
       { id: "shuttle", label: "Shuttle FX", count: trackedRallies().length, type: "shuttle",
         segs: trackedRallies().map(s => ({ ...s, layer: "shuttle", label: "Track", sub: rallyVisionText(s.vision) || "source coordinates" })) },
       { id: "pose", label: "Pose", count: poseReadyCount(), type: "pose", segs: [] },
-      { id: "soundtrack", label: "Soundtrack", count: 0, type: "audio", segs: [] },
+      { id: "soundtrack", label: "Ambient", count: 0, type: "audio", segs: [] },
     ];
   }
+  tracks.forEach(t => { if (t.count == null) t.count = t.segs.length; });
   studio.dur = dur;
   studio.timelineSegments = tracks.flatMap(t => t.segs.map(s => ({ ...s, type: t.type })));
   $("timelineMeta").textContent = `· ${fmtT(dur)} · ${tracks.length} tracks`;
+
+  // ruler: labelled major ticks + unlabelled minor ticks at half-steps
   const step = dur > 200 ? 30 : dur > 90 ? 15 : dur > 40 ? 10 : 5;
-  for (let t = 0; t <= dur; t += step) {
+  for (let t = 0; t <= dur + 1e-6; t += step / 2) {
+    const major = Math.abs(t % step) < 1e-6;
     const el = document.createElement("div");
-    el.className = "tick";
+    el.className = major ? "tick" : "tick minor";
     el.style.left = `${t / dur * 100}%`;
-    el.textContent = fmtT(t);
+    if (major) el.textContent = fmtT(t);
     ruler.appendChild(el);
   }
+
   tracks.forEach(track => {
-    labels.insertAdjacentHTML("beforeend", `<div class="track-label">${esc(track.label)} <span>${track.count}</span></div>`);
+    const meta = TRACK_META[track.id] || { ico: "•", h: 30 };
+    labels.insertAdjacentHTML("beforeend",
+      `<div class="track-label" style="height:${meta.h}px"><span class="tl-ico">${meta.ico}</span>${esc(track.label)}<span class="tl-n">${track.count}</span></div>`);
     const row = document.createElement("div");
-    row.className = "lane-row";
+    row.className = "lane-row" + (track.type === "clip" ? " lane-clip"
+      : track.type === "audio" ? " lane-wave" : track.type === "caption" ? " lane-cap" : "");
+    row.style.height = `${meta.h}px`;
     row.dataset.track = track.id;
     lane.appendChild(row);
+
+    // caption lane: gap markers (trimmed dead time) between consecutive segments
+    if (track.type === "caption") {
+      const ordered = [...track.segs].sort((a, b) => a.t0 - b.t0);
+      for (let i = 0; i < ordered.length - 1; i++) {
+        const gap = ordered[i + 1].t0 - ordered[i].t1;
+        if (gap <= 0.4) continue;
+        const g = document.createElement("div");
+        g.className = "gap-mark";
+        g.style.left = `${ordered[i].t1 / dur * 100}%`;
+        g.style.width = `${gap / dur * 100}%`;
+        g.textContent = `${gap.toFixed(1)}s`;
+        row.appendChild(g);
+      }
+    }
+
     track.segs.forEach(s => {
       const el = document.createElement("div");
       el.className = `seg ${track.type}` + (s.skip ? " skip" : "") +
         (s.vision && s.vision.status === "ok" ? " vision-ok" : "") +
         (s.vision && s.vision.mask_enabled ? " mask-on" : "") +
+        (s.wave ? " has-wave" : "") +
         (s.layer === studio.selectedLayer ? " active-seg" : "");
       el.style.left = `${Math.max(0, s.t0) / dur * 100}%`;
-      el.style.width = `${Math.max((s.t1 - s.t0) / dur * 100, 1.4)}%`;
-      el.innerHTML = `<b>${esc(s.label)}</b><span>${esc(s.sub || "")}</span>`;
+      el.style.width = `${Math.max((s.t1 - s.t0) / dur * 100, track.type === "caption" ? 0.8 : 1.4)}%`;
+      if (track.type === "clip") {
+        el.innerHTML = `<div class="film"></div><div class="clip-cap"><b>${esc(s.label)}</b><span>${esc(s.sub || "")}</span></div>`;
+        const film = el.querySelector(".film");
+        if (item.thumb) film.style.backgroundImage = `url("${item.thumb}")`;
+        el._film = film; el._mid = (s.t0 + s.t1) / 2;
+      } else if (track.type === "caption") {
+        el.innerHTML = `<b>${esc(s.label || "")}</b>`;
+      } else if (s.wave) {
+        const wrap = document.createElement("div");
+        wrap.className = "wave-wrap";
+        const n = Math.max(40, Math.round((s.t1 - s.t0) * 4));
+        for (let i = 0; i < n; i++) {
+          const b = document.createElement("div");
+          b.className = "wave-bar";
+          b.style.height = `${Math.round(stylizedPeak(i) * 86 + 8)}%`;
+          wrap.appendChild(b);
+        }
+        el.appendChild(wrap);
+        el.insertAdjacentHTML("beforeend", `<b>${esc(s.label)}</b><span>${esc(s.sub || "")}</span>`);
+        el._wave = wrap;
+      } else {
+        el.innerHTML = `<b>${esc(s.label)}</b><span>${esc(s.sub || "")}</span>`;
+      }
       if (s.vision) el.title = rallyVisionTitle(s.vision);
       el.onclick = (e) => {
         e.stopPropagation();
@@ -607,7 +682,73 @@ function buildTimeline() {
       row.appendChild(el);
     });
   });
+
+  upgradeFilmstrip();   // real video frames behind the clip lane (best-effort)
+  upgradeWaveform();    // real audio peaks for the soundtrack lane (best-effort)
   updateOverlayPreview();
+}
+
+// Capture a real frame per clip segment from the studio video into its filmstrip
+// background. Same-origin video, so the canvas is not tainted. Falls back to the
+// reel thumbnail already set on each .film.
+let _filmBusy = false;
+async function upgradeFilmstrip() {
+  if (_filmBusy) return;
+  const clips = [...document.querySelectorAll(".seg.clip")]
+    .map(seg => ({ film: seg._film, mid: seg._mid })).filter(c => c.film && c.mid != null);
+  const v = $("stVideo");
+  const src = (v && (v.currentSrc || v.src)) || "";
+  if (!clips.length || !src) return;
+  _filmBusy = true;
+  try {
+    const vid = document.createElement("video");
+    vid.muted = true; vid.preload = "auto"; vid.crossOrigin = "anonymous"; vid.src = src;
+    await new Promise((res, rej) => { vid.onloadeddata = res; vid.onerror = rej; setTimeout(rej, 9000); });
+    const cv = document.createElement("canvas"); cv.width = 128; cv.height = 72;
+    const ctx = cv.getContext("2d");
+    for (const c of clips) {
+      try {
+        await new Promise((res) => { vid.onseeked = res; vid.currentTime = Math.min(c.mid, (vid.duration || 1) - 0.05); setTimeout(res, 1800); });
+        ctx.drawImage(vid, 0, 0, cv.width, cv.height);
+        c.film.style.backgroundImage = `url("${cv.toDataURL("image/jpeg", 0.62)}")`;
+      } catch (_) { /* keep thumb */ }
+    }
+  } catch (_) { /* keep thumb fallback */ }
+  finally { _filmBusy = false; }
+}
+
+// Decode the reel audio and set real waveform bar heights. Cached per source.
+let _wavePeaks = null, _wavePeaksSrc = null;
+async function upgradeWaveform() {
+  const wraps = [...document.querySelectorAll(".wave-wrap")];
+  const v = $("stVideo");
+  const src = (v && (v.currentSrc || v.src)) || "";
+  if (!wraps.length || !src) return;
+  try {
+    if (!_wavePeaks || _wavePeaksSrc !== src) {
+      const buf = await (await fetch(src)).arrayBuffer();
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ac = new AC();
+      const audio = await ac.decodeAudioData(buf);
+      const data = audio.getChannelData(0);
+      const N = 600, block = Math.max(1, Math.floor(data.length / N)), peaks = [];
+      for (let i = 0; i < N; i++) {
+        let m = 0;
+        for (let j = 0; j < block; j += 32) { const a = Math.abs(data[i * block + j] || 0); if (a > m) m = a; }
+        peaks.push(m);
+      }
+      const mx = Math.max(...peaks, 1e-3);
+      _wavePeaks = peaks.map(p => p / mx); _wavePeaksSrc = src;
+      if (ac.close) ac.close();
+    }
+    wraps.forEach(wrap => {
+      const bars = wrap.children, n = bars.length;
+      for (let i = 0; i < n; i++) {
+        const p = _wavePeaks[Math.floor(i / n * _wavePeaks.length)] || 0;
+        bars[i].style.height = `${Math.max(6, Math.round(p * 92))}%`;
+      }
+    });
+  } catch (_) { /* keep stylized fallback */ }
 }
 
 function studioTick() {
@@ -616,6 +757,7 @@ function studioTick() {
   const dur = v.duration || studio.dur || 1;
   const timelineScale = Math.max(0.8, Math.min(1.8, Number($("timelineZoom").value || 100) / 100));
   $("tlHead").style.left = `${Math.min(v.currentTime / dur, 1) * timelineScale * 100}%`;
+  $("tlHeadTime").textContent = fmtT(v.currentTime);
   $("tpTime").textContent = `${fmtT(v.currentTime)} / ${fmtT(dur)}`;
   $("tpPlay").textContent = v.paused ? "▶" : "⏸";
   $("tpScrub").value = String(Math.round(Math.min(v.currentTime / dur, 1) * 1000));
