@@ -5,6 +5,34 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 8: Detailed editor timeline + manual video framing (crop/reset)
+**Date:** 2026-06-21
+**Goal:** Make the Studio timeline more detailed/refined like a Descript-style
+editor (filmstrip, captions, waveform); add manual video framing so the user can
+re-crop the preview and reset to the original frame.
+**Roadmap alignment:** PRD §8a reel editor UI.
+**Branch:** `feat/TASK-008-timeline-refine`, `feat/TASK-009-manual-framing`
+**Files changed:** `web/app.js`, `web/style.css`, `web/index.html`, `.claude/launch.json`.
+**Schema/API/interface changes:** `baddy.editor.v1` gains `framing {fit, zoom, x, y}`
+(client state, persisted; merged backward-compatibly). No backend API change.
+**Tests/verification performed:**
+- TASK-008 timeline: filmstrip clip lane (canvas frame capture, thumb fallback),
+  Captions lane with dashed gap markers (trimmed dead-time), waveform lane
+  (Web Audio peaks + stylized fallback), minor ticks, playhead time bubble.
+  Driven in the `baddy-web` preview with a mock reel: 5 lanes, filmstrip frames,
+  4 gap markers (15/8/14/25s), 141 waveform bars; no console errors.
+- TASK-009 framing: Framing layer + inspector (Original/Crop toggle, Zoom + Pan
+  sliders, drag-to-pan, "Reset to original"). Preview crop applies
+  object-fit:cover + translate/scale; Reset restores contain + no transform;
+  `videoFitPoint` updated so the shuttle overlay stays aligned under crop.
+- `node --check web/app.js` OK; `./scripts/check.sh` → 9 passed.
+- Merged to `main` (4a73dda, aaeeaef), pushed, deployed to baddyai.com (served
+  app.js contains applyFraming/wave-bar/gap-mark; health ok).
+**Docs updated:** this log, `docs/progress-ledger.md`.
+**Open risks / next steps:**
+- Framing + shuttle/pose styles are preview/persisted client state; baking the
+  crop and overlay styles into the exported MP4 is a backend render-contract slice.
+
 ## Cycle 7: TASK-006 production VM resized to c2d-standard-8
 **Date:** 2026-06-21
 **Goal:** Finish TASK-006 by applying the chosen C2D production sizing without
