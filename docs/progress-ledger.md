@@ -22,6 +22,7 @@ docs commit after each functional slice.
 | 2026-06-21 | Reel editor UI | Reasoned UI complete | TASK-007, Cycle 4 — component rationale added; dead controls removed; Soundtrack is read-only until backend audio render props exist; overlay render contract still future |
 | 2026-06-21 | Editor timeline (detailed) | Deployed | TASK-008, Cycle 8 — Descript-style timeline: filmstrip clip lane, Captions lane w/ gap markers, waveform, minor ticks, playhead time bubble. Live on baddyai.com |
 | 2026-06-21 | Manual video framing | Deployed | TASK-009, Cycle 8 — Framing layer: Original/Crop toggle, Zoom+Pan, drag-to-pan, "Reset to original". Preview/persisted client state; export-bake is a backend follow-up. Live |
+| 2026-06-21 | Upload double-prompt bug | Todo (bug) | TASK-010 — after a reel is generated, a new upload prompts the file picker twice; with Shuttle tracking on the 2nd-attempt upload doesn't start. Fresh/first job is fine. Suspect web/app.js upload bindings (~63–71) + fileInput.value reset on return-to-upload paths. Not yet root-caused |
 
 ## Active priorities
 1. TASK-005 — queue UI + `GET /api/jobs` list, now using TASK-003/004 timing fields.
