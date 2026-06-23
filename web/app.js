@@ -677,6 +677,22 @@ function buildTimeline() {
       }
     }
 
+    // Source mode: player presence on the Pose lane — a centroid dot per player
+    // across the whole timeline, coloured by track id (parity with the shuttle strip).
+    if (track.id === "pose" && studio.mode === "source") {
+      const pts = allPlayerPoints();
+      const step = Math.max(1, Math.ceil(pts.length / 600));
+      for (let i = 0; i < pts.length; i += step) {
+        const pt = pts[i];
+        const d = document.createElement("span");
+        d.className = `player-dot p${pt.id % 4}`;
+        d.style.left = `${pt.t / dur * 100}%`;
+        d.style.top = `${Math.max(6, Math.min(94, pt.y * 100))}%`;
+        d.style.opacity = `${0.35 + 0.5 * (pt.confidence || 0.6)}`;
+        row.appendChild(d);
+      }
+    }
+
     track.segs.forEach(s => {
       const el = document.createElement("div");
       el.className = `seg ${track.type}` + (s.skip ? " skip" : "") +
@@ -743,6 +759,20 @@ function allShuttlePoints() {
   for (const seg of reelSegments()) {
     for (const p of ((seg.vision || {}).shuttle_track || [])) {
       out.push({ t: Number(p.t || 0), x: Number(p.x || 0), y: Number(p.y || 0), confidence: Number(p.confidence || 0) });
+    }
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+
+// All tracked player centroids across the video, in SOURCE time, for the source-mode
+// Pose-lane presence strip (one point per player box, tagged by track id).
+function allPlayerPoints() {
+  const out = [];
+  for (const seg of reelSegments()) {
+    for (const f of ((seg.vision || {}).players_track || [])) {
+      for (const b of (f.boxes || [])) {
+        out.push({ t: Number(f.t || 0), y: Number(b.y || 0), id: Number(b.id || 0), confidence: Number(b.confidence || 0) });
+      }
     }
   }
   return out.sort((a, b) => a.t - b.t);
@@ -830,7 +860,10 @@ function trackedRallies() {
 }
 
 function poseReadyCount() {
-  return (studio.item.rallies || []).filter(r => Number(((r.vision || {}).pose_quality) || 0) > 0).length;
+  return (studio.item.rallies || []).filter(r => {
+    const v = r.vision || {};
+    return Number(v.pose_quality || 0) > 0 || (Array.isArray(v.players_track) && v.players_track.length > 0);
+  }).length;
 }
 
 function renderLayerList() {
@@ -843,7 +876,7 @@ function renderLayerList() {
     { id: "reel", ico: "▤", title: "Reel cuts", sub: `${included}/${pool.length || included} rallies`, state: "live" },
     { id: "framing", ico: "⛶", title: "Framing", sub: frEdited ? `${fr.fit === "fill" ? "Crop" : "Fit"} · ${Math.round((fr.zoom || 1) * 100)}%` : "Original frame", state: frEdited ? "edited" : "auto" },
     { id: "shuttle", ico: "◉", title: "Shuttle FX", sub: `${styleLabel(state.overlays.shuttle.style)} · ${Math.round(state.overlays.shuttle.opacity * 100)}%`, state: state.overlays.shuttle.enabled ? "on" : "off" },
-    { id: "pose", ico: "◇", title: "Pose skeleton", sub: `${styleLabel(state.overlays.pose.style)} · ${poseReadyCount()} rallies`, state: state.overlays.pose.enabled ? "on" : "off" },
+    { id: "pose", ico: "◇", title: "Players & pose", sub: `boxes · ${poseReadyCount()} rallies`, state: state.overlays.pose.enabled ? "on" : "off" },
     { id: "soundtrack", ico: "♪", title: "Soundtrack", sub: "Current stitch bed", state: "fixed" },
   ];
   $("layerList").innerHTML = layers.map(l => `
@@ -1029,14 +1062,36 @@ function videoFitPoint(x, y) {
   return { left: px / fw * 100, top: py / fh * 100 };
 }
 
-function nearestTrackPoint(track, t) {
+function nearestTrackPoint(track, t, window = 0.55) {
   if (!track || !track.length) return null;
   let best = null, delta = Infinity;
   track.forEach(p => {
     const d = Math.abs(Number(p.t || 0) - t);
     if (d < delta) { best = p; delta = d; }
   });
-  return delta <= 0.55 ? best : null;
+  return delta <= window ? best : null;
+}
+
+// Player boxes ({id,x,y,w,h,confidence}) tracked at the current time, or []. Maps
+// the playhead to source time the same way as the shuttle, then takes the nearest
+// sampled players_track frame (wider window — player samples are sparser).
+function currentPlayers() {
+  const v = $("stVideo");
+  if (!studio.item || !v.duration) return [];
+  const pick = (vision, t) => {
+    const fr = nearestTrackPoint((vision || {}).players_track || [], t, 1.0);
+    return fr ? (fr.boxes || []) : [];
+  };
+  if (studio.mode === "source") {
+    for (const seg of reelSegments()) {
+      const boxes = pick(seg.vision, v.currentTime);
+      if (boxes.length) return boxes;
+    }
+    return [];
+  }
+  const seg = reelSegments().find(s => v.currentTime >= s.t0 && v.currentTime <= s.t1);
+  if (!seg) return [];
+  return pick(seg.vision, seg.sourceStart + (v.currentTime - seg.t0));
 }
 
 function currentShuttlePoint() {
@@ -1070,15 +1125,31 @@ function updateOverlayPreview() {
     const trail = sh.trail ? `<div class="shuttle-trail" style="left:${Math.max(3, pos.left - 30)}%;top:${Math.min(92, pos.top + 10)}%"></div>` : "";
     parts.push(`${trail}<div class="shuttle-mark ${esc(sh.style)}" style="left:${pos.left}%;top:${pos.top}%;width:${sh.size}px;height:${sh.size}px;margin-left:${-sh.size / 2}px;margin-top:${-sh.size / 2}px;--overlay-opacity:${sh.opacity}"></div>`);
   }
-  // Pose: render ONLY real keypoints. They are not in the public payload yet
-  // (TASK-015 exposes player/pose tracks); until then draw nothing rather than a
-  // non-data placeholder skeleton at a fixed position.
+  // Players & pose layer: draw the tracked player boxes at the current time (real
+  // data from the YOLO worker), hidden when none. Pose keypoints (skeleton) render
+  // on top once exposed (currentPose() is null until the worker persists them).
   const po = state.overlays.pose;
-  const pose = po.enabled ? currentPose() : null;
-  if (pose) {
-    parts.push(renderPoseOverlay(pose, po));
+  if (po.enabled) {
+    const target = (state.camera && state.camera.targetPlayer != null) ? state.camera.targetPlayer : null;
+    for (const b of currentPlayers()) {
+      parts.push(renderPlayerBox(b, po, b.id === target));
+    }
+    const pose = currentPose();
+    if (pose) parts.push(renderPoseOverlay(pose, po));
   }
   wrap.innerHTML = parts.join("");
+}
+
+// A tracked player's bounding box, framing-aware. Map both corners through
+// videoFitPoint so crop/zoom/pan transforms apply correctly.
+function renderPlayerBox(b, po, isTarget) {
+  const tl = videoFitPoint(Number(b.x) - Number(b.w) / 2, Number(b.y) - Number(b.h) / 2);
+  const br = videoFitPoint(Number(b.x) + Number(b.w) / 2, Number(b.y) + Number(b.h) / 2);
+  const left = Math.min(tl.left, br.left), top = Math.min(tl.top, br.top);
+  const w = Math.abs(br.left - tl.left), h = Math.abs(br.top - tl.top);
+  return `<div class="player-box${isTarget ? " target" : ""}" data-pid="${b.id}" ` +
+    `style="left:${left}%;top:${top}%;width:${w}%;height:${h}%;opacity:${po.opacity}">` +
+    `<span class="player-tag">P${Number(b.id) + 1}</span></div>`;
 }
 
 // Real pose keypoints for the current time, or null. Populated by TASK-015 (player

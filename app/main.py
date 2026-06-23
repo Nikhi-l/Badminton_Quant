@@ -198,6 +198,9 @@ def _compact_vision(v: dict | None) -> dict | None:
     track = _sample_shuttle_track(shuttle)
     if track:
         out["shuttle_track"] = track
+    ptrack = _sample_player_track(players)
+    if ptrack:
+        out["players_track"] = ptrack
     return out
 
 
@@ -224,6 +227,61 @@ def _sample_shuttle_track(points: list | None, max_points: int = 180) -> list[di
             })
         except (TypeError, ValueError):
             continue
+    return out
+
+
+def _sample_player_track(players: list | None, max_frames: int = 120) -> list[dict]:
+    """Public, bounded per-frame player boxes with stable track ids for the editor.
+
+    Vision stores dense per-frame player detections as boxes only. The editor needs
+    normalized box centers + sizes and a consistent id per player so it can draw a
+    player overlay and let the camera follow a chosen player (TASK-014/015). Ids are
+    assigned greedily by nearest-centroid continuity across sampled frames.
+    """
+    if not isinstance(players, list) or not players:
+        return []
+    step = max(1, math.ceil(len(players) / max_frames))
+    frames = [f for f in players[::step] if isinstance(f, dict)]
+    out: list[dict] = []
+    prev: list[tuple[int, float, float]] = []  # (id, cx, cy) from the last emitted frame
+    next_id = 0
+    gate = 0.22  # max normalized centroid move to keep the same id between samples
+    for f in frames:
+        cur: list[tuple[int, float, float]] = []
+        used_prev: set[int] = set()
+        norm_boxes: list[dict] = []
+        for b in (f.get("boxes") or []):
+            try:
+                x1, y1, x2, y2 = float(b["x1"]), float(b["y1"]), float(b["x2"]), float(b["y2"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+            best_id, best_i, best_d = None, None, gate
+            for i, (pid, px, py) in enumerate(prev):
+                if i in used_prev:
+                    continue
+                d = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
+                if d < best_d:
+                    best_id, best_i, best_d = pid, i, d
+            if best_id is None:
+                best_id = next_id
+                next_id += 1
+            else:
+                used_prev.add(best_i)
+            cur.append((best_id, cx, cy))
+            norm_boxes.append({
+                "id": best_id,
+                "x": round(cx, 5), "y": round(cy, 5),
+                "w": round(max(0.0, x2 - x1), 5), "h": round(max(0.0, y2 - y1), 5),
+                "confidence": round(float(b.get("confidence", 0.0)), 3),
+            })
+        if norm_boxes:
+            try:
+                t = round(float(f.get("t")), 3)
+            except (TypeError, ValueError):
+                t = 0.0
+            out.append({"t": t, "boxes": norm_boxes})
+        prev = cur
     return out
 
 
