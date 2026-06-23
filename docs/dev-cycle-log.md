@@ -5,6 +5,40 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 9: Studio overlay/timeline/landscape fixes (TASK-011/012/013)
+**Date:** 2026-06-21
+**Goal:** Address the 2026-06-21 product-owner Studio review — kill the phantom
+shuttle overlay, make the timeline lanes interactive, and let the user view +
+reframe the original landscape footage. First three items of the
+"all UI fixes first" sweep.
+**Roadmap alignment:** PRD §16 P1 (TASK-011/012/013); intake
+`docs/reviews/2026-06-21-studio-camera-feedback.md`.
+**Branch:** `fix/TASK-011-overlay-correctness`, `feat/TASK-012-interactive-timeline`,
+`feat/TASK-013-landscape-source-framing`.
+**Files changed:** `web/app.js`, `web/style.css`, `web/index.html`.
+**Schema/API/interface changes:** none (client-only). `index.html` cache-bust
+bumped `v=17 → v=18` so deployed clients fetch the new app.js/style.css.
+**Tests/verification performed (baddy-web preview, mock reel):**
+- TASK-011: shuttle marker renders only at a tracked time — tracked time → 1
+  marker, untracked time → 0 (the "weird circle" at the fixed 58%,31% default is
+  gone); non-data pose skeleton removed (`currentPose()` returns null until
+  TASK-015 exposes keypoints).
+- TASK-012: Shuttle/Pose lane labels are ON/OFF toggles — clicking the Shuttle
+  label flips `overlays.shuttle.enabled`; Source mode draws the shuttle track
+  across the whole video (120 trajectory dots over `source_duration`).
+- TASK-013: Portrait/Landscape toggle — landscape stage computes to the source
+  native aspect (854/480, 646×363, wider than tall), full court visible; the
+  Framing crop/zoom/pan applies in Source mode (`object-fit:cover` + transform).
+- `node --check web/app.js` OK; `./scripts/check.sh` → 9 passed; no console errors.
+- Merged to `main` (7b93916, 7cba2e8, 087d9fe), pushed. **Deploy to baddyai.com
+  pending explicit authorization** (auto-mode blocked the production deploy).
+**Docs updated:** this log, `docs/progress-ledger.md`, PRD §16,
+`docs/reviews/2026-06-21-studio-camera-feedback.md`, `.agent/tasks/done/`.
+**Open risks / next steps:**
+- TASK-014 (configurable camera + keyframes) and TASK-015 (player/pose tracking)
+  remain — TASK-015 also unblocks the real pose overlay deferred from TASK-011.
+- Pending deploy to make 011/012/013 live (v=18 assets).
+
 ## Cycle 8: Detailed editor timeline + manual video framing (crop/reset)
 **Date:** 2026-06-21
 **Goal:** Make the Studio timeline more detailed/refined like a Descript-style
