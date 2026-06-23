@@ -267,10 +267,12 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
 
 
 def remix(input_path, workdir: str | Path, order: list[int], mirror: bool = False,
-          cb=None) -> dict:
+          camera: dict | None = None, cb=None) -> dict:
     """Rebuild an existing job's reel: keep only the rallies in `order` (1-based
     indices into result['rallies']), in that sequence, optionally mirrored.
-    Fast path (no mirror): re-stitch existing clips. Mirror: re-render each clip."""
+    Fast path (no mirror/camera): re-stitch existing clips. Mirror or a camera plan
+    (TASK-014): re-render each clip — the camera plan bakes the user-authored
+    targets/zoom/keyframes into the exported MP4."""
     workdir = Path(workdir)
     result = json.loads((workdir / "result.json").read_text())
     # Non-destructive editing: always select from the full pool of rendered
@@ -293,16 +295,30 @@ def remix(input_path, workdir: str | Path, order: list[int], mirror: bool = Fals
     chosen = [rallies[i - 1] for i in order]
 
     info = media.probe(src)
+    apply_cam = bool(camera and camera.get("enabled") and camera.get("keyframes"))
     clips = []
+    reel_t0 = 0.0   # running reel-time start of each clip (for camera keyframe mapping)
     for slot, r in enumerate(chosen, 1):
         clip = workdir / "clips" / r["clip"]
-        if mirror:
+        if r.get("trimmed"):
+            t0, t1 = r["start"], r["end"]
+        else:
+            t0 = max(0.0, r["start"] - config.PAD_BEFORE)
+            t1 = min(info.duration, r["end"] + config.PAD_AFTER)
+        clip_dur = float(r.get("clip_dur") or (t1 - t0))
+        if apply_cam:
+            note("render", f"rally {slot}/{len(chosen)}: camera re-render")
+            seg = track.camera_segment_for_rally(camera, reel_t0, reel_t0 + clip_dur, t0)
+            path = track.from_camera_plan(proxy, t0, t1, r.get("vision"), seg)
+            if path is None:   # nothing resolvable → auto camera
+                path = (track.from_vision(proxy, t0, t1, r.get("vision")) if not pov else None) \
+                    or track.track(proxy, t0, t1, force_gentle=pov)
+            clip = workdir / "clips" / f"cam_{r['clip']}"
+            render.render_rally(src, info, t0, t1, path, clip,
+                                f"RALLY {slot}", f"{r['dur']:.0f}s · {r['note'] or 'match play'}",
+                                mirror=mirror, annotations=r.get("vision"))
+        elif mirror:
             note("render", f"rally {slot}/{len(chosen)}: mirrored re-render")
-            if r.get("trimmed"):
-                t0, t1 = r["start"], r["end"]
-            else:
-                t0 = max(0.0, r["start"] - config.PAD_BEFORE)
-                t1 = min(info.duration, r["end"] + config.PAD_AFTER)
             path = track.from_vision(proxy, t0, t1, r.get("vision")) if not pov else None
             if path is None:
                 path = track.track(proxy, t0, t1, force_gentle=pov)
@@ -311,6 +327,7 @@ def remix(input_path, workdir: str | Path, order: list[int], mirror: bool = Fals
                                 f"RALLY {slot}", f"{r['dur']:.0f}s · {r['note'] or 'match play'}",
                                 mirror=True, annotations=r.get("vision"))
         clips.append(clip)
+        reel_t0 += clip_dur
 
     note("stitch", "rebuilding reel")
     stitched = stitch.stitch(clips, workdir, log=lambda m: note("stitch", m))
@@ -321,6 +338,8 @@ def remix(input_path, workdir: str | Path, order: list[int], mirror: bool = Fals
     result["rallies"] = chosen
     result["n_rallies_used"] = len(chosen)
     result["remix"] = {"order": order, "mirror": mirror}
+    if apply_cam:
+        result["remix"]["camera"] = camera
     (workdir / "result.json").write_text(json.dumps(result, indent=2))
     note("stitch", "remix done")
     return result

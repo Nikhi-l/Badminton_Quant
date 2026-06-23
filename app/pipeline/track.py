@@ -679,3 +679,118 @@ def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
     ys = _solve_smooth_path(ys.astype(np.float64), hh.astype(np.float64),
                             (1.0 - hh).astype(np.float64), beta=2e4, w_bound=600.0)
     return FocusPath(t0=t0, fps=fps, xs=xs, ys=ys, zs=zs.astype(np.float32))
+
+
+def from_camera_plan(proxy_path, t0: float, t1: float, vision_rally: dict | None,
+                     kfs: list, fps: int = config.PROXY_FPS,
+                     crop_norms: tuple | None = None) -> "FocusPath | None":
+    """Bake a user-authored camera plan (TASK-014) into a FocusPath for one rally.
+
+    ``kfs`` are this rally's keyframes in SOURCE time, sorted-or-not, each a dict
+    ``{t, target: shuttle|player|point, target_player, point: {x, y}, zoom}``. The
+    follow centre per frame is resolved from the rally vision (shuttle / players)
+    for shuttle|player targets or the fixed point; zoom interpolates between
+    keyframes. Centres are clamped so the 9:16 crop stays in-frame, then smoothed
+    with the same solver as :func:`from_vision` so the manual camera moves as
+    cleanly as the auto one. Returns ``None`` when there are no keyframes (caller
+    falls back to the auto camera).
+
+    Player identity here uses the near/far ordering (target_player 0 = near court,
+    1 = far) — a singles approximation; unifying it with the editor's per-player
+    ids is a follow-up.
+    """
+    if not kfs:
+        return None
+    kfs = sorted(kfs, key=lambda k: float(k.get("t", 0.0) or 0.0))
+    n = max(2, int(round((t1 - t0) * fps)))
+    times = t0 + np.arange(n, dtype=np.float32) / fps
+    cw, ch = crop_norms if crop_norms is not None else _crop_norms(proxy_path)
+    shuttle_frames = (vision_rally or {}).get("shuttle") or []
+    player_frames = (vision_rally or {}).get("players") or []
+    shu_x, shu_y = _shuttle_track(shuttle_frames, times)
+    tracks = _two_player_tracks(player_frames, times)
+    Z_PLAN_MAX = 2.5  # manual zoom ceiling (the auto Z_MAX is intentionally gentler)
+
+    def _active(t):
+        a, b = kfs[0], None
+        for i, k in enumerate(kfs):
+            if float(k.get("t", 0.0) or 0.0) <= t:
+                a, b = k, (kfs[i + 1] if i + 1 < len(kfs) else None)
+        return a, b
+
+    xs = np.full(n, 0.5, np.float32)
+    ys = np.full(n, 0.55, np.float32)
+    zs = np.full(n, Z_HARD, np.float32)
+    last_cx, last_cy = 0.5, 0.55
+    for i in range(n):
+        t = float(times[i])
+        a, b = _active(t)
+        # zoom interpolation between the active keyframe and the next
+        za = float(a.get("zoom", 1.4) or 1.4)
+        if b is not None:
+            ta, tb = float(a.get("t", 0.0) or 0.0), float(b.get("t", 0.0) or 0.0)
+            if tb > ta:
+                f = min(1.0, max(0.0, (t - ta) / (tb - ta)))
+                za += (float(b.get("zoom", za) or za) - za) * f
+        z = float(np.clip(za, Z_HARD, Z_PLAN_MAX))
+        # resolve the follow centre for the active target
+        tgt = a.get("target", "shuttle")
+        cx = cy = None
+        if tgt == "point":
+            pt = a.get("point") or {}
+            cx, cy = float(pt.get("x", 0.5)), float(pt.get("y", 0.45))
+        elif tgt == "player":
+            near, far = tracks[i]
+            box = (far if int(a.get("target_player", 0) or 0) == 1 else near) or near or far
+            if box is not None:
+                cx, cy = float(box[0]), float(box[1])
+        else:  # shuttle
+            if not np.isnan(shu_x[i]):
+                cx, cy = float(shu_x[i]), float(shu_y[i])
+        if cx is None:
+            cx, cy = last_cx, last_cy   # hold last good centre on a momentary loss
+        last_cx, last_cy = cx, cy
+        hw, hh = cw / (2 * z), ch / (2 * z)
+        xs[i], ys[i], zs[i] = np.clip(cx, hw, 1 - hw), np.clip(cy, hh, 1 - hh), z
+
+    # Lighter smoothing than the auto camera (a ~0.5s Hann window, no heavy path
+    # solver): the user authored these targets explicitly, so follow them faithfully
+    # while still de-jittering. Clamp again so the crop stays in-frame after smoothing.
+    win = max(3, (fps // 2) | 1)
+    xs = _hann_smooth(xs, win)
+    ys = _hann_smooth(ys, win)
+    zs = _hann_smooth(zs, win)
+    hw = cw / (2 * zs)
+    hh = ch / (2 * zs)
+    xs = np.clip(xs, hw, 1 - hw).astype(np.float32)
+    ys = np.clip(ys, hh, 1 - hh).astype(np.float32)
+    return FocusPath(t0=t0, fps=fps, xs=xs, ys=ys, zs=zs.astype(np.float32))
+
+
+def camera_segment_for_rally(camera: dict | None, reel_t0: float, reel_t1: float,
+                             source_t0: float) -> list:
+    """Slice a reel-global camera plan to one rally's reel span and map its keyframes
+    into that rally's SOURCE time, for :func:`from_camera_plan`.
+
+    The editor authors keyframes against reel (stitched) time; the render works per
+    rally in source time. ``reel_t0..reel_t1`` is this rally's span in the reel and
+    ``source_t0`` its proxy start. The segment is seeded with the keyframe active at
+    ``reel_t0`` (so the rally opens with a defined target) plus any keyframes falling
+    inside the span, each shifted to source time. Returns [] when the camera is off
+    or has no keyframes (caller then uses the auto camera).
+    """
+    if not camera or not camera.get("enabled"):
+        return []
+    kfs = sorted(camera.get("keyframes") or [], key=lambda k: float(k.get("t", 0.0) or 0.0))
+    if not kfs:
+        return []
+    active = kfs[0]
+    for k in kfs:
+        if float(k.get("t", 0.0) or 0.0) <= reel_t0:
+            active = k
+    seg = [{**active, "t": source_t0}]
+    for k in kfs:
+        kt = float(k.get("t", 0.0) or 0.0)
+        if reel_t0 < kt < reel_t1:
+            seg.append({**k, "t": source_t0 + (kt - reel_t0)})
+    return seg
