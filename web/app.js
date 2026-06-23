@@ -391,6 +391,7 @@ function openStudio(item) {
   studio.mode = "reel";
   studio.selectedLayer = "reel";
   studio.zoom = 1;
+  _lastCamCenter = null;
   studio.editorState = loadEditorState(item);
   $("studio").hidden = false;
   $("studioFile").textContent = [item.filename, item.sport].filter(Boolean).join(" · ");
@@ -420,6 +421,10 @@ function defaultEditorState(item) {
     canvas: { width: 1080, height: 1920, fps: 30, format: "vertical-reel" },
     remix: { order, mirror: !!(item.remix && item.remix.mirror) },
     framing: { fit: "fit", zoom: 1, x: 0, y: 0 },
+    // TASK-014 configurable virtual camera. enabled=false → the auto camera (current
+    // behavior). Keyframes are authored against reel time; each picks a follow target
+    // (shuttle | player | fixed point) + zoom, interpolated between keyframes.
+    camera: { enabled: false, keyframes: [] },
     overlays: {
       shuttle: { enabled: true, style: "ring", size: 54, opacity: 0.92, trail: true },
       pose: { enabled: !!(item.options && item.options.pose === "yolo11"), style: "glow", lineWidth: 3, opacity: 0.82 },
@@ -436,6 +441,11 @@ function mergeEditorState(base, saved) {
     canvas: { ...base.canvas, ...(saved.canvas || {}) },
     remix: { ...base.remix, ...(saved.remix || {}) },
     framing: { ...base.framing, ...(saved.framing || {}) },
+    camera: {
+      ...base.camera,
+      ...(saved.camera || {}),
+      keyframes: Array.isArray((saved.camera || {}).keyframes) ? saved.camera.keyframes : base.camera.keyframes,
+    },
     overlays: {
       shuttle: { ...base.overlays.shuttle, ...((saved.overlays || {}).shuttle || {}) },
       pose: { ...base.overlays.pose, ...((saved.overlays || {}).pose || {}) },
@@ -553,6 +563,7 @@ const TRACK_META = {
   reel:       { ico: "🎞", h: 56 },
   source:     { ico: "🎬", h: 56 },
   caption:    { ico: "💬", h: 30 },
+  camera:     { ico: "🎥", h: 26 },
   shuttle:    { ico: "🏸", h: 28 },
   pose:       { ico: "🦴", h: 28 },
   soundtrack: { ico: "🎵", h: 44 },
@@ -588,6 +599,7 @@ function buildTimeline() {
       { id: "reel", label: "Reel cuts", count: cuts.length, type: "clip", segs: cuts },
       { id: "caption", label: "Captions", type: "caption",
         segs: cuts.map(s => ({ t0: s.t0, t1: s.t1, layer: s.layer || "reel", vision: s.vision, label: captionTextOf(s) })) },
+      { id: "camera", label: "Camera", type: "camera", count: cameraLaneCount(), segs: [] },
       { id: "shuttle", label: "Shuttle FX", count: shuttleOn ? cuts.length : 0, type: "shuttle",
         segs: shuttleOn ? cuts.map(s => ({ ...s, layer: "shuttle", label: studio.editorState.overlays.shuttle.style, sub: rallyVisionText(s.vision) || "overlay" })) : [] },
       { id: "pose", label: "Pose", count: poseOn ? cuts.length : 0, type: "pose",
@@ -606,6 +618,7 @@ function buildTimeline() {
       { id: "source", label: "Source rallies", count: list.length, type: "clip", segs: srcSegs },
       { id: "caption", label: "Captions", type: "caption",
         segs: srcSegs.filter(s => !s.skip).map(s => ({ t0: s.t0, t1: s.t1, layer: "reel", label: captionTextOf(s) })) },
+      { id: "camera", label: "Camera", type: "camera", count: cameraLaneCount(), segs: [] },
       { id: "shuttle", label: "Shuttle FX", count: trackedRallies().length, type: "shuttle",
         segs: trackedRallies().map(s => ({ ...s, layer: "shuttle", label: "Track", sub: rallyVisionText(s.vision) || "source coordinates" })) },
       { id: "pose", label: "Pose", count: poseReadyCount(), type: "pose", segs: [] },
@@ -690,6 +703,18 @@ function buildTimeline() {
         d.style.top = `${Math.max(6, Math.min(94, pt.y * 100))}%`;
         d.style.opacity = `${0.35 + 0.5 * (pt.confidence || 0.6)}`;
         row.appendChild(d);
+      }
+    }
+
+    // Camera keyframes (reel-time) as clickable diamonds, coloured by target.
+    if (track.id === "camera" && studio.mode === "reel" && (studio.editorState.camera || {}).enabled) {
+      for (const k of cameraKeyframes()) {
+        const m = document.createElement("span");
+        m.className = `kf-mark ${esc(k.target || "shuttle")}`;
+        m.style.left = `${Math.max(0, Math.min(100, Number(k.t || 0) / dur * 100))}%`;
+        m.title = `${fmtT(k.t)} · ${targetLabel(k)}`;
+        m.onclick = () => { $("stVideo").currentTime = Number(k.t || 0); if (studio.selectedLayer === "camera") renderInspector(); updateOverlayPreview(); };
+        row.appendChild(m);
       }
     }
 
@@ -875,6 +900,7 @@ function renderLayerList() {
   const layers = [
     { id: "reel", ico: "▤", title: "Reel cuts", sub: `${included}/${pool.length || included} rallies`, state: "live" },
     { id: "framing", ico: "⛶", title: "Framing", sub: frEdited ? `${fr.fit === "fill" ? "Crop" : "Fit"} · ${Math.round((fr.zoom || 1) * 100)}%` : "Original frame", state: frEdited ? "edited" : "auto" },
+    { id: "camera", ico: "◎", title: "Camera", sub: cameraSub(state), state: (state.camera && state.camera.enabled) ? "on" : "auto" },
     { id: "shuttle", ico: "◉", title: "Shuttle FX", sub: `${styleLabel(state.overlays.shuttle.style)} · ${Math.round(state.overlays.shuttle.opacity * 100)}%`, state: state.overlays.shuttle.enabled ? "on" : "off" },
     { id: "pose", ico: "◇", title: "Players & pose", sub: `boxes · ${poseReadyCount()} rallies`, state: state.overlays.pose.enabled ? "on" : "off" },
     { id: "soundtrack", ico: "♪", title: "Soundtrack", sub: "Current stitch bed", state: "fixed" },
@@ -926,6 +952,56 @@ function renderInspector() {
     $("framingY").oninput = (e) => { f.y = Number(e.target.value) / 100; apply(false); };
     $("framingY").onchange = () => saveEditorState();
     $("framingReset").onclick = () => { studio.editorState.framing = { fit: "fit", zoom: 1, x: 0, y: 0 }; renderInspector(); apply(true); };
+  } else if (studio.selectedLayer === "camera") {
+    const cam = cameraState();
+    ensureKeyframe();
+    const a = activeKeyframe();
+    const playerIds = [...new Set(currentPlayers().map(b => b.id))].sort((x, y) => x - y);
+    panel.innerHTML = `
+      <div class="control-group">
+        <div class="control-title"><span>Virtual camera</span><label><input type="checkbox" id="camEnabled" ${cam.enabled ? "checked" : ""}> Manual</label></div>
+        <div class="control-hint muted">Off = automatic shuttle-follow. On = follow a target you pick, with keyframes to switch target/zoom over time. Overrides the Framing layer while on.</div>
+      </div>
+      ${cam.enabled && a ? `
+      <div class="control-group">
+        <div class="control-title"><span>Target at playhead</span><span>${fmtT(cameraTime())}</span></div>
+        <div class="choice-row">
+          ${["shuttle", "player", "point"].map(t => `<button class="choice-btn ${a.target === t ? "active" : ""}" data-cam-target="${t}">${t === "shuttle" ? "Shuttle" : t === "player" ? "Player" : "Point"}</button>`).join("")}
+        </div>
+        ${a.target === "player" ? `<div class="choice-row">${(playerIds.length ? playerIds : [0]).map(id => `<button class="choice-btn ${Number(a.targetPlayer || 0) === id ? "active" : ""}" data-cam-player="${id}">P${id + 1}</button>`).join("")}</div>` : ""}
+        ${a.target === "point" ? `
+          <div class="control-row"><label>Point X</label><input type="range" id="camPointX" min="0" max="100" value="${Math.round((a.point || { x: 0.5 }).x * 100)}"></div>
+          <div class="control-row"><label>Point Y</label><input type="range" id="camPointY" min="0" max="100" value="${Math.round((a.point || { y: 0.45 }).y * 100)}"></div>` : ""}
+        <div class="control-row"><label>Zoom</label><input type="range" id="camZoom" min="100" max="280" value="${Math.round((a.zoom || 1.4) * 100)}"></div>
+        <button class="btn btn-small" id="camAddKf">+ Keyframe at playhead</button>
+      </div>
+      <div class="control-group">
+        <div class="control-title"><span>Keyframes</span><span>${cam.keyframes.length}</span></div>
+        <div class="kf-list" id="camKfList">
+          ${cameraKeyframes().map((k, i) => `<div class="kf-item ${k === a ? "active" : ""}" data-kf-seek="${k.t}"><span class="kf-t">${fmtT(k.t)}</span><span class="kf-tgt">${targetLabel(k)} · ${Math.round((k.zoom || 1.4) * 100)}%</span><button class="kf-del" data-kf-del="${i}" title="Delete keyframe">✕</button></div>`).join("")}
+        </div>
+      </div>` : ""}`;
+    $("camEnabled").onchange = (e) => { cam.enabled = e.target.checked; _lastCamCenter = null; ensureKeyframe(); stateChanged(); };
+    if (cam.enabled && a) {
+      panel.querySelectorAll("[data-cam-target]").forEach(b => b.onclick = () => { a.target = b.dataset.camTarget; _lastCamCenter = null; stateChanged(); });
+      panel.querySelectorAll("[data-cam-player]").forEach(b => b.onclick = () => { a.targetPlayer = Number(b.dataset.camPlayer); _lastCamCenter = null; stateChanged(); });
+      const liveApply = () => { applyFraming(); updateOverlayPreview(); renderLayerList(); };
+      if ($("camPointX")) { $("camPointX").oninput = (e) => { a.point = { ...(a.point || {}), x: Number(e.target.value) / 100 }; liveApply(); }; $("camPointX").onchange = () => saveEditorState(); }
+      if ($("camPointY")) { $("camPointY").oninput = (e) => { a.point = { ...(a.point || {}), y: Number(e.target.value) / 100 }; liveApply(); }; $("camPointY").onchange = () => saveEditorState(); }
+      $("camZoom").oninput = (e) => { a.zoom = Number(e.target.value) / 100; liveApply(); };
+      $("camZoom").onchange = () => saveEditorState();
+      $("camAddKf").onclick = addKeyframeAtPlayhead;
+      panel.querySelectorAll("[data-kf-seek]").forEach(el => el.onclick = (e) => {
+        if (e.target.classList.contains("kf-del")) return;
+        $("stVideo").currentTime = Number(el.dataset.kfSeek);
+        renderInspector(); updateOverlayPreview();
+      });
+      panel.querySelectorAll("[data-kf-del]").forEach(b => b.onclick = (e) => {
+        e.stopPropagation();
+        const kf = cameraKeyframes()[Number(b.dataset.kfDel)];
+        if (cam.keyframes.length > 1 && kf) { cam.keyframes = cam.keyframes.filter(k => k !== kf); ensureKeyframe(); stateChanged(); }
+      });
+    }
   } else if (studio.selectedLayer === "shuttle") {
     const sh = state.overlays.shuttle;
     panel.innerHTML = `
@@ -1020,11 +1096,167 @@ function stateChanged(save = true) {
   if (save) saveEditorState();
 }
 
+/* ---------- TASK-014: configurable virtual camera (targets + keyframes) ---------- */
+let _lastCamCenter = null;
+
+function cameraState() {
+  const st = studio.editorState;
+  if (!st) return null;
+  if (!st.camera) st.camera = { enabled: false, keyframes: [] };
+  return st.camera;
+}
+
+function cameraKeyframes() {
+  const cam = cameraState();
+  return cam ? [...cam.keyframes].sort((a, b) => Number(a.t || 0) - Number(b.t || 0)) : [];
+}
+
+function cameraTime() {
+  const v = $("stVideo");
+  return v ? v.currentTime : 0;
+}
+
+// The camera plan at reel time t: the active keyframe's target + a zoom interpolated
+// toward the next keyframe. Null when there are no keyframes.
+function cameraAt(t) {
+  const kfs = cameraKeyframes();
+  if (!kfs.length) return null;
+  let i = 0;
+  while (i + 1 < kfs.length && Number(kfs[i + 1].t || 0) <= t) i++;
+  const a = kfs[i], b = kfs[i + 1] || null;
+  let zoom = Number(a.zoom || 1.4);
+  if (b) {
+    const span = Number(b.t || 0) - Number(a.t || 0);
+    const frac = span > 0 ? Math.max(0, Math.min(1, (t - Number(a.t || 0)) / span)) : 0;
+    zoom += (Number(b.zoom || zoom) - zoom) * frac;
+  }
+  return {
+    target: a.target || "shuttle",
+    targetPlayer: a.targetPlayer == null ? 0 : a.targetPlayer,
+    point: a.point || { x: 0.5, y: 0.45 },
+    zoom,
+    sinceSwitch: t - Number(a.t || 0),
+    prev: i > 0 ? kfs[i - 1] : null,
+  };
+}
+
+// Resolve a target spec to a normalized centre {x,y}, or null if not trackable now.
+function resolveTargetCenter(spec) {
+  if (!spec) return null;
+  if (spec.target === "point") return { x: Number(spec.point.x), y: Number(spec.point.y) };
+  if (spec.target === "player") {
+    const boxes = currentPlayers();
+    const b = boxes.find(pb => pb.id === spec.targetPlayer) || boxes[0];
+    return b ? { x: Number(b.x), y: Number(b.y) } : null;
+  }
+  const p = currentShuttlePoint();
+  return p ? { x: Number(p.x), y: Number(p.y) } : null;
+}
+
+// Effective {fit,zoom,x,y} centring the camera target now, or null to fall back to
+// manual framing. Holds the last good centre on momentary target loss and cross-fades
+// for ~0.4s after a target switch so the camera never teleports.
+function evalCameraFraming() {
+  const plan = cameraAt(cameraTime());
+  if (!plan) return null;
+  let center = resolveTargetCenter(plan);
+  const BLEND = 0.4;
+  if (plan.prev && plan.sinceSwitch < BLEND) {
+    const prevCenter = resolveTargetCenter({
+      target: plan.prev.target || "shuttle",
+      targetPlayer: plan.prev.targetPlayer == null ? 0 : plan.prev.targetPlayer,
+      point: plan.prev.point || { x: 0.5, y: 0.45 },
+    });
+    if (center && prevCenter) {
+      const k = plan.sinceSwitch / BLEND;
+      center = { x: prevCenter.x + (center.x - prevCenter.x) * k, y: prevCenter.y + (center.y - prevCenter.y) * k };
+    }
+  }
+  if (!center) center = _lastCamCenter;       // hold last good centre on a brief loss
+  if (!center) return null;
+  _lastCamCenter = center;
+  return centerFraming(center, plan.zoom);
+}
+
+// {fit,zoom,x,y} (manual-framing convention) placing a normalized source point at the
+// frame centre under fit="fill" + zoom. Derived from videoFitPoint's geometry so the
+// overlays stay aligned with the camera transform.
+function centerFraming(center, zoom) {
+  const frame = $("stageFrame"), v = $("stVideo");
+  const fw = frame.clientWidth || 1, fh = frame.clientHeight || 1;
+  const vw = v.videoWidth || 9, vh = v.videoHeight || 16;
+  const frameAspect = fw / fh, videoAspect = vw / vh;
+  const fitWidth = videoAspect < frameAspect;   // fit="fill" (cover)
+  let w = fw, h = fh, ox = 0, oy = 0;
+  if (fitWidth) { h = fw / videoAspect; oy = (fh - h) / 2; }
+  else { w = fh * videoAspect; ox = (fw - w) / 2; }
+  const s = zoom || 1.4, cx = fw / 2, cy = fh / 2;
+  const fx = -2 * (ox + center.x * w - cx) * s / fw;
+  const fy = -2 * (oy + center.y * h - cy) * s / fh;
+  return { fit: "fill", zoom: s, x: Math.max(-1.6, Math.min(1.6, fx)), y: Math.max(-1.6, Math.min(1.6, fy)) };
+}
+
 function framingState() {
   const st = studio.editorState;
   if (!st) return { fit: "fit", zoom: 1, x: 0, y: 0 };
   if (!st.framing) st.framing = { fit: "fit", zoom: 1, x: 0, y: 0 };
+  if (st.camera && st.camera.enabled) {
+    const cam = evalCameraFraming();
+    if (cam) return cam;
+  }
   return st.framing;
+}
+
+/* ---------- camera authoring (layer-rail summary, keyframe editing) ---------- */
+function cameraSub(state) {
+  const cam = state.camera || {};
+  if (!cam.enabled) return "Auto follow";
+  const n = (cam.keyframes || []).length;
+  const a = activeKeyframe();
+  return `${n} keyframe${n === 1 ? "" : "s"} · ${a ? targetLabel(a) : "shuttle"}`;
+}
+
+function targetLabel(kf) {
+  if (kf.target === "player") return `player ${Number(kf.targetPlayer || 0) + 1}`;
+  if (kf.target === "point") return "fixed point";
+  return "shuttle";
+}
+
+function cameraLaneCount() {
+  const cam = cameraState();
+  return (cam && cam.enabled) ? cam.keyframes.length : 0;
+}
+
+// The keyframe governing the current playhead (latest with t<=now), or null.
+function activeKeyframe() {
+  const kfs = cameraKeyframes();
+  if (!kfs.length) return null;
+  const t = cameraTime();
+  let active = kfs[0];
+  for (const kf of kfs) { if (Number(kf.t || 0) <= t) active = kf; }
+  return active;
+}
+
+// An enabled camera always has at least one keyframe to follow.
+function ensureKeyframe() {
+  const cam = cameraState();
+  if (cam && cam.enabled && !cam.keyframes.length) {
+    cam.keyframes.push({ t: 0, target: "shuttle", targetPlayer: 0, point: { x: 0.5, y: 0.45 }, zoom: 1.4 });
+  }
+}
+
+function addKeyframeAtPlayhead() {
+  const cam = cameraState();
+  if (!cam) return;
+  const a = activeKeyframe() || { target: "shuttle", targetPlayer: 0, point: { x: 0.5, y: 0.45 }, zoom: 1.4 };
+  const t = Math.round(cameraTime() * 100) / 100;
+  const kf = {
+    t, target: a.target, targetPlayer: a.targetPlayer == null ? 0 : a.targetPlayer,
+    point: { ...(a.point || { x: 0.5, y: 0.45 }) }, zoom: a.zoom || 1.4,
+  };
+  const existing = cam.keyframes.find(k => Math.abs(Number(k.t || 0) - t) < 0.05);
+  if (existing) Object.assign(existing, kf); else cam.keyframes.push(kf);
+  stateChanged();
 }
 
 // Apply the manual framing (fit + zoom + pan) and mirror to the preview video.
