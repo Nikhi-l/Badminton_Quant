@@ -110,8 +110,11 @@ Source: user request 2026-06-20 (this session) + harness PDF.
 | P0 | Configurable virtual camera: target = shuttle \| player \| fixed point + zoom/pan + **keyframes** (switch target over time); bake the camera plan into the exported reel (render contract) | Accept | TASK-014 |
 | P1 | Person/player tracking: detect + track players; expose as a camera follow-target and a timeline lane/overlay (feeds TASK-014) | Accept | TASK-015 |
 
-Intake: `docs/reviews/2026-06-21-studio-camera-feedback.md`. TASK-008/009/010 are
-tracked in `docs/progress-ledger.md` (timeline refinement, manual framing, upload bug).
+Intake: `docs/reviews/2026-06-21-studio-camera-feedback.md`. **TASK-011/012/013
+(Cycle 9) and TASK-010/014/015 (Cycle 10) are merged to `main`** (statuses +
+caveats in `docs/progress-ledger.md`); the whole sweep is deploy-pending. The only
+un-e2e-verified piece is the TASK-014 camera export bake (logic unit-tested).
+TASK-008/009 (timeline refinement, manual framing) are tracked in the ledger.
 
 ### P1-INSTANCE decision (research 2026-06-20)
 Budget 10k INR/mo (~$120). **Recommended: `c2d-standard-8`, region `asia-south1`

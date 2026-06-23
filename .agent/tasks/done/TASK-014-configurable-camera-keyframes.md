@@ -1,10 +1,29 @@
 # TASK-014: Configurable virtual camera — targets + keyframes
 
-**Status:** active (major, multi-cycle)
-**Branch:** `feat/TASK-014-camera-keyframes` (off `main`; likely several task branches)
+**Status:** done — authoring + preview + persistence + render contract all landed &
+unit-tested. One caveat: the end-to-end MP4 bake is wired from tested pieces but not
+yet visually confirmed on a real reel (needs a render run on video). (2026-06-23)
+**Branch:** `feat/TASK-014-camera-keyframes` (commits f550fec frontend, aa4ef3d backend)
 **PRD section:** §16 P0
-**Depends on:** TASK-015 (player tracks for the "player" target); a backend render
-contract that accepts a per-job camera plan.
+**Depends on:** TASK-015 (player tracks for the "player" target) — done.
+
+## Delivered
+- Frontend: editorState.camera {enabled, keyframes[]}; cameraAt/resolveTargetCenter/
+  evalCameraFraming drive framingState so the whole preview follows the target
+  (shuttle|player|point) with keyframed zoom, hold-on-loss + 0.4s switch blend.
+  Camera layer + inspector (Manual, target selector, player picker, Point X/Y, Zoom,
+  +Keyframe, keyframe list); Camera timeline lane with colour-coded diamonds.
+  Persisted in baddy.editor.v1. Verified in preview.
+- Backend: track.from_camera_plan() (FocusPath from a per-rally keyframe segment) +
+  track.camera_segment_for_rally() (reel→source mapping); run.remix(camera=...)
+  re-renders each clip with the plan (guarded fallback to auto); main._validate_camera
+  sanitizes at the API boundary; web sends the plan in the remix payload.
+- Tests: 6 new unit tests (follow+switch, fixed point, empty, reel→source map, validate).
+
+## Remaining (follow-up)
+- Visually confirm the baked MP4 on a real render (deploy + remix a job with a plan).
+- Unify the render-time player identity (near/far) with the editor's per-player ids.
+- Optional: click-to-set fixed point on the preview (sliders ship today).
 
 ## Goal
 Give the user a configurable virtual camera in Studio instead of only the
