@@ -40,7 +40,8 @@ def _loop():
                 try:
                     result = pipeline_run.remix(src[0], workdir,
                                                 params.get("rallies") or [],
-                                                bool(params.get("mirror")), cb=cb)
+                                                bool(params.get("mirror")),
+                                                camera=params.get("camera"), cb=cb)
                     db.set_done(job_id, result)
                 except Exception:
                     # a failed remix must not brick a finished job

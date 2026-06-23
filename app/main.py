@@ -427,9 +427,38 @@ async def job_remix(job_id: str, request: Request):
             or len(order) != len(set(order))):
         raise HTTPException(400, f"rallies must be unique 1-based indices within 1..{n_pool}")
     mirror = bool(payload.get("mirror"))
+    camera = _validate_camera(payload.get("camera"))
     db.update_stage(job_id, "render", "rebuilding reel from your edit")
-    worker.enqueue_remix(job_id, {"rallies": order, "mirror": mirror})
+    worker.enqueue_remix(job_id, {"rallies": order, "mirror": mirror, "camera": camera})
     return {"ok": True, "id": job_id}
+
+
+def _validate_camera(camera) -> dict | None:
+    """Accept a TASK-014 camera plan from the editor, or None. Keeps only known
+    fields and well-formed keyframes so a malformed plan can't reach the renderer."""
+    if not isinstance(camera, dict) or not camera.get("enabled"):
+        return None
+    out_kfs = []
+    for k in (camera.get("keyframes") or []):
+        if not isinstance(k, dict):
+            continue
+        target = k.get("target") if k.get("target") in ("shuttle", "player", "point") else "shuttle"
+        try:
+            kf = {"t": float(k.get("t", 0.0)), "target": target,
+                  "target_player": int(k.get("targetPlayer", k.get("target_player", 0)) or 0),
+                  "zoom": float(k.get("zoom", 1.4))}
+        except (TypeError, ValueError):
+            continue
+        pt = k.get("point")
+        if isinstance(pt, dict):
+            try:
+                kf["point"] = {"x": float(pt.get("x", 0.5)), "y": float(pt.get("y", 0.45))}
+            except (TypeError, ValueError):
+                kf["point"] = {"x": 0.5, "y": 0.45}
+        out_kfs.append(kf)
+    if not out_kfs:
+        return None
+    return {"enabled": True, "keyframes": out_kfs}
 
 
 @app.get("/api/gallery")

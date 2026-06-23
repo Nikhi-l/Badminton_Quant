@@ -1440,15 +1440,18 @@ async function rebuildReel() {
   const order = studio.edit.filter(e => e.on).map(e => e.idx);
   if (!order.length) { $("editMsg").textContent = "keep at least one rally"; return; }
   const mirror = $("mirrorChk").checked;
+  const cam = studio.editorState.camera;
+  const camera = (cam && cam.enabled && (cam.keyframes || []).length) ? cam : null;
   studio.editorState.remix = { order, mirror };
   saveEditorState();
   $("rebuildBtn").disabled = true;
-  $("editMsg").textContent = mirror ? "rendering mirrored reel..." : "rendering reel...";
+  $("editMsg").textContent = camera ? "baking your camera into the reel..."
+    : mirror ? "rendering mirrored reel..." : "rendering reel...";
   try {
     await jfetch(`/api/jobs/${studio.item.id}/remix`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rallies: order, mirror }),
+      body: JSON.stringify({ rallies: order, mirror, camera }),
     });
     clearInterval(studio.remixTimer);
     const timer = studio.remixTimer = setInterval(async () => {
