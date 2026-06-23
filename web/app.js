@@ -61,9 +61,21 @@ let galleryItems = [];
 
 /* ---------- upload ---------- */
 const drop = $("drop"), fileInput = $("file");
-$("browse").onclick = () => fileInput.click();
-drop.onclick = (e) => { if (e.target === drop || e.target.closest(".drop-idle")) fileInput.click(); };
-fileInput.onchange = () => fileInput.files.length && startUpload([...fileInput.files]);
+// Open the OS file picker exactly once per intent. The "Choose video(s)" button
+// lives inside #drop, so a button click ALSO bubbles to drop.onclick — that fired
+// fileInput.click() twice and the browser re-opened the picker after the first
+// pick (TASK-010: "I select the video but the popup shows again"). The busy guard
+// + stopPropagation collapse every path to a single open.
+let pickerBusy = false;
+function openFilePicker() {
+  if (pickerBusy) return;
+  pickerBusy = true;
+  fileInput.click();
+  setTimeout(() => { pickerBusy = false; }, 700); // fallback if the picker is cancelled (no change event)
+}
+$("browse").onclick = (e) => { e.stopPropagation(); openFilePicker(); };
+drop.onclick = (e) => { if (e.target === drop || e.target.closest(".drop-idle")) openFilePicker(); };
+fileInput.onchange = () => { pickerBusy = false; if (fileInput.files.length) startUpload([...fileInput.files]); };
 ["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", e => {
