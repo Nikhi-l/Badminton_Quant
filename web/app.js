@@ -1003,18 +1003,36 @@ function updateOverlayPreview() {
   if (!wrap || !state) return;
   applyFraming();
   const parts = [];
-  const p = currentShuttlePoint();
-  let pos = p ? videoFitPoint(Number(p.x || 0.58), Number(p.y || 0.31)) : { left: 58, top: 31 };
+  // Shuttle: draw ONLY when the shuttle is actually tracked at the current time —
+  // no fixed-default/last-position marker (that was the phantom "circle").
   const sh = state.overlays.shuttle;
-  if (sh.enabled) {
+  const p = sh.enabled ? currentShuttlePoint() : null;
+  if (p) {
+    const pos = videoFitPoint(Number(p.x), Number(p.y));
     const trail = sh.trail ? `<div class="shuttle-trail" style="left:${Math.max(3, pos.left - 30)}%;top:${Math.min(92, pos.top + 10)}%"></div>` : "";
     parts.push(`${trail}<div class="shuttle-mark ${esc(sh.style)}" style="left:${pos.left}%;top:${pos.top}%;width:${sh.size}px;height:${sh.size}px;margin-left:${-sh.size / 2}px;margin-top:${-sh.size / 2}px;--overlay-opacity:${sh.opacity}"></div>`);
   }
+  // Pose: render ONLY real keypoints. They are not in the public payload yet
+  // (TASK-015 exposes player/pose tracks); until then draw nothing rather than a
+  // non-data placeholder skeleton at a fixed position.
   const po = state.overlays.pose;
-  if (po.enabled) {
-    parts.push(`<div class="pose-figure ${esc(po.style)}" style="opacity:${po.opacity};--pose-width:${po.lineWidth}px"><span class="head"></span><span class="torso"></span><span class="arm-a"></span><span class="arm-b"></span><span class="leg-a"></span><span class="leg-b"></span></div>`);
+  const pose = po.enabled ? currentPose() : null;
+  if (pose) {
+    parts.push(renderPoseOverlay(pose, po));
   }
   wrap.innerHTML = parts.join("");
+}
+
+// Real pose keypoints for the current time, or null. Populated by TASK-015 (player
+// /pose tracks in the public job payload); returns null until that lands.
+function currentPose() {
+  return null;
+}
+
+function renderPoseOverlay(pose, po) {
+  const pts = (pose.keypoints || []).map(k => videoFitPoint(Number(k.x), Number(k.y)));
+  const dots = pts.map(p => `<span class="pose-joint" style="left:${p.left}%;top:${p.top}%"></span>`).join("");
+  return `<div class="pose-figure ${esc(po.style)}" style="opacity:${po.opacity};--pose-width:${po.lineWidth}px">${dots}</div>`;
 }
 
 /* ---------- studio edit mode: pick / reorder / mirror / rebuild ---------- */
