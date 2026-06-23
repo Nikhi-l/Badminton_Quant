@@ -62,6 +62,32 @@ def test_failed_status_replaces_legacy_error_state(monkeypatch, tmp_path):
     assert public["gen_seconds"] >= 0
 
 
+def test_jobs_queue_lists_all_statuses_newest_first(monkeypatch, tmp_path):
+    _tmp_db(monkeypatch, tmp_path)
+    from app.main import jobs_queue
+
+    db.create_job("j_queued", "a.mp4", {"shuttle": "off"})
+    db.create_job("j_done", "b.mp4", {"shuttle": "tracknetv3"})
+    db.set_done("j_done", {"duration": 5.0})
+    db.create_job("j_failed", "c.mp4", {"shuttle": "off"})
+    db.set_error("j_failed", "boom")
+
+    jobs = jobs_queue()["jobs"]
+    by_id = {j["id"]: j for j in jobs}
+    assert set(by_id) == {"j_queued", "j_done", "j_failed"}
+    # newest-first (created_at desc)
+    times = [j["submitted_at"] for j in jobs]
+    assert times == sorted(times, reverse=True)
+    assert by_id["j_queued"]["status"] == "queued"
+    assert by_id["j_done"]["status"] == "done"
+    assert by_id["j_done"]["thumb"].endswith("/thumb.jpg")
+    assert by_id["j_done"]["pipeline"] == "gpu"          # shuttle=tracknetv3 -> gpu
+    assert by_id["j_done"]["error"] is None              # error only on failed jobs
+    assert by_id["j_failed"]["status"] == "failed"
+    assert by_id["j_failed"]["error"] == "boom"
+    assert by_id["j_queued"]["expected_gen_seconds"] is not None
+
+
 def test_init_migrates_existing_jobs_additively(monkeypatch, tmp_path):
     path = tmp_path / "legacy.sqlite"
     with sqlite3.connect(path) as c:

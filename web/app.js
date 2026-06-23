@@ -153,6 +153,7 @@ async function startUpload(files) {
     $("upbarWrap").style.display = "none";
     $("jobMsg").textContent = "";
     $("jobTitle").textContent = "Generating your highlights";
+    loadQueue();   // surface the new job in the queue with live status
     poll(jobId);
   } catch (e) {
     failJob(`Upload failed: ${e.message} — check your connection and try again`);
@@ -234,6 +235,7 @@ function showResult(job) {
   $("resultShare").innerHTML = shareHtml(job.id);
   bindShare($("resultShare"), { ...r, id: job.id });
   loadGallery();
+  loadQueue();
 }
 $("anotherBtn").onclick = () => { $("jobPanel").hidden = true; fileInput.value = ""; window.scrollTo({ top: 0, behavior: "smooth" }); };
 
@@ -371,6 +373,64 @@ document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
   activeTab = t.dataset.tab;
   renderGallery();
 });
+
+/* ---------- TASK-005: job queue (live status of your submissions) ---------- */
+let queueTimer = null;
+
+async function loadQueue() {
+  try {
+    const all = (await (await fetch("/api/jobs")).json()).jobs || [];
+    const mine = all.filter(j => myJobs.has(j.id));
+    renderQueue(mine);
+    const active = mine.some(j => j.status === "queued" || j.status === "processing");
+    clearTimeout(queueTimer);
+    if (active) queueTimer = setTimeout(loadQueue, 4000);   // live refresh while jobs run
+  } catch { /* queue is best-effort */ }
+}
+
+function fmtDur(sec) {
+  sec = Math.max(0, Math.round(Number(sec) || 0));
+  return sec >= 60 ? `${Math.floor(sec / 60)}m ${sec % 60}s` : `${sec}s`;
+}
+
+function renderQueue(jobs) {
+  const sec = $("queueSection"), list = $("queueList");
+  if (!jobs.length) { sec.hidden = true; return; }
+  sec.hidden = false;
+  list.innerHTML = jobs.map(j => {
+    const st = j.status || "queued";
+    const pipe = (j.pipeline && j.pipeline !== "unknown") ? j.pipeline.toUpperCase() : "";
+    const timing = st === "done" && j.gen_seconds != null ? `generated in ${fmtDur(j.gen_seconds)}`
+      : st === "processing" ? `running${j.expected_gen_seconds ? ` · ~${fmtDur(j.expected_gen_seconds)}` : ""}`
+      : st === "queued" ? "waiting in queue"
+      : "did not finish";
+    const stageTxt = (st === "processing" && j.stage) ? ` · ${esc(j.stage)}` : "";
+    const ic = st === "failed" ? "⚠" : st === "done" ? "✓" : st === "processing" ? "●" : "…";
+    return `<div class="q-item q-${st}">
+      <div class="q-thumb">${j.thumb ? `<img src="${esc(j.thumb)}" alt="">` : `<span class="q-ic">${ic}</span>`}</div>
+      <div class="q-body">
+        <div class="q-top"><b>${esc(j.filename || j.id)}</b><span class="q-chip ${st}">${st}</span></div>
+        <div class="q-meta">${pipe ? `${esc(pipe)} · ` : ""}${esc(timeAgo(j.submitted_at))}${stageTxt} · ${esc(timing)}</div>
+        ${st === "failed" && j.error ? `<div class="q-err">${esc(j.error)}</div>` : ""}
+      </div>
+      ${st === "done" ? `<button class="btn btn-small q-open" data-qid="${esc(j.id)}">🎬 Studio</button>` : ""}
+    </div>`;
+  }).join("");
+  list.querySelectorAll(".q-open").forEach(b => b.onclick = () => openStudioById(b.dataset.qid));
+}
+
+async function openStudioById(id) {
+  let item = galleryItems.find(i => i.id === id);
+  if (!item) {
+    try {
+      const j = await jfetch(`/api/jobs/${id}`);
+      if (j && j.result) item = { ...j.result, id, filename: j.filename };
+    } catch { /* fall through */ }
+  }
+  if (item) openStudio(item);
+}
+
+$("queueRefresh").onclick = () => loadQueue();
 
 /* ---------- studio: AI reel editor ---------- */
 const studio = {
@@ -1654,6 +1714,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 initWorkerOptions();
+loadQueue();
 loadGallery().then(() => {
   const rid = new URLSearchParams(location.search).get("reel");
   if (rid) {
