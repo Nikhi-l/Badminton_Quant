@@ -334,6 +334,15 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
 /* waveform audio lane */
 .wave-wrap{position:absolute;top:5px;bottom:5px;left:0;right:0;display:flex;align-items:center;gap:1px;padding:0 6px;pointer-events:none}
 .wave-bar{flex:1 1 0;min-width:1px;border-radius:1px;background:rgba(255,207,106,.5)}
+
+/* TASK-012: clickable lane toggles + source-mode shuttle trajectory strip */
+.track-label.tl-toggle{cursor:pointer}
+.track-label.tl-toggle:hover{background:rgba(255,255,255,.035)}
+.tl-sw{margin-left:auto;font-size:8.5px;font-weight:800;letter-spacing:.04em;padding:1px 6px;border-radius:99px;border:1px solid rgba(255,255,255,.14);color:#8b93a6}
+.tl-sw.on{color:#07080b;background:var(--lime);border-color:var(--lime)}
+.track-label.tl-off{opacity:.5}
+.shuttle-dot{position:absolute;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;border-radius:50%;background:var(--lime);pointer-events:none;box-shadow:0 0 3px rgba(183,245,66,.55)}
+.pose-joint{position:absolute;width:5px;height:5px;margin:-2.5px 0 0 -2.5px;border-radius:50%;background:var(--cyan);box-shadow:0 0 6px rgba(70,227,255,.6)}
 .seg.audio.has-wave{background:rgba(255,207,106,.06);padding:0}
 .seg.audio.has-wave>b,.seg.audio.has-wave>span{position:relative;z-index:1;padding-left:4px}
 

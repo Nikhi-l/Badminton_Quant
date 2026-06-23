@@ -617,8 +617,15 @@ function buildTimeline() {
 
   tracks.forEach(track => {
     const meta = TRACK_META[track.id] || { ico: "•", h: 30 };
+    const toggleable = (track.id === "shuttle" || track.id === "pose") && studio.editorState.overlays[track.id];
+    const on = toggleable ? studio.editorState.overlays[track.id].enabled : null;
+    const tail = toggleable
+      ? `<span class="tl-sw ${on ? "on" : ""}">${on ? "ON" : "OFF"}</span>`
+      : `<span class="tl-n">${track.count}</span>`;
     labels.insertAdjacentHTML("beforeend",
-      `<div class="track-label" style="height:${meta.h}px"><span class="tl-ico">${meta.ico}</span>${esc(track.label)}<span class="tl-n">${track.count}</span></div>`);
+      `<div class="track-label${toggleable ? " tl-toggle" : ""}${toggleable && !on ? " tl-off" : ""}" ` +
+      `data-tltoggle="${toggleable ? track.id : ""}" style="height:${meta.h}px">` +
+      `<span class="tl-ico">${meta.ico}</span>${esc(track.label)}${tail}</div>`);
     const row = document.createElement("div");
     row.className = "lane-row" + (track.type === "clip" ? " lane-clip"
       : track.type === "audio" ? " lane-wave" : track.type === "caption" ? " lane-cap" : "");
@@ -638,6 +645,22 @@ function buildTimeline() {
         g.style.width = `${gap / dur * 100}%`;
         g.textContent = `${gap.toFixed(1)}s`;
         row.appendChild(g);
+      }
+    }
+
+    // Source mode: draw the actual shuttle track across the WHOLE video timeline
+    // (a trajectory strip: a dot per tracked point at its source time + height).
+    if (track.id === "shuttle" && studio.mode === "source") {
+      const pts = allShuttlePoints();
+      const step = Math.max(1, Math.ceil(pts.length / 600));
+      for (let i = 0; i < pts.length; i += step) {
+        const pt = pts[i];
+        const d = document.createElement("span");
+        d.className = "shuttle-dot";
+        d.style.left = `${pt.t / dur * 100}%`;
+        d.style.top = `${Math.max(6, Math.min(94, pt.y * 100))}%`;
+        d.style.opacity = `${0.35 + 0.55 * (pt.confidence || 0.6)}`;
+        row.appendChild(d);
       }
     }
 
@@ -685,9 +708,31 @@ function buildTimeline() {
     });
   });
 
+  // Lane labels are controls: clicking Shuttle/Pose toggles that overlay.
+  labels.querySelectorAll("[data-tltoggle]").forEach(el => {
+    const id = el.dataset.tltoggle;
+    if (!id) return;
+    el.onclick = () => {
+      const o = studio.editorState.overlays[id];
+      if (o) { o.enabled = !o.enabled; stateChanged(); }
+    };
+  });
+
   upgradeFilmstrip();   // real video frames behind the clip lane (best-effort)
   upgradeWaveform();    // real audio peaks for the soundtrack lane (best-effort)
   updateOverlayPreview();
+}
+
+// All tracked shuttle points across the video, in SOURCE time, for the source-mode
+// full-timeline trajectory strip.
+function allShuttlePoints() {
+  const out = [];
+  for (const seg of reelSegments()) {
+    for (const p of ((seg.vision || {}).shuttle_track || [])) {
+      out.push({ t: Number(p.t || 0), x: Number(p.x || 0), y: Number(p.y || 0), confidence: Number(p.confidence || 0) });
+    }
+  }
+  return out.sort((a, b) => a.t - b.t);
 }
 
 // Capture a real frame per clip segment from the studio video into its filmstrip
