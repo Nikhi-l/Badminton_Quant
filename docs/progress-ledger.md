@@ -26,19 +26,17 @@ docs commit after each functional slice.
 | 2026-06-21 | Overlay correctness (bug) | Merged (deploy pending) | TASK-011, Cycle 9 — phantom shuttle marker hidden when untracked; non-data pose skeleton removed (real pose → TASK-015). Verified in preview |
 | 2026-06-21 | Interactive timeline lanes | Merged (deploy pending) | TASK-012, Cycle 9 — Shuttle/Pose lanes toggle the overlay; Source mode shuttle track across whole video (trajectory dots). Verified in preview |
 | 2026-06-21 | Landscape view + Source framing | Merged (deploy pending) | TASK-013, Cycle 9 — Portrait/Landscape toggle (source native aspect); framing crop/zoom/pan in Source mode; cache-bust v=18. Verified in preview |
-| 2026-06-21 | Configurable camera + keyframes | Todo (P0, major) | TASK-014 — target shuttle\|player\|point + keyframes; bake camera plan into export (depends on TASK-015 + render contract) |
-| 2026-06-21 | Player/person tracking | Todo | TASK-015 — track players; expose as camera target + lane/overlay (feeds TASK-014) |
+| 2026-06-23 | Configurable camera + keyframes | Merged (deploy pending) | TASK-014, Cycle 10 — target shuttle\|player\|point + keyframes; Camera layer/inspector + timeline lane; preview follows target w/ blend; backend from_camera_plan + camera_segment_for_rally + remix(camera=) bake; _validate_camera. 6 unit tests. e2e MP4 bake wired but not yet visually confirmed on a real render |
+| 2026-06-23 | Player/person tracking | Merged (deploy pending) | TASK-015, Cycle 10 — players_track (stable ids) exposed; player boxes overlay (hide when untracked) + Pose-lane presence dots; layer "Players & pose"; feeds TASK-014 player target. Unit-tested |
 
 ## Active priorities
-0. **Deploy TASK-011/012/013 to baddyai.com** (merged to main @ 087d9fe, v=18 assets) —
-   blocked on explicit deploy authorization.
-1. TASK-014 — configurable virtual camera (targets + keyframes); needs TASK-015 (player
-   tracks) + a backend camera render contract. The headline Studio feature.
-2. TASK-015 — player/person tracking (also unblocks the real pose overlay from TASK-011).
-3. TASK-010 — fix the upload double-prompt bug.
-4. TASK-005 — queue UI + `GET /api/jobs` list, using TASK-003/004 timing fields.
-- Backend: persist `baddy.editor.v1` to jobs and render the camera plan + shuttle/pose
-  styles into the MP4 (the render contract TASK-014 depends on).
+0. **Deploy TASK-010/011/012/013/014/015 to baddyai.com** (all merged to main, v=18
+   assets) — blocked on explicit deploy authorization. The full editor/camera sweep.
+1. **Confirm the TASK-014 camera bake on a real render** — remix a job with a camera
+   plan and watch the exported MP4 (the only un-e2e-verified piece; logic is unit-tested).
+2. TASK-005 — queue UI + `GET /api/jobs` list, using TASK-003/004 timing fields.
+- Follow-ups: unify render-time player identity (near/far) with the editor's per-player
+  ids; persist full `baddy.editor.v1` (overlay styles) into the MP4; click-to-set point.
 
 ## Open risks
 | Risk | Severity | Source | Mitigation / next task |

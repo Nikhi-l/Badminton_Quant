@@ -5,6 +5,46 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 10: Player tracking + configurable virtual camera (TASK-015/014/010)
+**Date:** 2026-06-23
+**Goal:** Finish the editor/camera sweep — player/person tracking, a fully
+configurable virtual camera (target shuttle|player|point + keyframes, baked into
+the export), and the upload double-prompt fix.
+**Roadmap alignment:** PRD §16 P0 (TASK-014), P1 (TASK-015, TASK-010); intake
+`docs/reviews/2026-06-21-studio-camera-feedback.md`.
+**Branches:** `fix/TASK-010-upload-double-prompt`, `feat/TASK-015-player-tracking`,
+`feat/TASK-014-camera-keyframes`.
+**Files changed:** `app/main.py`, `app/worker.py`, `app/pipeline/run.py`,
+`app/pipeline/track.py`, `web/app.js`, `web/style.css`,
+`tests/unit/test_public_editor_tracks.py`, `tests/unit/test_camera_plan.py`.
+**Schema/API/interface changes:**
+- `_compact_vision` now exposes `players_track` (bounded per-frame player boxes with
+  stable ids). `baddy.editor.v1` gains `camera {enabled, keyframes[]}`
+  (backward-compatible merge). `POST /api/jobs/{id}/remix` accepts an optional
+  `camera` plan (sanitized by `_validate_camera`); `remix()` + worker thread it
+  through to bake into the MP4.
+**Tests/verification performed:**
+- TASK-010: preview `fileInput.click()` spy — button/drop/rapid-double/retry all open
+  the picker exactly once (was 2 on the button path). Root cause: `#browse` inside
+  `#drop` double-fired; fixed with a busy guard + `stopPropagation`.
+- TASK-015: `from app.main._sample_player_track` → bounded track, stable ids (unit
+  test); preview — 2 player boxes at a tracked time, 0 in a gap / pose-off, 180
+  Pose-lane presence dots in source mode; layer relabeled "Players & pose".
+- TASK-014: preview — camera follows shuttle (L→pan right, R→pan left) and a chosen
+  player; 3 keyframes (shuttle→player→point) render in the inspector + as 3 colour-
+  coded diamonds on the Camera lane; plan persists across reload. Backend: 6 unit
+  tests (target follow+switch, fixed-point steadiness, empty→None, reel→source
+  keyframe mapping, plan validation).
+- `node --check web/app.js` OK; `./scripts/check.sh` → 16 passed; no console errors.
+- Merged to `main` (TASK-010 403b8ba, TASK-015 a75d99f, TASK-014 f550fec+aa4ef3d).
+**Docs updated:** this log, `docs/progress-ledger.md`, PRD §16, `.agent/tasks/done/`.
+**Open risks / next steps:**
+- The TASK-014 export bake composes unit-tested pieces but is **not yet visually
+  confirmed on a real render** — remix a job with a camera plan and watch the MP4.
+- Render-time player identity (near/far) is not yet unified with the editor's
+  per-player ids (singles approximation).
+- Whole sweep (TASK-010–015) is merged but **not deployed** (held by the user).
+
 ## Cycle 9: Studio overlay/timeline/landscape fixes (TASK-011/012/013)
 **Date:** 2026-06-21
 **Goal:** Address the 2026-06-21 product-owner Studio review — kill the phantom
