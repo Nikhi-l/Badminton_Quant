@@ -1,6 +1,6 @@
 # TASK-013: Landscape preview + manual reframe in Source rallies
 
-**Status:** active
+**Status:** done (2026-06-21) — Portrait/Landscape preview toggle (landscape shows the source native aspect, full original frame); Framing crop/zoom/pan works in Source mode. Cache-bust bumped to v=18. Verified in preview.
 **Branch:** `feat/TASK-013-landscape-source-framing` (off `main`)
 **PRD section:** §16 P1
 
