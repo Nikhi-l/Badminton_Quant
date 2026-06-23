@@ -1,6 +1,6 @@
 # TASK-012: Interactive / configurable timeline lanes
 
-**Status:** active
+**Status:** done (2026-06-21) — Shuttle/Pose lanes toggle the overlay from the timeline; Source mode shows the shuttle track across the whole video (trajectory dots). Verified in preview.
 **Branch:** `feat/TASK-012-interactive-timeline` (off `main`)
 **PRD section:** §16 P1
 
