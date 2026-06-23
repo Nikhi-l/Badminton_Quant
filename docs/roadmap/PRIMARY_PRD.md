@@ -104,6 +104,14 @@ Source: user request 2026-06-20 (this session) + harness PDF.
 | P1 | Queue UI + `GET /api/jobs`: live status, failed jobs, CPU/GPU gen time | Accept | TASK-005 |
 | P1 | **Instance sizing** — see decision below | Accept | TASK-006 |
 | P1 | Professional reel editor UI: layer rail, inspector, multi-lane timeline, overlay/music controls | Accept | TASK-007 |
+| P1 | (bug) Overlay correctness: hide shuttle/pose marker when untracked at current time (the "weird circle" at a fixed/last spot); render pose overlay from real keypoints | Accept | TASK-011 |
+| P1 | Interactive timeline lanes: toggle shuttle/pose overlays from the timeline; Source mode shows the shuttle track across the whole video timeline | Accept | TASK-012 |
+| P1 | Landscape (16:9) ↔ portrait (9:16) preview toggle; manual reframe in Source rallies to pick highlight regions of the original landscape video | Accept | TASK-013 |
+| P0 | Configurable virtual camera: target = shuttle \| player \| fixed point + zoom/pan + **keyframes** (switch target over time); bake the camera plan into the exported reel (render contract) | Accept | TASK-014 |
+| P1 | Person/player tracking: detect + track players; expose as a camera follow-target and a timeline lane/overlay (feeds TASK-014) | Accept | TASK-015 |
+
+Intake: `docs/reviews/2026-06-21-studio-camera-feedback.md`. TASK-008/009/010 are
+tracked in `docs/progress-ledger.md` (timeline refinement, manual framing, upload bug).
 
 ### P1-INSTANCE decision (research 2026-06-20)
 Budget 10k INR/mo (~$120). **Recommended: `c2d-standard-8`, region `asia-south1`
