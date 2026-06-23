@@ -17,7 +17,7 @@ docs commit after each functional slice.
 | 2026-06-21 | RunPod worker rebuild | Done | TASK-002, Cycle 5 — GPU TrackNetV3 verified e2e via baddyai.com (`tracknet.status=ok`, 55–122 real pts/rally, q0.82, backend=runpod). Fixed missing matplotlib/pycocotools (`tracknet-src-20260621b`, template `ic265brof1`); workers `ready:2 unhealthy:0`, scale to 0 idle |
 | 2026-06-21 | CPU/GPU pipelines + gen-time | Deployed | TASK-003, Cycle 6 — `pipeline=cpu|gpu` recorded from job options; API exposes separate expected gen-time budgets |
 | 2026-06-21 | Job model (timing, failed) | Deployed | TASK-004, Cycle 6 — `started_at`/`finished_at` migrated live; legacy `error` rows now `failed`; latest GPU job reports `gen_seconds=424.6` |
-| 2026-06-20 | Queue UI + /api/jobs | Todo | TASK-005 (P1) |
+| 2026-06-23 | Queue UI + /api/jobs | Merged (deploy pending) | TASK-005, Cycle 11 — `GET /api/jobs` + "Your queue" UI: status chips, CPU/GPU, submit/gen time, failed errors, Studio button; live-polls while active. Unit-tested. TASK-007 reel-editor-ui filed to done (was Cycle 4) |
 | 2026-06-21 | Instance sizing | Done | TASK-006, Cycle 7 — live VM resized in place to `c2d-standard-8` in `us-central1-a`; static production IP `136.113.208.173` preserved as `baddy-agent-ip`; health + DB/API verified |
 | 2026-06-21 | Reel editor UI | Reasoned UI complete | TASK-007, Cycle 4 — component rationale added; dead controls removed; Soundtrack is read-only until backend audio render props exist; overlay render contract still future |
 | 2026-06-21 | Editor timeline (detailed) | Deployed | TASK-008, Cycle 8 — Descript-style timeline: filmstrip clip lane, Captions lane w/ gap markers, waveform, minor ticks, playhead time bubble. Live on baddyai.com |
@@ -30,13 +30,14 @@ docs commit after each functional slice.
 | 2026-06-23 | Player/person tracking | Merged (deploy pending) | TASK-015, Cycle 10 — players_track (stable ids) exposed; player boxes overlay (hide when untracked) + Pose-lane presence dots; layer "Players & pose"; feeds TASK-014 player target. Unit-tested |
 
 ## Active priorities
-0. **Deploy TASK-010/011/012/013/014/015 to baddyai.com** (all merged to main, v=18
-   assets) — blocked on explicit deploy authorization. The full editor/camera sweep.
+**All queued tasks (TASK-005, 010–015) are done + merged to `main`.** Remaining:
+0. **Deploy the full sweep to baddyai.com** (all merged, v=18 assets) — blocked on
+   explicit deploy authorization.
 1. **Confirm the TASK-014 camera bake on a real render** — remix a job with a camera
    plan and watch the exported MP4 (the only un-e2e-verified piece; logic is unit-tested).
-2. TASK-005 — queue UI + `GET /api/jobs` list, using TASK-003/004 timing fields.
-- Follow-ups: unify render-time player identity (near/far) with the editor's per-player
-  ids; persist full `baddy.editor.v1` (overlay styles) into the MP4; click-to-set point.
+- Follow-ups (not blocking): unify render-time player identity (near/far) with the
+  editor's per-player ids; persist full `baddy.editor.v1` (overlay styles) into the
+  MP4; click-to-set fixed point on the preview.
 
 ## Open risks
 | Risk | Severity | Source | Mitigation / next task |
@@ -46,6 +47,8 @@ docs commit after each functional slice.
 | `if not pov` gates `from_vision` off for handheld clips | Med | track.py:137 | revisit in pipeline cycle |
 
 ## Next checkpoint
-- Goal: finish TASK-005 queue list/UI on top of the now-deployed job timing API.
-- Required tests: unit/API coverage for `GET /api/jobs`, frontend smoke, `./scripts/check.sh`.
-- Expected docs update: this ledger + dev-cycle-log Cycle 7.
+- Goal: deploy the merged sweep (TASK-005, 010–015) to baddyai.com and confirm the
+  TASK-014 camera bake on a real remix render.
+- Required tests: `./scripts/check.sh` (17 passing), baddyai.com health, a remix-with-
+  camera render eyeballed.
+- Expected docs update: this ledger + a deploy note in dev-cycle-log.
