@@ -5,6 +5,30 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 11: Job queue UI + GET /api/jobs (TASK-005)
+**Date:** 2026-06-23
+**Goal:** Close the last queued backlog item — a queue view of submitted jobs with
+live status, pipeline, and timing, on top of the TASK-003/004 timing fields.
+**Roadmap alignment:** PRD §3/§7/§8 (queue), §16 P1 (TASK-005).
+**Branch:** `feat/TASK-005-queue-ui`.
+**Files changed:** `app/db.py`, `app/main.py`, `web/index.html`, `web/app.js`,
+`web/style.css`, `tests/unit/test_job_model.py`.
+**Schema/API/interface changes:** new `GET /api/jobs` (queue list) + `db.recent_jobs`.
+No schema change (reads existing timing columns).
+**Tests/verification performed:**
+- Unit: `test_jobs_queue_lists_all_statuses_newest_first` — all statuses present,
+  newest-first, error only on failed jobs, thumb on done, pipeline derived.
+- Preview: `renderQueue` with 4 mock jobs → 4 cards; chips
+  queued/processing/done/failed; failed-job error shown; done job has thumb +
+  Studio button; section auto-hides when empty.
+- `./scripts/check.sh` → 17 passed; no console errors.
+- Merged to `main` (7a1226f). Also filed TASK-007 (reel-editor-ui, Cycle 4) to done.
+**Docs updated:** this log, `docs/progress-ledger.md`.
+**Open risks / next steps:**
+- Single-tenant: the client filters the queue by its own `myJobs` ids; a server-side
+  per-user filter is a later concern.
+- Whole editor/camera/queue sweep (TASK-005, 010–015) merged but **not deployed**.
+
 ## Cycle 10: Player tracking + configurable virtual camera (TASK-015/014/010)
 **Date:** 2026-06-23
 **Goal:** Finish the editor/camera sweep — player/person tracking, a fully
