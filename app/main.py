@@ -473,6 +473,28 @@ def gallery():
     return {"items": items}
 
 
+@app.get("/api/jobs")
+def jobs_queue(limit: int = 60):
+    """Queue view (TASK-005): every job newest-first with live status, the CPU/GPU
+    pipeline, submission + generation time, and the error on failed jobs."""
+    out = []
+    for job in db.recent_jobs(limit):
+        status = job.get("status")
+        item = {
+            "id": job["id"],
+            "filename": job.get("filename"),
+            "status": status,
+            "stage": job.get("stage"),
+            "message": job.get("message"),
+            "error": job.get("error") if status == "failed" else None,
+            **_job_meta(job),
+        }
+        if status == "done":
+            item["thumb"] = f"/media/{job['id']}/thumb.jpg"
+        out.append(item)
+    return {"jobs": out}
+
+
 @app.get("/media/{job_id}/{name}")
 def media_file(job_id: str, name: str):
     if name not in MEDIA_WHITELIST or not job_id.isalnum():

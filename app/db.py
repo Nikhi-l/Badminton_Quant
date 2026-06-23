@@ -130,3 +130,11 @@ def gallery(limit: int = 60) -> list[dict]:
         rows = c.execute("SELECT * FROM jobs WHERE status='done' ORDER BY updated_at DESC LIMIT ?",
                          (limit,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def recent_jobs(limit: int = 60) -> list[dict]:
+    """All jobs (any status) newest-first, for the queue view (TASK-005)."""
+    with _conn() as c:
+        rows = c.execute("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?",
+                         (limit,)).fetchall()
+    return [dict(r) for r in rows]
