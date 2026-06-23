@@ -1,6 +1,6 @@
 # TASK-011: Overlay correctness — phantom shuttle circle + real pose
 
-**Status:** active
+**Status:** done (2026-06-21) — phantom shuttle marker hidden when untracked; fake pose skeleton removed (real pose deferred to TASK-015). Verified in preview.
 **Branch:** `fix/TASK-011-overlay-correctness` (to be created off `main`)
 **PRD section:** §16 P1 (bug)
 
