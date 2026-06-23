@@ -385,6 +385,7 @@ function openStudio(item) {
   $("studioDownload").href = item.video;
   $("stageFrame").style.setProperty("--stage-zoom", studio.zoom);
   $("zoomLabel").textContent = "Fit";
+  setPreviewAspect("portrait");
   document.body.style.overflow = "hidden";
   initEdit();
   renderCoachbar(item);
@@ -1215,6 +1216,26 @@ $("zoomIn").onclick = () => {
   $("stageFrame").style.setProperty("--stage-zoom", studio.zoom);
   $("zoomLabel").textContent = `${Math.round(studio.zoom * 100)}%`;
 };
+
+// Preview aspect: Portrait (9:16 reel output) vs Landscape (the source video's
+// native aspect — see the full uploaded landscape footage to reframe it).
+function setPreviewAspect(aspect) {
+  studio.previewAspect = aspect;
+  const frame = $("stageFrame"), v = $("stVideo");
+  const landscape = aspect === "landscape";
+  const ar = landscape
+    ? ((v.videoWidth && v.videoHeight) ? `${v.videoWidth}/${v.videoHeight}` : "16/9")
+    : "9/16";
+  frame.style.setProperty("--stage-ar", ar);
+  frame.classList.toggle("landscape", landscape);
+  $("aspectToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.aspect === aspect));
+  $("tpHint").textContent = landscape ? "landscape · original frame" : "";
+  updateOverlayPreview();
+}
+$("aspectToggle").querySelectorAll("button").forEach(b => {
+  b.onclick = () => setPreviewAspect(b.dataset.aspect);
+});
+
 $("timelineZoom").oninput = () => buildTimeline();
 $("tpScrub").oninput = () => {
   const v = $("stVideo");

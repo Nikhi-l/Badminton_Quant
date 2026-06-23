@@ -203,10 +203,14 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
 .canvas-zoom span{min-width:34px;text-align:center;font-weight:700;font-size:12px}
 .studio-stage{position:relative;min-height:0;display:grid;place-items:center;padding:18px;overflow:hidden}
 .stage-frame{
-  position:relative;height:min(100%,68vh);aspect-ratio:9/16;max-width:100%;background:#000;border-radius:4px;
+  position:relative;height:min(100%,68vh);aspect-ratio:var(--stage-ar,9/16);max-width:100%;background:#000;border-radius:4px;
   box-shadow:0 24px 80px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.08);overflow:hidden;transform:scale(var(--stage-zoom,1));
   transform-origin:center;
 }
+.stage-frame.landscape{height:auto;width:min(100%,92%)}
+.aspect-toggle{display:inline-flex;background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:99px;padding:2px;margin-right:10px}
+.aspect-toggle button{border:0;background:none;color:#aeb5c6;font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px;cursor:pointer}
+.aspect-toggle button.active{background:var(--lime);color:#07080b}
 .stage-frame::after{content:"";position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
 .stage-frame video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
 .ai-overlays{position:absolute;inset:0;pointer-events:none}

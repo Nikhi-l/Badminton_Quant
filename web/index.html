@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=17">
+<link rel="stylesheet" href="/style.css?v=18">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🏸</text></svg>">
 </head>
 <body>
@@ -171,10 +171,16 @@
     <main class="studio-center">
       <div class="canvas-bar">
         <div><span class="canvas-tag">1080 × 1920</span><span class="muted" id="tpHint"></span></div>
-        <div class="canvas-zoom">
-          <button class="tool compact" id="zoomOut" title="Zoom out">−</button>
-          <span id="zoomLabel">Fit</span>
-          <button class="tool compact" id="zoomIn" title="Zoom in">+</button>
+        <div class="studio-right">
+          <div class="aspect-toggle" id="aspectToggle" title="Preview aspect">
+            <button class="active" data-aspect="portrait">Portrait</button>
+            <button data-aspect="landscape">Landscape</button>
+          </div>
+          <div class="canvas-zoom">
+            <button class="tool compact" id="zoomOut" title="Zoom out">−</button>
+            <span id="zoomLabel">Fit</span>
+            <button class="tool compact" id="zoomIn" title="Zoom in">+</button>
+          </div>
         </div>
       </div>
       <div class="studio-stage">
@@ -236,6 +242,6 @@
   </div>
 </div>
 
-<script src="/app.js?v=17"></script>
+<script src="/app.js?v=18"></script>
 </body>
 </html>
