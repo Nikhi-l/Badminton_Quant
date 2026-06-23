@@ -1,6 +1,6 @@
 # TASK-015: Person / player tracking
 
-**Status:** active
+**Status:** done (2026-06-23) — backend exposes bounded players_track with stable ids; frontend renders player boxes (hidden when untracked) + Pose-lane presence dots; layer relabeled "Players & pose". Camera follow-target wiring lands in TASK-014. Verified in preview + unit test.
 **Branch:** `feat/TASK-015-player-tracking` (off `main`)
 **PRD section:** §16 P1
 **Feeds:** TASK-014 (the "track player" camera target), TASK-011/012 (pose/overlay).

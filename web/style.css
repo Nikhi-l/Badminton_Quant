@@ -347,6 +347,16 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
 .track-label.tl-off{opacity:.5}
 .shuttle-dot{position:absolute;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;border-radius:50%;background:var(--lime);pointer-events:none;box-shadow:0 0 3px rgba(183,245,66,.55)}
 .pose-joint{position:absolute;width:5px;height:5px;margin:-2.5px 0 0 -2.5px;border-radius:50%;background:var(--cyan);box-shadow:0 0 6px rgba(70,227,255,.6)}
+/* TASK-015: tracked player boxes (camera follow-targets) */
+.player-box{position:absolute;border:1.5px solid var(--cyan);border-radius:6px;box-shadow:0 0 10px rgba(70,227,255,.28),inset 0 0 12px rgba(70,227,255,.07);pointer-events:none}
+.player-box.target{border-color:var(--lime);box-shadow:0 0 14px rgba(183,245,66,.45)}
+.player-tag{position:absolute;top:-15px;left:-1px;font-size:9px;font-weight:800;letter-spacing:.04em;color:#07080b;background:var(--cyan);padding:0 5px;border-radius:4px}
+.player-box.target .player-tag{background:var(--lime)}
+.player-dot{position:absolute;width:4px;height:4px;margin:-2px 0 0 -2px;border-radius:50%;background:var(--cyan);pointer-events:none}
+.player-dot.p0{background:var(--cyan)}
+.player-dot.p1{background:#ff7ac6}
+.player-dot.p2{background:#ffd166}
+.player-dot.p3{background:#b388ff}
 .seg.audio.has-wave{background:rgba(255,207,106,.06);padding:0}
 .seg.audio.has-wave>b,.seg.audio.has-wave>span{position:relative;z-index:1;padding-left:4px}
 
