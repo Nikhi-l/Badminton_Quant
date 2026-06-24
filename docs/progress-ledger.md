@@ -5,9 +5,11 @@ docs commit after each functional slice.
 
 ## Current branch / mission
 - Main branch: `main` (protected; releasable; live at baddyai.com)
-- Active branch: none — TASK-003/004/006 merged via PR #2
-- UI branch: `feat/TASK-007-reel-editor-ui`
-- Current main SHA: `dc9920d`
+- Active branch: none — all queued tasks (TASK-005, 010–015) merged
+- Current main SHA: `cec0db2`
+- **Deployed 2026-06-24:** the full editor/camera/queue sweep is LIVE on baddyai.com
+  (`bash deploy/deploy.sh`; baddy.service restarted; health ok; `GET /api/jobs` +
+  v=18 assets + camera/queue/player code verified live).
 
 ## Ledger
 | Date | Area | Status | Notes |
@@ -30,11 +32,11 @@ docs commit after each functional slice.
 | 2026-06-23 | Player/person tracking | Merged (deploy pending) | TASK-015, Cycle 10 — players_track (stable ids) exposed; player boxes overlay (hide when untracked) + Pose-lane presence dots; layer "Players & pose"; feeds TASK-014 player target. Unit-tested |
 
 ## Active priorities
-**All queued tasks (TASK-005, 010–015) are done + merged to `main`.** Remaining:
-0. **Deploy the full sweep to baddyai.com** (all merged, v=18 assets) — blocked on
-   explicit deploy authorization.
-1. **Confirm the TASK-014 camera bake on a real render** — remix a job with a camera
-   plan and watch the exported MP4 (the only un-e2e-verified piece; logic is unit-tested).
+**All queued tasks (TASK-005, 010–015) are done, merged, and DEPLOYED (2026-06-24).**
+Remaining:
+1. **Confirm the TASK-014 camera bake on a real render** — now live: open Studio →
+   Camera → keyframes → Rebuild cuts on a done job and watch the exported MP4 (the
+   only un-e2e-verified piece; logic is unit-tested). Re-renders that job's reel.
 - Follow-ups (not blocking): unify render-time player identity (near/far) with the
   editor's per-player ids; persist full `baddy.editor.v1` (overlay styles) into the
   MP4; click-to-set fixed point on the preview.
