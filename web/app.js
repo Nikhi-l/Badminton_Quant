@@ -451,7 +451,8 @@ function openStudio(item) {
   studio.mode = "reel";
   studio.selectedLayer = "reel";
   studio.zoom = 1;
-  _lastCamCenter = null;
+  _lastCamCenter = _camSmooth = null;
+  for (const k of Object.keys(_playerSmooth)) delete _playerSmooth[k];
   studio.editorState = loadEditorState(item);
   $("studio").hidden = false;
   $("studioFile").textContent = [item.filename, item.sport].filter(Boolean).join(" · ");
@@ -1041,10 +1042,10 @@ function renderInspector() {
           ${cameraKeyframes().map((k, i) => `<div class="kf-item ${k === a ? "active" : ""}" data-kf-seek="${k.t}"><span class="kf-t">${fmtT(k.t)}</span><span class="kf-tgt">${targetLabel(k)} · ${Math.round((k.zoom || 1.4) * 100)}%</span><button class="kf-del" data-kf-del="${i}" title="Delete keyframe">✕</button></div>`).join("")}
         </div>
       </div>` : ""}`;
-    $("camEnabled").onchange = (e) => { cam.enabled = e.target.checked; _lastCamCenter = null; ensureKeyframe(); stateChanged(); };
+    $("camEnabled").onchange = (e) => { cam.enabled = e.target.checked; _lastCamCenter = _camSmooth = null; ensureKeyframe(); stateChanged(); };
     if (cam.enabled && a) {
-      panel.querySelectorAll("[data-cam-target]").forEach(b => b.onclick = () => { a.target = b.dataset.camTarget; _lastCamCenter = null; stateChanged(); });
-      panel.querySelectorAll("[data-cam-player]").forEach(b => b.onclick = () => { a.targetPlayer = Number(b.dataset.camPlayer); _lastCamCenter = null; stateChanged(); });
+      panel.querySelectorAll("[data-cam-target]").forEach(b => b.onclick = () => { a.target = b.dataset.camTarget; _lastCamCenter = _camSmooth = null; stateChanged(); });
+      panel.querySelectorAll("[data-cam-player]").forEach(b => b.onclick = () => { a.targetPlayer = Number(b.dataset.camPlayer); _lastCamCenter = _camSmooth = null; stateChanged(); });
       const liveApply = () => { applyFraming(); updateOverlayPreview(); renderLayerList(); };
       if ($("camPointX")) { $("camPointX").oninput = (e) => { a.point = { ...(a.point || {}), x: Number(e.target.value) / 100 }; liveApply(); }; $("camPointX").onchange = () => saveEditorState(); }
       if ($("camPointY")) { $("camPointY").oninput = (e) => { a.point = { ...(a.point || {}), y: Number(e.target.value) / 100 }; liveApply(); }; $("camPointY").onchange = () => saveEditorState(); }
@@ -1158,6 +1159,24 @@ function stateChanged(save = true) {
 
 /* ---------- TASK-014: configurable virtual camera (targets + keyframes) ---------- */
 let _lastCamCenter = null;
+let _camSmooth = null;      // {x,y,t} temporally-smoothed camera centre
+const _playerSmooth = {};   // id -> {x,y,w,h,t} temporally-smoothed player boxes
+
+// Frame-rate-independent exponential smoother for a normalized point/box. Eases the
+// kept `state` toward `target` with time constant `tau` seconds (bigger = smoother,
+// more lag), but SNAPS (no ease) when the target jumps more than `snap` — i.e. a seek
+// or a cut to another rally — so motion glides without sliding across the whole frame.
+// Time-based, so it advances correctly even when called several times per RAF frame.
+function smoothToward(state, target, keys, tau, snap) {
+  const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const far = state && Math.hypot(target.x - state.x, target.y - state.y) > snap;
+  if (!state || far) { const s = { t: now }; keys.forEach(k => s[k] = target[k]); return s; }
+  const dt = Math.max(0, (now - state.t) / 1000);
+  const a = 1 - Math.exp(-dt / tau);
+  const s = { t: now };
+  keys.forEach(k => s[k] = state[k] + (target[k] - state[k]) * a);
+  return s;
+}
 
 function cameraState() {
   const st = studio.editorState;
@@ -1235,7 +1254,10 @@ function evalCameraFraming() {
   if (!center) center = _lastCamCenter;       // hold last good centre on a brief loss
   if (!center) return null;
   _lastCamCenter = center;
-  return centerFraming(center, plan.zoom);
+  // Temporal smoothing: glide toward the target instead of snapping to each sampled
+  // point (kills the jitter from the sparse track). Snaps on a seek / rally cut.
+  _camSmooth = smoothToward(_camSmooth, center, ["x", "y"], 0.20, 0.45);
+  return centerFraming({ x: _camSmooth.x, y: _camSmooth.y }, plan.zoom);
 }
 
 // {fit,zoom,x,y} (manual-framing convention) placing a normalized source point at the
@@ -1402,6 +1424,52 @@ function currentShuttlePoint() {
   return nearestTrackPoint(((seg.vision || {}).shuttle_track || []), sourceT);
 }
 
+// Player boxes smoothed over time (per id) so the overlay glides instead of snapping
+// between sparse samples. Snaps on a big jump (new detection / rally cut).
+function smoothedPlayerBoxes() {
+  const raw = currentPlayers();
+  const live = new Set(raw.map(b => Number(b.id)));
+  for (const k of Object.keys(_playerSmooth)) if (!live.has(Number(k))) delete _playerSmooth[k];
+  return raw.map(b => {
+    const s = smoothToward(_playerSmooth[b.id], { x: +b.x, y: +b.y, w: +b.w, h: +b.h },
+                           ["x", "y", "w", "h"], 0.14, 0.35);
+    _playerSmooth[b.id] = s;
+    return { ...b, x: s.x, y: s.y, w: s.w, h: s.h };
+  });
+}
+
+// The shuttle's ACTUAL recent trajectory (last `windowSec` of tracked points up to the
+// playhead), mapped to screen %, for a real motion trail instead of a fixed bar.
+function recentShuttleScreenPoints(windowSec = 0.7) {
+  const v = $("stVideo");
+  if (!studio.item || !v.duration) return [];
+  let track = null, sourceT = null;
+  if (studio.mode === "source") {
+    for (const seg of reelSegments()) {
+      const t = (seg.vision || {}).shuttle_track || [];
+      if (nearestTrackPoint(t, v.currentTime)) { track = t; sourceT = v.currentTime; break; }
+    }
+  } else {
+    const seg = reelSegments().find(s => v.currentTime >= s.t0 && v.currentTime <= s.t1);
+    if (seg) { track = (seg.vision || {}).shuttle_track || []; sourceT = seg.sourceStart + (v.currentTime - seg.t0); }
+  }
+  if (!track || sourceT == null) return [];
+  return track
+    .filter(p => Number(p.t) <= sourceT + 1e-3 && Number(p.t) >= sourceT - windowSec && Number(p.confidence || 0) >= 0.3)
+    .sort((a, b) => a.t - b.t)
+    .map(p => videoFitPoint(Number(p.x), Number(p.y)));
+}
+
+function shuttleTrailSvg(sh) {
+  const pts = recentShuttleScreenPoints();
+  if (pts.length < 2) return "";
+  const poly = pts.map(p => `${p.left.toFixed(2)},${p.top.toFixed(2)}`).join(" ");
+  return `<svg class="shuttle-trail-svg" viewBox="0 0 100 100" preserveAspectRatio="none">` +
+    `<polyline points="${poly}" fill="none" stroke="var(--lime)" stroke-width="2.4" ` +
+    `stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" ` +
+    `style="opacity:${0.55 * sh.opacity}"/></svg>`;
+}
+
 function updateOverlayPreview() {
   const wrap = $("aiOverlays");
   const state = studio.editorState;
@@ -1409,21 +1477,22 @@ function updateOverlayPreview() {
   applyFraming();
   const parts = [];
   // Shuttle: draw ONLY when the shuttle is actually tracked at the current time —
-  // no fixed-default/last-position marker (that was the phantom "circle").
+  // no fixed-default/last-position marker (that was the phantom "circle"). The trail
+  // follows the shuttle's real recent path, not a fixed-offset bar.
   const sh = state.overlays.shuttle;
   const p = sh.enabled ? currentShuttlePoint() : null;
   if (p) {
     const pos = videoFitPoint(Number(p.x), Number(p.y));
-    const trail = sh.trail ? `<div class="shuttle-trail" style="left:${Math.max(3, pos.left - 30)}%;top:${Math.min(92, pos.top + 10)}%"></div>` : "";
-    parts.push(`${trail}<div class="shuttle-mark ${esc(sh.style)}" style="left:${pos.left}%;top:${pos.top}%;width:${sh.size}px;height:${sh.size}px;margin-left:${-sh.size / 2}px;margin-top:${-sh.size / 2}px;--overlay-opacity:${sh.opacity}"></div>`);
+    if (sh.trail) parts.push(shuttleTrailSvg(sh));
+    parts.push(`<div class="shuttle-mark ${esc(sh.style)}" style="left:${pos.left}%;top:${pos.top}%;width:${sh.size}px;height:${sh.size}px;margin-left:${-sh.size / 2}px;margin-top:${-sh.size / 2}px;--overlay-opacity:${sh.opacity}"></div>`);
   }
   // Players & pose layer: draw the tracked player boxes at the current time (real
-  // data from the YOLO worker), hidden when none. Pose keypoints (skeleton) render
-  // on top once exposed (currentPose() is null until the worker persists them).
+  // data from the YOLO worker), smoothed over time, hidden when none. Pose keypoints
+  // (skeleton) render on top once exposed (currentPose() is null until then).
   const po = state.overlays.pose;
   if (po.enabled) {
     const target = (state.camera && state.camera.targetPlayer != null) ? state.camera.targetPlayer : null;
-    for (const b of currentPlayers()) {
+    for (const b of smoothedPlayerBoxes()) {
       parts.push(renderPlayerBox(b, po, b.id === target));
     }
     const pose = currentPose();
