@@ -6,10 +6,11 @@ docs commit after each functional slice.
 ## Current branch / mission
 - Main branch: `main` (protected; releasable; live at baddyai.com)
 - Active branch: none — all queued tasks (TASK-005, 010–015) merged
-- Current main SHA: `cec0db2`
-- **Deployed 2026-06-24:** the full editor/camera/queue sweep is LIVE on baddyai.com
-  (`bash deploy/deploy.sh`; baddy.service restarted; health ok; `GET /api/jobs` +
-  v=18 assets + camera/queue/player code verified live).
+- Current main SHA: `227e05a`
+- **Deployed 2026-06-24:** the full editor/camera/queue sweep is LIVE on baddyai.com,
+  plus a follow-up Studio polish deploy (`227e05a`, v=19 assets): real shuttle
+  trail (was a stray green bar) + temporal smoothing (EMA, snap-on-cut) for the
+  camera and player overlays. Health ok; new code verified live.
 
 ## Ledger
 | Date | Area | Status | Notes |
