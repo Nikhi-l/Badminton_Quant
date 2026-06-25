@@ -487,7 +487,7 @@ function defaultEditorState(item) {
     // (shuttle | player | fixed point) + zoom, interpolated between keyframes.
     camera: { enabled: false, keyframes: [] },
     overlays: {
-      shuttle: { enabled: true, style: "ring", size: 54, opacity: 0.92, trail: true },
+      shuttle: { enabled: true, style: "ring", size: 28, opacity: 0.92, trail: true },
       pose: { enabled: !!(item.options && item.options.pose === "yolo11"), style: "glow", lineWidth: 3, opacity: 0.82 },
     },
     audio: { bed: "current-stitch", editable: false },
@@ -508,7 +508,11 @@ function mergeEditorState(base, saved) {
       keyframes: Array.isArray((saved.camera || {}).keyframes) ? saved.camera.keyframes : base.camera.keyframes,
     },
     overlays: {
-      shuttle: { ...base.overlays.shuttle, ...((saved.overlays || {}).shuttle || {}) },
+      shuttle: (() => {
+        const s = { ...base.overlays.shuttle, ...((saved.overlays || {}).shuttle || {}) };
+        if (s.size >= 48) s.size = base.overlays.shuttle.size;  // migrate the old big default down
+        return s;
+      })(),
       pose: { ...base.overlays.pose, ...((saved.overlays || {}).pose || {}) },
     },
     audio: { ...base.audio, ...(saved.audio || {}) },
@@ -1071,7 +1075,7 @@ function renderInspector() {
         <div class="choice-row">
           ${["ring", "fire", "square", "trail"].map(v => `<button class="choice-btn ${sh.style === v ? "active" : ""}" data-shuttle-style="${v}">${styleLabel(v)}</button>`).join("")}
         </div>
-        <div class="control-row"><label>Size</label><input type="range" id="shuttleSize" min="34" max="82" value="${sh.size}"></div>
+        <div class="control-row"><label>Size</label><input type="range" id="shuttleSize" min="14" max="64" value="${sh.size}"></div>
         <div class="control-row"><label>Opacity</label><input type="range" id="shuttleOpacity" min="35" max="100" value="${Math.round(sh.opacity * 100)}"></div>
         <div class="control-row"><label>Trail</label><input type="checkbox" id="shuttleTrail" ${sh.trail ? "checked" : ""}></div>
       </div>
@@ -1670,10 +1674,29 @@ function setPreviewAspect(aspect) {
   studio.previewAspect = aspect;
   const frame = $("stageFrame"), v = $("stVideo");
   const landscape = aspect === "landscape";
-  const ar = landscape
-    ? ((v.videoWidth && v.videoHeight) ? `${v.videoWidth}/${v.videoHeight}` : "16/9")
-    : "9/16";
-  frame.style.setProperty("--stage-ar", ar);
+  // Landscape = the ORIGINAL footage. The reel (item.video) is a 9:16 portrait crop, so
+  // showing IT in a landscape frame just pillarboxes it. The proxy is the un-cropped
+  // source, so Landscape always plays the proxy; Portrait restores the current mode's
+  // video. Swap the source if needed, preserving playback position.
+  const wantSrc = landscape ? studio.item.proxy
+    : (studio.mode === "reel" ? studio.item.video : studio.item.proxy);
+  const fileOf = (u) => (u || "").split("?")[0].split("/").pop();
+  const applyAR = () => {
+    const realAR = (v.videoWidth && v.videoHeight) ? `${v.videoWidth}/${v.videoHeight}` : (landscape ? "16/9" : "9/16");
+    frame.style.setProperty("--stage-ar", landscape ? realAR : "9/16");
+    updateOverlayPreview();
+  };
+  if (wantSrc && fileOf(v.currentSrc) !== fileOf(wantSrc)) {
+    const t = v.currentTime, playing = !v.paused;
+    v.src = wantSrc;
+    v.addEventListener("loadedmetadata", () => {
+      try { v.currentTime = Math.min(t, (v.duration || t) - 0.01); } catch { /* ignore */ }
+      if (playing) v.play().catch(() => {});
+      applyAR();
+    }, { once: true });
+  } else {
+    applyAR();
+  }
   frame.classList.toggle("landscape", landscape);
   $("aspectToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.aspect === aspect));
   $("tpHint").textContent = landscape ? "landscape · original frame" : "";
