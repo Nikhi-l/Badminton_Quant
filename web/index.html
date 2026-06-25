@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=21">
+<link rel="stylesheet" href="/style.css?v=23">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🏸</text></svg>">
 </head>
 <body>
@@ -157,6 +157,7 @@
       <div class="src-toggle">
         <button class="active" data-mode="reel" id="modeReel">Reel</button>
         <button data-mode="source" id="modeSource">Source rallies</button>
+        <button data-mode="compose" id="modeCompose">Compose</button>
       </div>
       <a class="btn btn-small" id="studioDownload" download="baddy-reel.mp4">Export</a>
       <button class="studio-x" id="studioX" title="Close">×</button>
@@ -196,6 +197,12 @@
           <video id="stVideo" playsinline></video>
           <div class="ai-overlays" id="aiOverlays"></div>
         </div>
+        <div class="canvas-nodes" id="canvasNodes" hidden></div>
+        <div class="clip-library" id="clipLibrary" hidden>
+          <div class="clip-library-head">Add clips <span class="muted">drag onto the canvas →</span></div>
+          <div class="clip-library-list" id="clipLibraryList"></div>
+        </div>
+        <div class="compose-hint" id="composeHint" hidden>Click clips from the library to drop them on the canvas. Drag to arrange.</div>
       </div>
       <div class="coachbar" id="coachbar" hidden></div>
     </main>
@@ -250,6 +257,6 @@
   </div>
 </div>
 
-<script src="/app.js?v=21"></script>
+<script src="/app.js?v=23"></script>
 </body>
 </html>

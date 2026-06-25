@@ -484,6 +484,9 @@ function defaultEditorState(item) {
     // behavior). Keyframes are authored against reel time; each picks a follow target
     // (shuttle | player | fixed point) + zoom, interpolated between keyframes.
     camera: { enabled: false, keyframes: [] },
+    // Multi-clip canvas composition (Phase 2): clip nodes placed/connected on the
+    // canvas. Edges + render + per-edge NL agent are follow-up slices.
+    composition: { nodes: [], edges: [] },
     overlays: {
       shuttle: { enabled: true, style: "ring", size: 28, opacity: 0.92, trail: true },
       pose: { enabled: !!(item.options && item.options.pose === "yolo11"), style: "glow", lineWidth: 3, opacity: 0.82 },
@@ -512,6 +515,10 @@ function mergeEditorState(base, saved) {
         return s;
       })(),
       pose: { ...base.overlays.pose, ...((saved.overlays || {}).pose || {}) },
+    },
+    composition: {
+      nodes: Array.isArray((saved.composition || {}).nodes) ? saved.composition.nodes : base.composition.nodes,
+      edges: Array.isArray((saved.composition || {}).edges) ? saved.composition.edges : base.composition.edges,
     },
     audio: { ...base.audio, ...(saved.audio || {}) },
   };
@@ -579,14 +586,27 @@ function renderCoachbar(item) {
 }
 
 function setStudioMode(mode) {
+  studio.mode = mode;
+  $("modeReel").classList.toggle("active", mode === "reel");
+  $("modeSource").classList.toggle("active", mode === "source");
+  $("modeCompose").classList.toggle("active", mode === "compose");
+  const compose = mode === "compose";
+  $("stageFrame").style.visibility = compose ? "hidden" : "";
+  $("canvasNodes").hidden = !compose;
+  $("clipLibrary").hidden = !compose;
+  if (compose) {
+    $("stVideo").pause();
+    renderComposeLibrary();
+    renderCanvasNodes();
+    $("tpHint").textContent = "Compose · multi-clip canvas";
+    return;
+  }
+  $("composeHint").hidden = true;
   const src = mode === "reel" ? studio.item.video : studio.item.proxy;
   if (!src) {
     $("tpHint").textContent = "source video isn't available for this reel";
     return;
   }
-  studio.mode = mode;
-  $("modeReel").classList.toggle("active", mode === "reel");
-  $("modeSource").classList.toggle("active", mode === "source");
   const v = $("stVideo");
   v.src = src;
   v.onerror = () => { $("tpHint").textContent = "video failed to load — try the other view"; };
@@ -599,6 +619,110 @@ function setStudioMode(mode) {
       ? "Source rally analysis"
       : "Reel rally analysis";
   updateOverlayPreview();
+}
+
+/* ---------- Compose mode: multi-clip canvas (Phase 2) ---------- */
+function compositionState() {
+  const st = studio.editorState;
+  if (!st.composition) st.composition = { nodes: [], edges: [] };
+  return st.composition;
+}
+
+// Available clips to drop on the canvas: this game's rallies + your other reels.
+function composeLibrary() {
+  const item = studio.item, out = [];
+  const rallies = item.rally_pool || item.rallies || [];
+  rallies.forEach((r, i) => out.push({
+    kind: "rally", refId: `${item.id}:r${i}`, src: item.proxy || item.video,
+    label: `R${i + 1} · ${Math.round(r.dur || (r.end - r.start) || 0)}s`,
+    thumb: item.thumb, t0: r.start || 0, t1: r.end || ((r.start || 0) + (r.dur || 0)),
+  }));
+  (galleryItems || []).filter(g => g.id !== item.id).slice(0, 12).forEach(g => out.push({
+    kind: "reel", refId: g.id, src: g.video, label: (g.filename || "reel").slice(0, 22),
+    thumb: g.thumb, t0: 0, t1: g.duration || 0,
+  }));
+  return out;
+}
+
+function renderComposeLibrary() {
+  const list = $("clipLibraryList");
+  const clips = composeLibrary();
+  list.innerHTML = clips.map((c, i) => `
+    <button class="lib-clip" data-lib="${i}">
+      <span class="lib-thumb"${c.thumb ? ` style="background-image:url('${esc(c.thumb)}')"` : ""}></span>
+      <span class="lib-label"><b>${esc(c.label)}</b><span>${esc(c.kind)}</span></span>
+    </button>`).join("") || `<div class="muted" style="padding:8px;font-size:11px">No clips yet — generate a few reels first.</div>`;
+  list.querySelectorAll("[data-lib]").forEach(b => b.onclick = () => addClipNode(clips[Number(b.dataset.lib)]));
+}
+
+let _nodeSeq = 0;
+function addClipNode(clip) {
+  const comp = compositionState();
+  const n = comp.nodes.length;
+  comp.nodes.push({
+    id: `n${_nodeSeq++}_${comp.nodes.length}`,
+    kind: clip.kind, refId: clip.refId, src: clip.src, label: clip.label, thumb: clip.thumb,
+    t0: clip.t0, t1: clip.t1,
+    x: 40 + (n % 4) * 34, y: 40 + (n % 4) * 28,   // stagger drops
+  });
+  saveEditorState();
+  renderCanvasNodes();
+}
+
+function removeClipNode(id) {
+  const comp = compositionState();
+  comp.nodes = comp.nodes.filter(n => n.id !== id);
+  comp.edges = (comp.edges || []).filter(e => e.from !== id && e.to !== id);
+  saveEditorState();
+  renderCanvasNodes();
+}
+
+function renderCanvasNodes() {
+  const layer = $("canvasNodes");
+  if (!layer) return;
+  const comp = compositionState();
+  layer.innerHTML = comp.nodes.map(nd => `
+    <div class="clip-node" data-node="${esc(nd.id)}" style="left:${nd.x}px;top:${nd.y}px">
+      <div class="clip-node-thumb"${nd.thumb ? ` style="background-image:url('${esc(nd.thumb)}')"` : ""}>
+        <span class="clip-node-kind">${esc(nd.kind)}</span>
+        <button class="clip-node-x" data-del="${esc(nd.id)}" title="Remove">×</button>
+      </div>
+      <div class="clip-node-label">${esc(nd.label)}</div>
+    </div>`).join("");
+  layer.querySelectorAll("[data-del]").forEach(b => b.onclick = (e) => { e.stopPropagation(); removeClipNode(b.dataset.del); });
+  layer.querySelectorAll(".clip-node").forEach(el => initNodeDrag(el));
+  $("composeHint").hidden = comp.nodes.length > 0;
+}
+
+// Drag a clip node in canvas space (screen delta / scale = world delta).
+function initNodeDrag(el) {
+  const id = el.dataset.node;
+  el.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".clip-node-x")) return;
+    e.stopPropagation();   // don't pan the canvas while dragging a node
+    const nd = compositionState().nodes.find(n => n.id === id);
+    if (!nd) return;
+    const start = { x: e.clientX, y: e.clientY, ox: nd.x, oy: nd.y };
+    el.classList.add("dragging");
+    const move = (ev) => {
+      const s = studio.canvas.scale || 1;
+      nd.x = start.ox + (ev.clientX - start.x) / s;
+      nd.y = start.oy + (ev.clientY - start.y) / s;
+      el.style.left = `${nd.x}px`; el.style.top = `${nd.y}px`;
+    };
+    const up = (ev) => {
+      el.classList.remove("dragging");
+      try { el.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      saveEditorState();
+    };
+    // bind move/up BEFORE capturing — setPointerCapture can throw, and the drag must
+    // still work if it does.
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+  });
 }
 
 function reelSegments() {
@@ -1661,7 +1785,9 @@ $("speedToggle").querySelectorAll("button").forEach(b => b.onclick = () => {
 // AI overlays live inside the frame so they pan/zoom with it for free.
 function applyCanvas() {
   const c = studio.canvas;
-  $("stageFrame").style.transform = `translate(${c.x}px, ${c.y}px) scale(${c.scale})`;
+  const tf = `translate(${c.x}px, ${c.y}px) scale(${c.scale})`;
+  $("stageFrame").style.transform = tf;
+  $("canvasNodes").style.transform = tf;   // clip nodes share the canvas transform
   $("zoomLabel").textContent = Math.abs(c.scale - 1) < 0.005 && !c.x && !c.y ? "Fit" : `${Math.round(c.scale * 100)}%`;
 }
 function resetCanvas() { studio.canvas = { x: 0, y: 0, scale: 1 }; applyCanvas(); }
@@ -1774,6 +1900,7 @@ function closeStudio() {
 $("studioX").onclick = closeStudio;
 $("modeReel").onclick = () => setStudioMode("reel");
 $("modeSource").onclick = () => setStudioMode("source");
+$("modeCompose").onclick = () => setStudioMode("compose");
 $("tpPlay").onclick = () => { const v = $("stVideo"); v.paused ? v.play().catch(() => {}) : v.pause(); };
 $("tl").onclick = (e) => {
   const r = $("tl").getBoundingClientRect();
