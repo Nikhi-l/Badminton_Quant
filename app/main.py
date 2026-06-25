@@ -294,12 +294,16 @@ def _public_rally(rr: dict) -> dict:
     return out
 
 
-def _public_result(job: dict) -> dict | None:
+def _public_result(job: dict, light: bool = False) -> dict | None:
+    """Public reel payload. `light=True` (gallery list) omits the heavy per-rally
+    tracking arrays (shuttle_track / players_track via the rallies + rally_pool) so
+    listing many reels stays small and fast — the Studio re-fetches the full result
+    by id when a reel is opened. `light=False` (single job) returns everything."""
     import json
     if not job.get("result"):
         return None
     r = json.loads(job["result"])
-    return {
+    out = {
         "video": f"/media/{job['id']}/reel.mp4",
         "thumb": f"/media/{job['id']}/thumb.jpg",
         "proxy": f"/media/{job['id']}/proxy.mp4",
@@ -307,8 +311,6 @@ def _public_result(job: dict) -> dict | None:
         "sport": r.get("sport"),
         "n_rallies_found": r.get("n_rallies_found"),
         "n_rallies_used": r.get("n_rallies_used"),
-        "rallies": [_public_rally(rr) for rr in r.get("rallies", [])],
-        "all_rallies": r.get("all_rallies", []),
         "source_duration": (r.get("source") or {}).get("duration"),
         "n_clips": r.get("n_clips", 1),
         "clip_order": r.get("clip_order"),
@@ -317,11 +319,16 @@ def _public_result(job: dict) -> dict | None:
         "options": r.get("options"),
         "coach": r.get("coach"),
         "remix": r.get("remix"),
-        "rally_pool": [_public_rally(rr) for rr in r.get("rally_pool", [])]
-        if isinstance(r.get("rally_pool"), list) else None,
         "gemini_usage": r.get("gemini_usage"),
         "elapsed_sec": r.get("elapsed_sec"),
     }
+    if light:
+        return out
+    out["rallies"] = [_public_rally(rr) for rr in r.get("rallies", [])]
+    out["all_rallies"] = r.get("all_rallies", [])
+    out["rally_pool"] = ([_public_rally(rr) for rr in r.get("rally_pool", [])]
+                         if isinstance(r.get("rally_pool"), list) else None)
+    return out
 
 
 def _gen_seconds(job: dict) -> float | None:
@@ -465,7 +472,7 @@ def _validate_camera(camera) -> dict | None:
 def gallery():
     items = []
     for job in db.gallery():
-        r = _public_result(job)
+        r = _public_result(job, light=True)   # list view: no heavy per-rally tracking
         if not r:
             continue
         items.append({"id": job["id"], "filename": job["filename"],

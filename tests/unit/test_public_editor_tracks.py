@@ -1,4 +1,36 @@
-from app.main import _public_rally
+import json
+
+from app.main import _public_rally, _public_result
+
+
+def test_gallery_light_result_omits_heavy_tracking():
+    # A reel with dense per-rally tracking. The gallery list (light) must NOT embed it
+    # — that ballooned /api/gallery to 225KB/8s and broke the "past reels" view.
+    dense_shuttle = [{"t": i / 30, "x": 0.5, "y": 0.4, "confidence": 0.9} for i in range(300)]
+    players = [{"t": i / 30, "boxes": [{"x1": 0.2, "y1": 0.1, "x2": 0.3, "y2": 0.34, "confidence": 0.8}]}
+               for i in range(300)]
+    rally = {"start": 1.0, "end": 9.0, "dur": 8.0,
+             "vision": {"status": "ok", "shuttle_quality": 0.8, "player_quality": 0.7,
+                        "shuttle": dense_shuttle, "players": players}}
+    result = {"duration": 8.0, "n_rallies_used": 1, "n_rallies_found": 3,
+              "rallies": [rally], "rally_pool": [rally], "all_rallies": [rally],
+              "vision": {"status": "ok", "summary": {"shuttle_quality": 0.8}}}
+    job = {"id": "abc123", "filename": "x.mp4", "result": json.dumps(result)}
+
+    light = _public_result(job, light=True)
+    full = _public_result(job, light=False)
+
+    # Light: aggregate fields kept, heavy per-rally arrays dropped entirely.
+    assert light["duration"] == 8.0 and light["n_rallies_used"] == 1
+    assert light["thumb"].endswith("thumb.jpg") and light["vision"]["status"] == "ok"
+    assert "rallies" not in light and "rally_pool" not in light and "all_rallies" not in light
+
+    # Full: rallies present with the bounded tracking the Studio needs.
+    assert full["rallies"][0]["vision"]["shuttle_track"]
+    assert full["rallies"][0]["vision"]["players_track"]
+
+    # Light is dramatically smaller (the whole point).
+    assert len(json.dumps(light)) * 5 < len(json.dumps(full))
 
 
 def test_public_rally_exposes_bounded_shuttle_track():
