@@ -438,7 +438,7 @@ const studio = {
   mode: "reel",
   raf: 0,
   selectedLayer: "reel",
-  zoom: 1,
+  canvas: { x: 0, y: 0, scale: 1 },
   dur: 1,
   timelineSegments: [],
   editorState: null,
@@ -450,15 +450,13 @@ function openStudio(item) {
   studio.item = item;
   studio.mode = "reel";
   studio.selectedLayer = "reel";
-  studio.zoom = 1;
+  resetCanvas();
   _lastCamCenter = _camSmooth = null;
   for (const k of Object.keys(_playerSmooth)) delete _playerSmooth[k];
   studio.editorState = loadEditorState(item);
   $("studio").hidden = false;
   $("studioFile").textContent = [item.filename, item.sport].filter(Boolean).join(" · ");
   $("studioDownload").href = item.video;
-  $("stageFrame").style.setProperty("--stage-zoom", studio.zoom);
-  $("zoomLabel").textContent = "Fit";
   setPreviewAspect("portrait");
   document.body.style.overflow = "hidden";
   initEdit();
@@ -1657,16 +1655,56 @@ $("speedToggle").querySelectorAll("button").forEach(b => b.onclick = () => {
   b.classList.add("active");
   $("stVideo").playbackRate = parseFloat(b.dataset.rate);
 });
-$("zoomOut").onclick = () => {
-  studio.zoom = Math.max(0.68, Math.round((studio.zoom - 0.08) * 100) / 100);
-  $("stageFrame").style.setProperty("--stage-zoom", studio.zoom);
-  $("zoomLabel").textContent = `${Math.round(studio.zoom * 100)}%`;
-};
-$("zoomIn").onclick = () => {
-  studio.zoom = Math.min(1.24, Math.round((studio.zoom + 0.08) * 100) / 100);
-  $("stageFrame").style.setProperty("--stage-zoom", studio.zoom);
-  $("zoomLabel").textContent = `${Math.round(studio.zoom * 100)}%`;
-};
+/* ---------- Figma-style movable canvas: pan (drag) + zoom (wheel) ---------- */
+// The stage-frame is a single object on an infinite canvas. studio.canvas {x,y,scale}
+// is applied as translate()+scale(); wheel zooms toward the cursor, drag pans. The
+// AI overlays live inside the frame so they pan/zoom with it for free.
+function applyCanvas() {
+  const c = studio.canvas;
+  $("stageFrame").style.transform = `translate(${c.x}px, ${c.y}px) scale(${c.scale})`;
+  $("zoomLabel").textContent = Math.abs(c.scale - 1) < 0.005 && !c.x && !c.y ? "Fit" : `${Math.round(c.scale * 100)}%`;
+}
+function resetCanvas() { studio.canvas = { x: 0, y: 0, scale: 1 }; applyCanvas(); }
+function canvasZoomAt(clientX, clientY, factor) {
+  const stage = $("studioStage"), rect = stage.getBoundingClientRect();
+  const dx = clientX - (rect.left + rect.width / 2), dy = clientY - (rect.top + rect.height / 2);
+  const c = studio.canvas;
+  const newScale = Math.max(0.25, Math.min(6, c.scale * factor));
+  // keep the world point under the cursor fixed while scaling
+  c.x = dx - (dx - c.x) * (newScale / c.scale);
+  c.y = dy - (dy - c.y) * (newScale / c.scale);
+  c.scale = newScale;
+  applyCanvas();
+}
+(function initCanvasControls() {
+  const stage = $("studioStage");
+  $("zoomOut").onclick = () => { const r = stage.getBoundingClientRect(); canvasZoomAt(r.left + r.width / 2, r.top + r.height / 2, 1 / 1.15); };
+  $("zoomIn").onclick = () => { const r = stage.getBoundingClientRect(); canvasZoomAt(r.left + r.width / 2, r.top + r.height / 2, 1.15); };
+  $("zoomLabel").onclick = resetCanvas;
+  stage.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    canvasZoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.1 : 1 / 1.1);
+  }, { passive: false });
+  // Pan by dragging the canvas background, middle-mouse anywhere, or while the
+  // Framing/Camera layer isn't grabbing the frame for crop repositioning.
+  let panning = false, start = null;
+  stage.addEventListener("pointerdown", (e) => {
+    const onFrameCrop = e.target.closest("#stageFrame") && studio.selectedLayer === "framing";
+    if (e.button === 1 || (!onFrameCrop && (e.button === 0))) {
+      panning = true; start = { x: e.clientX, y: e.clientY, ox: studio.canvas.x, oy: studio.canvas.y };
+      stage.setPointerCapture(e.pointerId); stage.classList.add("panning"); e.preventDefault();
+    }
+  });
+  stage.addEventListener("pointermove", (e) => {
+    if (!panning) return;
+    studio.canvas.x = start.ox + (e.clientX - start.x);
+    studio.canvas.y = start.oy + (e.clientY - start.y);
+    applyCanvas();
+  });
+  const endPan = (e) => { if (panning) { panning = false; stage.classList.remove("panning"); try { stage.releasePointerCapture(e.pointerId); } catch { /* ignore */ } } };
+  stage.addEventListener("pointerup", endPan);
+  stage.addEventListener("pointercancel", endPan);
+})();
 
 // Preview aspect: Portrait (9:16 reel output) vs Landscape (the source video's
 // native aspect — see the full uploaded landscape footage to reframe it).
