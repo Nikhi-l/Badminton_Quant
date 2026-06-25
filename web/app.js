@@ -362,7 +362,7 @@ function renderGallery() {
     card.addEventListener("click", () => openModal(item));
     card.querySelector(".studio-open").addEventListener("click", (e) => {
       e.stopPropagation();
-      openStudio(item);
+      openStudioById(item.id);   // fetch the full result (gallery items are light)
     });
   });
 }
@@ -421,11 +421,16 @@ function renderQueue(jobs) {
 
 async function openStudioById(id) {
   let item = galleryItems.find(i => i.id === id);
-  if (!item) {
+  // Gallery items are light (no per-rally tracking) — fetch the full result so the
+  // Studio has rallies + shuttle/player tracks for the overlays.
+  if (!item || !Array.isArray(item.rallies)) {
     try {
       const j = await jfetch(`/api/jobs/${id}`);
-      if (j && j.result) item = { ...j.result, id, filename: j.filename };
-    } catch { /* fall through */ }
+      if (j && j.result) {
+        const versioned = item ? { video: item.video, thumb: item.thumb } : {};
+        item = { ...(item || {}), ...j.result, ...versioned, id, filename: (item && item.filename) || j.filename };
+      }
+    } catch { /* fall through to whatever we have */ }
   }
   if (item) openStudio(item);
 }
@@ -1965,7 +1970,7 @@ const closeModal = () => {
 };
 $("modalX").onclick = closeModal;
 $("modal").onclick = (e) => { if (e.target === $("modal")) closeModal(); };
-$("modalStudio").onclick = () => { const it = modalItem; closeModal(); if (it) openStudio(it); };
+$("modalStudio").onclick = () => { const it = modalItem; closeModal(); if (it) openStudioById(it.id); };
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { closeModal(); closeStudio(); }
 });
