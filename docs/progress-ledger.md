@@ -35,11 +35,14 @@ docs commit after each functional slice.
 | 2026-06-26 | Shuttle filter + keep-in-frame + compose drag | Merged (Cycle 12) | User feedback batch — Hampel-style false-detection filter (camera + overlay), `_contain_targets` keep-in-frame guarantee, wider zoom smoothing, Compose drag via window listeners + library ghost-drag-to-drop, comet trail effect, UI polish. 5 new regression tests |
 
 ## Active priorities
-1. **Rebuild + redeploy the RunPod worker image** (handler now emits `poses`; weights
-   baked) and deploy the VM — pose skeletons on GPU jobs need both.
-2. After deploy, run one representative RunPod smoke job and record actual
-   `pose_model`, `pose_quality`, `pose_samples`, `shuttle_quality`, latency, and
-   Studio screenshot/render notes.
+1. ~~Rebuild + redeploy the RunPod worker~~ **DONE 2026-07-01**: image
+   `pose-20260626a` (Cloud Build 3m41s, SUCCESS — yolo26m+yolo11n weights baked,
+   bake step doubles as build-time model verification); template `ic265brof1`
+   patched from `tracknet-src-20260621b`; endpoint `radst7uhhhl6q0` health:
+   workers ready 2 / unhealthy 0. VM deployed (v=25), health ok.
+2. **Definitive e2e pose proof**: run one job with Pose enabled and confirm
+   `worker_version=pose-model-config-20260626`, actual `pose_model`, and skeletons
+   in Studio; record quality/latency here.
 - Follow-ups (not blocking): unify render-time player identity (near/far) with the
   editor's per-player ids; persist full `baddy.editor.v1` (overlay styles) into the
   MP4; click-to-set fixed point on the preview.
