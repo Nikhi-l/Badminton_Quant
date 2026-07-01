@@ -5,6 +5,38 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 12: Pose end-to-end + tracking robustness (TASK-017/018/019/020 + feedback batch)
+**Date:** 2026-06-26
+**Goal:** Ship real pose skeletons in Studio, harden shuttle tracking (false-detection
+filter, keep-in-frame camera, smoother motion), fix Compose drag, comet trail, UI polish.
+**Roadmap alignment:** PRD §16 (TASK-017–020) + 2026-06-26 user feedback.
+**Branch:** `feat/TASK-017-pose-camera-upgrades` (codex WIP snapshot `8d09e11` +
+takeover hardening `8deb7c1`).
+**Files changed:** `app/config.py`, `app/main.py`, `app/pipeline/{vision,vision_local,gpu,track,render,run}.py`,
+`runpod_worker/{handler.py,Dockerfile}`, `web/{app.js,style.css,index.html}`, tests.
+**Schema/API/interface changes:** `_compact_vision` exposes bounded `pose_track`
+(COCO-17 keypoints, stable person ids); `/api/capabilities` reports pose backend/model;
+pose-only jobs route GPU-first (`POSE_BACKEND`, default gpu) with local fallback;
+`RENDER_ZOOM_PUNCH` default 0.
+**Tests/verification performed:**
+- 32 passed (`./scripts/check.sh`): 5 new filter/containment regressions (spike
+  rejection, spike-doesn't-move-camera ±0.02, fast-smash survival, conf/bounds,
+  shuttle+player containment ≤0.005 escape), deterministic pose-routing tests,
+  WIP's pose-contract + overlay-JS tests.
+- yolo26 verified empirically (ultralytics 8.4.70 loads yolo26s); worker Dockerfile
+  bakes yolo26m+yolo11n at build → build fails fast if a model is unavailable.
+- Preview: 2 skeletons render (32 limbs/34 joints, per-person colours); comet trail
+  + pulsing tip; Compose fast-drag lands exactly (window listeners); library
+  ghost-drag drops at pointer (clientToWorld); no console errors.
+- Deployed VM (v=25): live app.js serves POSE_LIMBS/initLibraryDrag/clientToWorld;
+  capabilities → pose backend runpod, model yolo26m-pose.pt; health ok.
+**Docs updated:** this log, `docs/progress-ledger.md`, `.agent/tasks/done/TASK-017–020`.
+**Open risks / next steps:**
+- RunPod worker image `pose-20260626a` building (Cloud Build) — template patch +
+  worker-ready verification, then a representative GPU pose job to see skeletons live.
+- Follow-ups: bake overlay styles into the MP4; unify render player identity with
+  editor ids; per-edge NL agent for Compose.
+
 ## Cycle 11: Job queue UI + GET /api/jobs (TASK-005)
 **Date:** 2026-06-23
 **Goal:** Close the last queued backlog item — a queue view of submitted jobs with
