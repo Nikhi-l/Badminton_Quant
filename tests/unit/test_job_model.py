@@ -11,6 +11,10 @@ def _tmp_db(monkeypatch, tmp_path):
 
 def test_create_job_records_pipeline_and_generation_timing(monkeypatch, tmp_path):
     _tmp_db(monkeypatch, tmp_path)
+    # Pose routing is env-dependent since TASK-018 (GPU-first when Runpod is
+    # configured). Pin it to the local backend so this test is deterministic
+    # everywhere — GPU-first routing has its own test below.
+    monkeypatch.setattr(config, "POSE_BACKEND", "local")
 
     db.create_job("cpujob", "cpu.mp4", {"shuttle": "off", "pose": "yolo11"})
     db.create_job("gpujob", "gpu.mp4", {"shuttle": "tracknetv3", "pose": "off"})
@@ -40,6 +44,27 @@ def test_create_job_records_pipeline_and_generation_timing(monkeypatch, tmp_path
     assert meta["pipeline"] == "cpu"
     assert meta["expected_gen_seconds"] == config.EXPECTED_CPU_GEN_SEC
     assert meta["gen_seconds"] >= 0
+
+
+def test_pose_pipeline_routing_is_backend_config_driven(monkeypatch):
+    # TASK-018: pose-only jobs route GPU-first only when the backend prefers GPU
+    # AND Runpod is configured; otherwise they stay on the CPU pipeline.
+    pose_job = {"shuttle": "off", "pose": "yolo11"}
+
+    monkeypatch.setattr(config, "POSE_BACKEND", "gpu")
+    monkeypatch.setattr(config, "RUNPOD_ENDPOINT_ID", "ep123")
+    monkeypatch.setattr(config, "RUNPOD_API_KEY", "key123")
+    assert config.pipeline_for_options(pose_job) == "gpu"
+
+    monkeypatch.setattr(config, "RUNPOD_API_KEY", "")     # GPU preferred but not ready
+    assert config.pipeline_for_options(pose_job) == "cpu"
+
+    monkeypatch.setattr(config, "RUNPOD_API_KEY", "key123")
+    monkeypatch.setattr(config, "POSE_BACKEND", "local")  # explicit local backend
+    assert config.pipeline_for_options(pose_job) == "cpu"
+
+    # Shuttle always wins the GPU pipeline regardless of pose backend.
+    assert config.pipeline_for_options({"shuttle": "tracknetv3", "pose": "off"}) == "gpu"
 
 
 def test_failed_status_replaces_legacy_error_state(monkeypatch, tmp_path):
