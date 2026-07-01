@@ -24,10 +24,13 @@ import requests
 import runpod
 
 CONTRACT = "baddy.vision.v1"
-WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "racquet-candidates-20260613")
+WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "pose-model-config-20260626")
 SAMPLE_FPS = float(os.environ.get("BADDY_SAMPLE_FPS", "6"))
 MAX_FRAMES_PER_RALLY = int(os.environ.get("BADDY_MAX_FRAMES_PER_RALLY", "180"))
-YOLO_POSE_MODEL = os.environ.get("YOLO_POSE_MODEL", "yolo11n-pose.pt")
+YOLO_POSE_MODEL = os.environ.get("YOLO_POSE_MODEL",
+                                 os.environ.get("POSE_MODEL_GPU", "yolo26m-pose.pt"))
+YOLO_POSE_FALLBACK = os.environ.get("YOLO_POSE_FALLBACK",
+                                    os.environ.get("POSE_MODEL_FALLBACK", "yolo11n-pose.pt"))
 RACQUET_MODEL = os.environ.get("RACQUET_MODEL", "")
 YOLO_CONF = float(os.environ.get("YOLO_CONF", "0.25"))
 YOLO_IMGSZ = int(os.environ.get("YOLO_IMGSZ", "640"))
@@ -42,22 +45,43 @@ TRACKNET_BATCH_SIZE = int(os.environ.get("TRACKNET_BATCH_SIZE", "8"))
 TRACKNET_EVAL_MODE = os.environ.get("TRACKNET_EVAL_MODE", "nonoverlap")
 
 _pose_model = None
+_pose_model_path = ""
 _racquet_model = None
 _model_error = ""
 _tracknet_error = ""
 
 
-def _load_models() -> None:
+def _load_models(pose_model: str | None = None) -> None:
     """Load heavy models once per worker process."""
-    global _pose_model, _racquet_model, _model_error
-    if _pose_model is not None or _model_error:
+    global _pose_model, _pose_model_path, _racquet_model, _model_error
+    desired_pose = str(pose_model or YOLO_POSE_MODEL or "").strip()
+    if _pose_model is not None and (_pose_model_path == desired_pose or not desired_pose):
         return
     try:
         from ultralytics import YOLO
+    except Exception as exc:  # noqa: BLE001 - fallbacks still produce a valid contract.
+        _model_error = f"{type(exc).__name__}: {exc}"
+        return
 
-        if YOLO_POSE_MODEL:
-            _pose_model = YOLO(YOLO_POSE_MODEL)
-        if RACQUET_MODEL:
+    errors = []
+    _pose_model = None
+    _pose_model_path = ""
+    candidates = []
+    for candidate in (desired_pose, YOLO_POSE_FALLBACK):
+        candidate = str(candidate or "").strip()
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    for candidate in candidates:
+        try:
+            _pose_model = YOLO(candidate)
+            _pose_model_path = candidate
+            break
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{Path(candidate).name}: {type(exc).__name__}: {exc}")
+    if not _pose_model and candidates:
+        _model_error = "; ".join(errors)
+    try:
+        if RACQUET_MODEL and _racquet_model is None:
             _racquet_model = YOLO(RACQUET_MODEL)
     except Exception as exc:  # noqa: BLE001 - fallbacks still produce a valid contract.
         _model_error = f"{type(exc).__name__}: {exc}"
@@ -495,7 +519,8 @@ def process(job_input: dict) -> dict:
     rallies = job_input.get("rallies") or []
     if not isinstance(rallies, list) or not rallies:
         raise ValueError("rallies must be a non-empty list")
-    _load_models()
+    requested_pose_model = str(job_input.get("pose_model") or YOLO_POSE_MODEL or "").strip()
+    _load_models(requested_pose_model)
     started = time.time()
     with tempfile.TemporaryDirectory(prefix="baddy-vision-") as td:
         video = Path(td) / "proxy.mp4"
@@ -516,7 +541,12 @@ def process(job_input: dict) -> dict:
                   "fps": round(meta["fps"], 3), "duration": round(meta["duration"], 3)},
         "sample_fps": SAMPLE_FPS,
         "model_status": {
-            "pose_model": YOLO_POSE_MODEL if _pose_model is not None else None,
+            "pose_model": _pose_model_path if _pose_model is not None else None,
+            "pose_requested_model": requested_pose_model,
+            "pose_fallback_model": YOLO_POSE_FALLBACK,
+            "pose_backend": "runpod",
+            "pose_device": DEVICE,
+            "pose_load_status": "loaded" if _pose_model is not None else "failed",
             "racquet_model": RACQUET_MODEL if _racquet_model is not None else None,
             "tracknet_repo": TRACKNET_REPO if _tracknet_ready() else None,
             "tracknet_model": TRACKNET_TRACKNET_FILE if _tracknet_ready() else None,

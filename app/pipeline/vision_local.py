@@ -1,4 +1,4 @@
-"""On-device vision engine: TrackNetV3 shuttle tracking + YOLO11 pose.
+"""On-device vision engine: TrackNetV3 shuttle tracking + YOLO pose.
 
 Runs the same models as the Runpod worker, but in-process against the local
 proxy file — no GPU service, no upload, no polling. Picks the best available
@@ -28,8 +28,8 @@ INET_WEIGHTS = config.ROOT / "runpod_worker" / "models" / "tracknet" / "InpaintN
 
 SAMPLE_FPS = float(os.environ.get("VISION_SAMPLE_FPS", "6"))
 MAX_FRAMES_PER_RALLY = int(os.environ.get("VISION_MAX_FRAMES_PER_RALLY", "180"))
-YOLO_POSE_MODEL = os.environ.get("VISION_POSE_MODEL",
-                                 str(config.DATA / "models" / "yolo11n-pose.pt"))
+YOLO_POSE_MODEL = os.environ.get("VISION_POSE_MODEL", config.POSE_MODEL_LOCAL)
+YOLO_POSE_FALLBACK = os.environ.get("VISION_POSE_FALLBACK", config.POSE_MODEL_FALLBACK)
 YOLO_CONF = float(os.environ.get("VISION_YOLO_CONF", "0.25"))
 YOLO_IMGSZ = int(os.environ.get("VISION_YOLO_IMGSZ", "640"))
 TRACKNET_BATCH = int(os.environ.get("VISION_TRACKNET_BATCH", "8"))
@@ -40,9 +40,10 @@ TRACKNET_EVAL_MODE = os.environ.get("VISION_TRACKNET_EVAL_MODE", "nonoverlap")
 # InpaintNet fills gaps but doubles the passes; off by default for speed.
 TRACKNET_INPAINT = os.environ.get("VISION_TRACKNET_INPAINT", "0").lower() \
     not in {"0", "false", "no", "off"}
-WORKER_VERSION = "local-tracknetv3-yolo11-20260618"
+WORKER_VERSION = "local-tracknetv3-yolo-pose-20260626"
 
 _pose_model = None
+_pose_model_path = ""
 _pose_error = ""
 _device_cache: str | None = None
 
@@ -108,15 +109,29 @@ def _quality(values: list[float], expected: int) -> float:
 
 
 def _load_pose():
-    global _pose_model, _pose_error
+    global _pose_model, _pose_model_path, _pose_error
     if _pose_model is not None or _pose_error:
         return
     try:
         from ultralytics import YOLO
-
-        _pose_model = YOLO(YOLO_POSE_MODEL)
     except Exception as e:  # noqa: BLE001
         _pose_error = f"{type(e).__name__}: {e}"
+        return
+
+    errors = []
+    candidates = []
+    for candidate in (YOLO_POSE_MODEL, YOLO_POSE_FALLBACK):
+        candidate = str(candidate or "").strip()
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    for candidate in candidates:
+        try:
+            _pose_model = YOLO(candidate)
+            _pose_model_path = candidate
+            return
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{Path(candidate).name}: {type(e).__name__}: {e}")
+    _pose_error = "; ".join(errors) or "no pose model configured"
 
 
 def _norm_box(x1, y1, x2, y2, w, h, conf) -> dict:
@@ -133,7 +148,7 @@ def _box_area(b: dict) -> float:
 
 
 def _detect_pose(frame, device: str):
-    """YOLO11 pose: top-2 player boxes + COCO-17 keypoints, normalized."""
+    """YOLO pose: top-2 player boxes + COCO-17 keypoints, normalized."""
     if _pose_model is None:
         return [], [], 0.0
     h, w = frame.shape[:2]
@@ -349,14 +364,19 @@ def analyze_raw(proxy_path: str | Path, sport: str, rallies: list[dict],
 
     return {
         "contract": "baddy.vision.v1",
-        "engine": "local-yolo11-tracknetv3",
+        "engine": "local-yolo-pose-tracknetv3",
         "worker_version": WORKER_VERSION,
         "message": _pose_error or "ok",
         "video": {"width": width, "height": height, "fps": round(fps, 3),
                   "duration": round(duration, 3)},
         "sample_fps": SAMPLE_FPS,
         "model_status": {
-            "pose_model": YOLO_POSE_MODEL if _pose_model is not None else None,
+            "pose_model": _pose_model_path if _pose_model is not None else None,
+            "pose_requested_model": YOLO_POSE_MODEL,
+            "pose_fallback_model": YOLO_POSE_FALLBACK,
+            "pose_backend": "local",
+            "pose_device": device,
+            "pose_load_status": "loaded" if _pose_model is not None else "failed",
             "racquet_model": None,
             "tracknet_repo": str(REPO),
             "tracknet_model": str(TNET_WEIGHTS),

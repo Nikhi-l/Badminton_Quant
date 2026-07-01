@@ -5,8 +5,8 @@ docs commit after each functional slice.
 
 ## Current branch / mission
 - Main branch: `main` (protected; releasable; live at baddyai.com)
-- Active branch: none — all queued tasks (TASK-005, 010–015) merged
-- Current main SHA: `227e05a`
+- Active branch: `feat/TASK-017-pose-camera-upgrades`
+- Current branch base SHA: `251be38`
 - **Deployed 2026-06-24:** the full editor/camera/queue sweep is LIVE on baddyai.com,
   plus a follow-up Studio polish deploy (`227e05a`, v=19 assets): real shuttle
   trail (was a stray green bar) + temporal smoothing (EMA, snap-on-cut) for the
@@ -31,13 +31,16 @@ docs commit after each functional slice.
 | 2026-06-21 | Landscape view + Source framing | Merged (deploy pending) | TASK-013, Cycle 9 — Portrait/Landscape toggle (source native aspect); framing crop/zoom/pan in Source mode; cache-bust v=18. Verified in preview |
 | 2026-06-23 | Configurable camera + keyframes | Merged (deploy pending) | TASK-014, Cycle 10 — target shuttle\|player\|point + keyframes; Camera layer/inspector + timeline lane; preview follows target w/ blend; backend from_camera_plan + camera_segment_for_rally + remix(camera=) bake; _validate_camera. 6 unit tests. e2e MP4 bake wired but not yet visually confirmed on a real render |
 | 2026-06-23 | Player/person tracking | Merged (deploy pending) | TASK-015, Cycle 10 — players_track (stable ids) exposed; player boxes overlay (hide when untracked) + Pose-lane presence dots; layer "Players & pose"; feeds TASK-014 player target. Unit-tested |
+| 2026-06-26 | Pose contract + model/camera upgrade | Active branch | TASK-017/018/019/020, Cycle 12 — preserve pose keypoints as `pose_track`, configurable YOLO pose model metadata/routing, real Studio skeleton rendering + toggle gating, render zoom punch disabled by default, POV TrackNet shuttle-follow allowed when quality is high. |
 
 ## Active priorities
-**All queued tasks (TASK-005, 010–015) are done, merged, and DEPLOYED (2026-06-24).**
-Remaining:
-1. **Confirm the TASK-014 camera bake on a real render** — now live: open Studio →
-   Camera → keyframes → Rebuild cuts on a done job and watch the exported MP4 (the
-   only un-e2e-verified piece; logic is unit-tested). Re-renders that job's reel.
+1. Finish and review `feat/TASK-017-pose-camera-upgrades`:
+   TASK-017/018/019/020 are implemented together because Studio skeleton rendering
+   depends on the pose contract, and the model/router/camera changes share the same
+   vision metadata surface.
+2. After merge/deploy, run one representative RunPod smoke job and record actual
+   `pose_model`, `pose_quality`, `pose_samples`, `shuttle_quality`, latency, and
+   Studio screenshot/render notes.
 - Follow-ups (not blocking): unify render-time player identity (near/far) with the
   editor's per-player ids; persist full `baddy.editor.v1` (overlay styles) into the
   MP4; click-to-set fixed point on the preview.
@@ -47,11 +50,13 @@ Remaining:
 |---|---|---|---|
 | Mumbai move needs GoDaddy DNS cutover | Low | Cycle 7 GCP audit | TASK-006 completed in place; Mumbai remains optional future migration |
 | Original upload soft (rendered from 480p proxy; ~/Downloads TCC-blocked) | Med | session 2026-06-19 | re-run on sharp source when file access restored |
-| `if not pov` gates `from_vision` off for handheld clips | Med | track.py:137 | revisit in pipeline cycle |
+| YOLO26 pose defaults depend on deployed `ultralytics` support and weight availability | Med | TASK-018 | configured fallback remains `yolo11n-pose.pt`; RunPod smoke must record actual loaded model |
+| Pose keypoint tracks increase full job payload size | Low | TASK-017 | bounded `pose_track` sampler; gallery light payload still omits per-rally tracks |
 
 ## Next checkpoint
-- Goal: deploy the merged sweep (TASK-005, 010–015) to baddyai.com and confirm the
-  TASK-014 camera bake on a real remix render.
-- Required tests: `./scripts/check.sh` (17 passing), baddyai.com health, a remix-with-
-  camera render eyeballed.
-- Expected docs update: this ledger + a deploy note in dev-cycle-log.
+- Goal: finish TASK-017/018/019/020 tests on `feat/TASK-017-pose-camera-upgrades`,
+  then open PR.
+- Required tests: targeted pose/camera/editor tests, `node --check web/app.js`,
+  and `./scripts/check.sh`.
+- Expected deploy proof after merge: baddyai.com health plus a representative
+  RunPod pose/shuttle job opened in Studio.
