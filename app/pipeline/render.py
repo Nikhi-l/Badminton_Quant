@@ -98,14 +98,17 @@ def _push(progress: float) -> float:
     """Gentle extra push-in over the rally on top of the adaptive zoom."""
     p = min(max(progress, 0.0), 1.0)
     s = p * p * (3 - 2 * p)
-    return 1.0 + 0.05 * s
+    return 1.0 + max(0.0, config.RENDER_ZOOM_PUSH) * s
 
 
 def _punch(t_in: float) -> float:
-    """Opening camera punch: each rally starts 6% tight and settles in ~a second —
-    reads as an editor's zoom keyframe on every cut."""
+    """Optional opening camera punch.
+
+    It used to be a hardcoded 6% push, which made otherwise smooth paths read as
+    a zoom pop at rally boundaries. Default is now 0 for smooth camera exports.
+    """
     import math
-    return 1.0 + 0.06 * math.exp(-max(t_in, 0.0) / 0.35)
+    return 1.0 + max(0.0, config.RENDER_ZOOM_PUNCH) * math.exp(-max(t_in, 0.0) / 0.35)
 
 
 def render_rally(src: str | Path, info: media.VideoInfo, t0: float, t1: float,

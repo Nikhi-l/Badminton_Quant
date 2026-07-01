@@ -88,6 +88,11 @@ def _model_status(raw: dict) -> dict:
         "pose": {
             "enabled": bool(pose_model),
             "model": _basename(pose_model),
+            "requested_model": _basename(status.get("pose_requested_model")),
+            "fallback_model": _basename(status.get("pose_fallback_model")),
+            "backend": status.get("pose_backend") or "",
+            "device": str(status.get("pose_device") or ""),
+            "load_status": str(status.get("pose_load_status") or ("loaded" if pose_model else "not_loaded")),
         },
         "racquet": {
             "enabled": bool(racquet_model),
@@ -186,6 +191,41 @@ def _point(raw: Any) -> dict | None:
     return None
 
 
+def _keypoints(raw: Any) -> list[dict]:
+    pts = raw.get("keypoints") if isinstance(raw, dict) else raw
+    if not isinstance(pts, list):
+        return []
+    out = []
+    for item in pts:
+        p = _point(item)
+        if p:
+            out.append({"x": p["x"], "y": p["y"], "confidence": p["confidence"]})
+    return out
+
+
+def _pose_people(raw_poses: Any, boxes: list[dict]) -> list[dict]:
+    if not isinstance(raw_poses, list):
+        return []
+    # Some integrations send one bare keypoint list instead of a list of people.
+    if raw_poses and isinstance(raw_poses[0], dict) and {"x", "y"} <= raw_poses[0].keys():
+        raw_poses = [{"keypoints": raw_poses}]
+    people = []
+    for i, raw_pose in enumerate(raw_poses[:4]):
+        pts = _keypoints(raw_pose)
+        if not pts:
+            continue
+        conf = _conf(raw_pose, sum(p["confidence"] for p in pts) / max(len(pts), 1))
+        person = {
+            "id": i,
+            "confidence": round(conf, 3),
+            "keypoints": pts[:17],
+        }
+        if i < len(boxes):
+            person["bbox"] = {k: boxes[i][k] for k in ("x1", "y1", "x2", "y2", "confidence")}
+        people.append(person)
+    return people
+
+
 def _abs_t(raw_t: Any, rally: dict) -> float:
     t = _num(raw_t)
     start = _num(rally.get("start"))
@@ -232,10 +272,10 @@ def _frames_from(raw_rally: dict, rally: dict) -> tuple[list[dict], list[dict], 
         if boxes:
             players.append({"t": t, "boxes": boxes[:2]})
         raw_poses = frame.get("poses") or frame.get("pose_tracks") or frame.get("keypoints") or []
-        pose_confs = [_conf(p, 0.0) for p in raw_poses if isinstance(p, dict)]
-        if pose_confs:
-            poses.append({"t": t, "count": len(pose_confs),
-                          "confidence": round(sum(pose_confs) / len(pose_confs), 3)})
+        people = _pose_people(raw_poses, boxes)
+        if people:
+            conf = round(sum(p["confidence"] for p in people) / len(people), 3)
+            poses.append({"t": t, "people": people, "count": len(people), "confidence": conf})
         raw_racquets = frame.get("racquets") or frame.get("rackets") or frame.get("racquet_boxes") or []
         racket_boxes = [_box(b) for b in raw_racquets]
         racket_boxes = [b for b in racket_boxes if b and b["confidence"] >= 0.05]
@@ -368,6 +408,7 @@ def _canonicalize(raw: Any, rallies: list[dict]) -> dict:
             "racquet_candidate_samples": len(racquet_candidates),
             "shuttle": shuttle,
             "players": players,
+            "poses": poses,
         })
 
     def avg(key: str) -> float:
@@ -484,6 +525,7 @@ def analyze(proxy_path: str | Path, workdir: str | Path, sport: str,
             for i, r in enumerate(rallies, 1)
         ],
         "tasks": tasks,
+        "pose_model": config.POSE_MODEL_GPU if "pose" in tasks or "players" in tasks else "",
         "return_normalized_coordinates": True,
     }
     try:

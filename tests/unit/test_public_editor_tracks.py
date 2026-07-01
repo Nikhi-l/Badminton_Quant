@@ -85,3 +85,57 @@ def test_public_rally_exposes_player_track_with_stable_ids():
     bottom_ids = {b["id"] for f in ptrack for b in f["boxes"] if b["y"] > 0.5}
     top_ids = {b["id"] for f in ptrack for b in f["boxes"] if b["y"] < 0.5}
     assert len(bottom_ids) == 1 and len(top_ids) == 1 and bottom_ids != top_ids
+
+
+def _pose_person(cx, cy, conf=0.85):
+    keypoints = []
+    for i in range(17):
+        keypoints.append({
+            "x": cx + (i % 3 - 1) * 0.01,
+            "y": cy + (i // 3) * 0.008,
+            "confidence": conf,
+        })
+    return {
+        "confidence": conf,
+        "bbox": {"x1": cx - 0.06, "y1": cy - 0.14, "x2": cx + 0.06, "y2": cy + 0.14,
+                 "confidence": conf},
+        "keypoints": keypoints,
+    }
+
+
+def test_public_rally_exposes_bounded_pose_track_with_stable_ids():
+    frames = []
+    for i in range(240):
+        frames.append({"t": i / 30, "people": [
+            _pose_person(0.24 + 0.02 * (i % 4) / 4, 0.70),
+            _pose_person(0.72 - 0.02 * (i % 5) / 5, 0.34),
+        ]})
+
+    out = _public_rally({
+        "start": 0.0, "end": 8.0, "dur": 8.0,
+        "vision": {"status": "ok", "pose_quality": 0.8, "poses": frames},
+    })
+
+    track = out["vision"]["pose_track"]
+    assert 0 < len(track) <= 120
+    person = track[0]["people"][0]
+    assert set(person) == {"id", "confidence", "keypoints", "bbox"}
+    assert len(person["keypoints"]) == 17
+    assert set(person["bbox"]) == {"x", "y", "w", "h", "confidence"}
+    ids = {p["id"] for f in track for p in f["people"]}
+    assert ids == {0, 1}
+
+
+def test_gallery_light_result_omits_pose_track_with_other_heavy_tracks():
+    pose_frames = [{"t": i / 30, "people": [_pose_person(0.4, 0.6)]} for i in range(180)]
+    rally = {"start": 0.0, "end": 6.0, "dur": 6.0,
+             "vision": {"status": "ok", "pose_quality": 0.8, "poses": pose_frames}}
+    result = {"duration": 6.0, "n_rallies_used": 1, "n_rallies_found": 1,
+              "rallies": [rally], "rally_pool": [rally], "vision": {"status": "ok"}}
+    job = {"id": "abc123", "filename": "x.mp4", "result": json.dumps(result)}
+
+    light = _public_result(job, light=True)
+    full = _public_result(job, light=False)
+
+    assert "rallies" not in light
+    assert full["rallies"][0]["vision"]["pose_track"]

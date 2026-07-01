@@ -52,20 +52,41 @@ SHUTTLE_MASK_MIN_QUALITY = float(os.environ.get("SHUTTLE_MASK_MIN_QUALITY", "0.6
 
 # Per-job vision worker selection. Each upload picks which analyses run; only
 # selected workers execute. Heavy GPU work (TrackNetV3) goes to Runpod serverless
-# and is opt-in to conserve credits; CPU-viable work (YOLO pose) runs on the VM.
+# and is opt-in to conserve credits. Pose keeps the historical public option name
+# ("yolo11") for compatibility, but the concrete model is configured separately.
 #   shuttle: "off" (CPU motion camera) | "tracknetv3" (Runpod GPU shuttle lock)
-#   pose:    "off" | "yolo11" (player + pose; CPU on VM, or bundled into a GPU job)
+#   pose:    "off" | "yolo11"/"pose" (player + pose; local or Runpod by backend)
 #   coach:   bool (grounded Gemini coach notes)
 SHUTTLE_ENGINES = {"off", "tracknetv3"}
-POSE_ENGINES = {"off", "yolo11"}
+POSE_ENGINES = {"off", "yolo11", "pose"}
 VISION_DEFAULT_SHUTTLE = os.environ.get("VISION_DEFAULT_SHUTTLE", "off")
 VISION_DEFAULT_POSE = os.environ.get("VISION_DEFAULT_POSE", "off")
+POSE_BACKEND = os.environ.get("POSE_BACKEND", "gpu").strip().lower()
+POSE_MODEL_GPU = os.environ.get("POSE_MODEL_GPU", "yolo26m-pose.pt")
+POSE_MODEL_LOCAL = os.environ.get("POSE_MODEL_LOCAL", "yolo26s-pose.pt")
+POSE_MODEL_FALLBACK = os.environ.get("POSE_MODEL_FALLBACK",
+                                     str(DATA / "models" / "yolo11n-pose.pt"))
 # When a GPU task is requested but Runpod is unavailable, may we run TrackNetV3 on
 # the VM CPU? Off by default: it is ~1 hour/reel and would block the queue.
 VISION_ALLOW_CPU_TRACKNET = os.environ.get("VISION_ALLOW_CPU_TRACKNET", "0").lower() \
     not in {"0", "false", "no", "off"}
 EXPECTED_CPU_GEN_SEC = int(os.environ.get("EXPECTED_CPU_GEN_SEC", "1800"))
 EXPECTED_GPU_GEN_SEC = int(os.environ.get("EXPECTED_GPU_GEN_SEC", "600"))
+RENDER_ZOOM_PUSH = float(os.environ.get("RENDER_ZOOM_PUSH", "0.02"))
+RENDER_ZOOM_PUNCH = float(os.environ.get("RENDER_ZOOM_PUNCH", "0.0"))
+POV_SHUTTLE_FOLLOW_MIN_QUALITY = float(os.environ.get("POV_SHUTTLE_FOLLOW_MIN_QUALITY", "0.65"))
+
+
+def pose_enabled_value(value: str) -> bool:
+    return str(value or "").strip().lower() in {"yolo11", "pose", "on", "true", "1"}
+
+
+def pose_prefers_gpu() -> bool:
+    return POSE_BACKEND in {"gpu", "runpod", "auto"}
+
+
+def runpod_ready() -> bool:
+    return bool(RUNPOD_ENDPOINT_ID and RUNPOD_API_KEY)
 
 
 def normalize_options(opts: dict | None) -> dict:
@@ -75,7 +96,9 @@ def normalize_options(opts: dict | None) -> dict:
     pose = str(opts.get("pose", VISION_DEFAULT_POSE)).lower()
     return {
         "shuttle": shuttle if shuttle in SHUTTLE_ENGINES else "off",
-        "pose": pose if pose in POSE_ENGINES else "off",
+        # Canonical public value remains "yolo11" so existing saved jobs and UI
+        # state keep working even when the concrete model is YOLO26 or later.
+        "pose": "yolo11" if pose_enabled_value(pose) else "off",
         "coach": bool(opts.get("coach", COACH_ENABLED)),
     }
 
@@ -83,7 +106,11 @@ def normalize_options(opts: dict | None) -> dict:
 def pipeline_for_options(opts: dict | None) -> str:
     """cpu | gpu pipeline selected for this job's vision contract."""
     opt = normalize_options(opts)
-    return "gpu" if opt["shuttle"] == "tracknetv3" else "cpu"
+    if opt["shuttle"] == "tracknetv3":
+        return "gpu"
+    if opt["pose"] == "yolo11" and pose_prefers_gpu() and runpod_ready():
+        return "gpu"
+    return "cpu"
 
 
 def expected_gen_seconds(pipeline: str | None) -> int | None:

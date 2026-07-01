@@ -183,6 +183,7 @@ def _compact_vision(v: dict | None) -> dict | None:
     ) if k in v}
     shuttle = v.get("shuttle") or []
     players = v.get("players") or []
+    poses = v.get("poses") or []
     out["shuttle_samples"] = len(shuttle) if isinstance(shuttle, list) else 0
     if isinstance(players, list):
         out["player_samples"] = sum(
@@ -201,6 +202,9 @@ def _compact_vision(v: dict | None) -> dict | None:
     ptrack = _sample_player_track(players)
     if ptrack:
         out["players_track"] = ptrack
+    pose_track = _sample_pose_track(poses)
+    if pose_track:
+        out["pose_track"] = pose_track
     return out
 
 
@@ -281,6 +285,109 @@ def _sample_player_track(players: list | None, max_frames: int = 120) -> list[di
             except (TypeError, ValueError):
                 t = 0.0
             out.append({"t": t, "boxes": norm_boxes})
+        prev = cur
+    return out
+
+
+def _compact_bbox(raw: dict | None) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        x1, y1, x2, y2 = (float(raw[k]) for k in ("x1", "y1", "x2", "y2"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return {
+        "x": round((x1 + x2) / 2.0, 5),
+        "y": round((y1 + y2) / 2.0, 5),
+        "w": round(max(0.0, x2 - x1), 5),
+        "h": round(max(0.0, y2 - y1), 5),
+        "confidence": round(float(raw.get("confidence", 0.0)), 3),
+    }
+
+
+def _pose_center(person: dict) -> tuple[float, float] | None:
+    bbox = _compact_bbox(person.get("bbox"))
+    if bbox:
+        return bbox["x"], bbox["y"]
+    pts = []
+    for p in person.get("keypoints") or []:
+        try:
+            if float(p.get("confidence", 0.0)) >= 0.05:
+                pts.append((float(p["x"]), float(p["y"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not pts:
+        return None
+    return sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
+
+
+def _sample_pose_track(poses: list | None, max_frames: int = 120) -> list[dict]:
+    """Public, bounded COCO-17 pose track for Studio skeleton overlays.
+
+    Canonical vision stores per-frame people with normalized keypoints. This keeps
+    the full job payload useful without letting gallery/list responses inherit the
+    dense raw arrays. Person ids are assigned by nearest-centroid continuity across
+    sampled frames, matching the player-box track convention.
+    """
+    if not isinstance(poses, list) or not poses:
+        return []
+    step = max(1, math.ceil(len(poses) / max_frames))
+    frames = [f for f in poses[::step] if isinstance(f, dict)]
+    out: list[dict] = []
+    prev: list[tuple[int, float, float]] = []
+    next_id = 0
+    gate = 0.24
+    for f in frames:
+        people = []
+        cur: list[tuple[int, float, float]] = []
+        used_prev: set[int] = set()
+        for person in (f.get("people") or []):
+            if not isinstance(person, dict):
+                continue
+            center = _pose_center(person)
+            if center is None:
+                continue
+            cx, cy = center
+            best_id, best_i, best_d = None, None, gate
+            for i, (pid, px, py) in enumerate(prev):
+                if i in used_prev:
+                    continue
+                d = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
+                if d < best_d:
+                    best_id, best_i, best_d = pid, i, d
+            if best_id is None:
+                best_id = next_id
+                next_id += 1
+            else:
+                used_prev.add(best_i)
+            keypoints = []
+            for kp in (person.get("keypoints") or [])[:17]:
+                try:
+                    keypoints.append({
+                        "x": round(float(kp["x"]), 5),
+                        "y": round(float(kp["y"]), 5),
+                        "confidence": round(float(kp.get("confidence", 0.0)), 3),
+                    })
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if not keypoints:
+                continue
+            item = {
+                "id": best_id,
+                "confidence": round(float(person.get("confidence", 0.0)), 3),
+                "keypoints": keypoints,
+            }
+            bbox = _compact_bbox(person.get("bbox"))
+            if bbox:
+                item["bbox"] = bbox
+            people.append(item)
+            cur.append((best_id, cx, cy))
+        if people:
+            try:
+                t = round(float(f.get("t")), 3)
+            except (TypeError, ValueError):
+                t = 0.0
+            out.append({"t": t, "people": people})
         prev = cur
     return out
 
@@ -376,8 +483,17 @@ def capabilities():
         },
         "pose": {
             "yolo11": {"available": pose_ok or gpu_ready,
-                       "backend": "cpu" if pose_ok else ("runpod" if gpu_ready else "none"),
-                       "note": "on-device YOLO11 pose" if pose_ok else pose_why},
+                       "backend": "runpod" if config.pose_prefers_gpu() and gpu_ready
+                                  else ("local" if pose_ok else "none"),
+                       "model": config.POSE_MODEL_GPU if config.pose_prefers_gpu() and gpu_ready
+                                else config.POSE_MODEL_LOCAL,
+                       "note": ("RunPod YOLO pose" if config.pose_prefers_gpu() and gpu_ready
+                                else "on-device YOLO pose") if (pose_ok or gpu_ready) else pose_why},
+            "pose": {"available": pose_ok or gpu_ready,
+                     "backend": "runpod" if config.pose_prefers_gpu() and gpu_ready
+                                else ("local" if pose_ok else "none"),
+                     "model": config.POSE_MODEL_GPU if config.pose_prefers_gpu() and gpu_ready
+                              else config.POSE_MODEL_LOCAL},
         },
         "coach": {"available": bool(config.GEMINI_API_KEY)},
         "defaults": {"shuttle": config.VISION_DEFAULT_SHUTTLE,

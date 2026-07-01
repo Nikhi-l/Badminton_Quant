@@ -7,7 +7,8 @@ the shuttle. These tests assert the shuttle is the primary follow target.
 import numpy as np
 import pytest
 
-from app.pipeline import track
+from app.pipeline import render, track
+from app.pipeline.run import _can_use_vision_camera
 
 CW, CH = 0.316, 1.0  # 9:16 crop of a 16:9 source (matches _crop_norms output)
 
@@ -105,3 +106,16 @@ def test_camera_path_stays_smooth():
     cam_x = np.array([path.at(t)[0] for t in times])
     accel = np.abs(np.diff(cam_x, 2))
     assert np.percentile(accel, 99) < 0.02, f"camera pan too jerky (a99={np.percentile(accel,99):.4f})"
+
+
+def test_render_zoom_punch_is_disabled_by_default():
+    """The old hardcoded opening punch made smooth paths look like zoom pops."""
+    assert render._punch(0.0) == 1.0
+    assert render._punch(0.5) == 1.0
+    assert render._push(1.0) <= 1.025
+
+
+def test_pov_can_still_use_strong_tracknet_shuttle_camera():
+    assert _can_use_vision_camera(False, {"shuttle_quality": 0.0})
+    assert _can_use_vision_camera(True, {"shuttle_quality": 0.7})
+    assert not _can_use_vision_camera(True, {"shuttle_quality": 0.2})

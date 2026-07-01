@@ -27,13 +27,15 @@ Pipeline (`app/pipeline/run.py`): combine → probe → proxy → rallies (Gemin
 ### 4a. Two inference pipelines (this milestone)
 A job runs through exactly one of:
 - **CPU pipeline** — runs entirely **on the VM instance** (`vision_local.py`):
-  YOLO11 pose, optional CPU TrackNetV3. No external GPU. Slower; used when GPU is
-  off/unavailable or the user picks the cheap path.
-- **GPU pipeline** — TrackNetV3 (+pose bundled) on **RunPod serverless GPU**
-  (`runpod_worker/`), CPU camera/render still on the VM. Faster shuttle tracking.
+  configurable YOLO pose, optional CPU TrackNetV3. No external GPU. Slower; used
+  when GPU is off/unavailable or the user picks the cheap path.
+- **GPU pipeline** — TrackNetV3 and/or configurable YOLO pose on **RunPod
+  serverless GPU** (`runpod_worker/`), CPU camera/render still on the VM. Faster
+  shuttle tracking and higher-accuracy pose when configured.
 
-Pipeline selection is derived from per-job `options` (shuttle=tracknetv3 → GPU;
-else CPU) and recorded on the job as a `pipeline` field so the UI and timing can
+Pipeline selection is derived from per-job `options` (`shuttle=tracknetv3` → GPU;
+pose-only can also use GPU when `POSE_BACKEND` is GPU-first and RunPod is
+configured) and recorded on the job as a `pipeline` field so the UI and timing can
 distinguish them. CPU and GPU have **separate expected generation-time** budgets.
 
 ## 5. Service layout
@@ -74,8 +76,10 @@ Editor state uses `baddy.editor.v1` (see
 shuttle graphic style (ring/fire/square/trail), and pose skeleton style. Today
 the remix API renders rally order + mirror; shuttle and pose style controls are
 preview/persisted client state until the backend render contract accepts overlay
-style props. Music selection/ducking controls are intentionally absent until a
-server-rendered audio-track contract exists.
+style props. Studio pose preview must use real `vision.pose_track` keypoints when
+available, with the Pose layer toggle gating all pose/player overlay visuals.
+Music selection/ducking controls are intentionally absent until a server-rendered
+audio-track contract exists.
 
 ## 9–12. Auth / observability / local dev / testing
 No auth yet (single-tenant). Logs via stage/message on the job. Local dev: run
@@ -109,12 +113,16 @@ Source: user request 2026-06-20 (this session) + harness PDF.
 | P1 | Landscape (16:9) ↔ portrait (9:16) preview toggle; manual reframe in Source rallies to pick highlight regions of the original landscape video | Accept | TASK-013 |
 | P0 | Configurable virtual camera: target = shuttle \| player \| fixed point + zoom/pan + **keyframes** (switch target over time); bake the camera plan into the exported reel (render contract) | Accept | TASK-014 |
 | P1 | Person/player tracking: detect + track players; expose as a camera follow-target and a timeline lane/overlay (feeds TASK-014) | Accept | TASK-015 |
+| P1 | Preserve real pose keypoints end-to-end and expose bounded `pose_track` for Studio skeletons | Accept | TASK-017 |
+| P1 | Decouple public pose option from model version; configure stronger YOLO pose models and GPU-first pose routing | Accept | TASK-018 |
+| P1 | Make Studio Pose layer a true toggle and render skeletons from `pose_track` | Accept | TASK-019 |
+| P1 | Smooth camera zoom by removing hardcoded opening punch and allowing high-quality TrackNet shuttle-follow on POV clips | Accept | TASK-020 |
 
 Intake: `docs/reviews/2026-06-21-studio-camera-feedback.md`. **TASK-011/012/013
 (Cycle 9) and TASK-010/014/015 (Cycle 10) are merged to `main`** (statuses +
-caveats in `docs/progress-ledger.md`); the whole sweep is deploy-pending. The only
-un-e2e-verified piece is the TASK-014 camera export bake (logic unit-tested).
-TASK-008/009 (timeline refinement, manual framing) are tracked in the ledger.
+caveats in `docs/progress-ledger.md`). TASK-017/018/019/020 are the follow-up
+vision/editor/camera hardening slice for real pose skeletons, configurable pose
+models, pose-only GPU routing, and smoother shuttle-follow camera output.
 
 ### P1-INSTANCE decision (research 2026-06-20)
 Budget 10k INR/mo (~$120). **Recommended: `c2d-standard-8`, region `asia-south1`

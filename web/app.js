@@ -10,6 +10,11 @@ function currentOptions() {
   };
 }
 
+function poseOptionEnabled(opts) {
+  const pose = String((opts || {}).pose || "off").toLowerCase();
+  return pose && pose !== "off";
+}
+
 function bindVopt(id) {
   const box = $(id).querySelector("input");
   const sync = () => $(id).classList.toggle("checked", box.checked);
@@ -31,11 +36,13 @@ async function initWorkerOptions() {
     setAvail("voptShuttle", sh.available,
       sh.available ? `TrackNetV3 · ${sh.backend === "runpod" ? "GPU" : "on-device"} · locks camera to the shuttle`
                    : "TrackNetV3 · unavailable (no GPU configured)");
-    const po = cap.pose?.yolo11 || {};
-    setAvail("voptPose", po.available);
+    const po = cap.pose?.pose || cap.pose?.yolo11 || {};
+    setAvail("voptPose", po.available,
+      po.available ? `${po.model || "YOLO pose"} · ${po.backend === "runpod" ? "GPU" : "local"} · players & keypoints`
+                   : "Pose unavailable");
     setAvail("voptCoach", cap.coach?.available);
     $("optShuttle").checked = sh.available && cap.defaults?.shuttle === "tracknetv3";
-    $("optPose").checked = po.available && cap.defaults?.pose === "yolo11";
+    $("optPose").checked = po.available && poseOptionEnabled({ pose: cap.defaults?.pose });
     ["voptShuttle", "voptPose", "voptCoach"].forEach(id =>
       $(id).classList.toggle("checked", $(id).querySelector("input").checked));
   } catch { /* capabilities optional; checkboxes stay as-is */ }
@@ -246,7 +253,7 @@ const fmtPct = (v) => `${Math.round((Number(v) || 0) * 100)}%`;
 function modelSummaryText(models) {
   const m = models || {};
   const bits = [];
-  if (m.pose && m.pose.enabled) bits.push("YOLO pose");
+  if (m.pose && m.pose.enabled) bits.push(m.pose.model ? `Pose ${m.pose.model}` : "YOLO pose");
   if (m.tracknet && m.tracknet.enabled) bits.push("TrackNet model");
   if (m.racquet && m.racquet.enabled) bits.push("racquet measured");
   else if (m.racquet) bits.push("racquet detector pending");
@@ -494,7 +501,7 @@ function defaultEditorState(item) {
     composition: { nodes: [], edges: [] },
     overlays: {
       shuttle: { enabled: true, style: "ring", size: 28, opacity: 0.92, trail: true },
-      pose: { enabled: !!(item.options && item.options.pose === "yolo11"), style: "glow", lineWidth: 3, opacity: 0.82 },
+      pose: { enabled: poseOptionEnabled(item.options), style: "glow", lineWidth: 3, opacity: 0.82 },
     },
     audio: { bed: "current-stitch", editable: false },
   };
@@ -813,7 +820,7 @@ function buildTimeline() {
       { id: "camera", label: "Camera", type: "camera", count: cameraLaneCount(), segs: [] },
       { id: "shuttle", label: "Shuttle FX", count: trackedRallies().length, type: "shuttle",
         segs: trackedRallies().map(s => ({ ...s, layer: "shuttle", label: "Track", sub: rallyVisionText(s.vision) || "source coordinates" })) },
-      { id: "pose", label: "Pose", count: poseReadyCount(), type: "pose", segs: [] },
+      { id: "pose", label: "Pose", count: studio.editorState.overlays.pose.enabled ? poseReadyCount() : 0, type: "pose", segs: [] },
       { id: "soundtrack", label: "Ambient", count: 0, type: "audio", segs: [] },
     ];
   }
@@ -884,8 +891,8 @@ function buildTimeline() {
 
     // Source mode: player presence on the Pose lane — a centroid dot per player
     // across the whole timeline, coloured by track id (parity with the shuttle strip).
-    if (track.id === "pose" && studio.mode === "source") {
-      const pts = allPlayerPoints();
+    if (track.id === "pose" && studio.mode === "source" && studio.editorState.overlays.pose.enabled) {
+      const pts = allPosePoints();
       const step = Math.max(1, Math.ceil(pts.length / 600));
       for (let i = 0; i < pts.length; i += step) {
         const pt = pts[i];
@@ -995,6 +1002,31 @@ function allPlayerPoints() {
   return out.sort((a, b) => a.t - b.t);
 }
 
+function posePersonCenter(person) {
+  const b = person && person.bbox;
+  if (b) return { y: Number(b.y || 0), confidence: Number(b.confidence || person.confidence || 0) };
+  const pts = ((person || {}).keypoints || []).filter(p => Number(p.confidence || 0) >= 0.05);
+  if (!pts.length) return null;
+  return {
+    y: pts.reduce((s, p) => s + Number(p.y || 0), 0) / pts.length,
+    confidence: Number(person.confidence || 0),
+  };
+}
+
+function allPosePoints() {
+  const out = [];
+  for (const seg of reelSegments()) {
+    const poseTrack = ((seg.vision || {}).pose_track || []);
+    for (const f of poseTrack) {
+      for (const p of (f.people || [])) {
+        const c = posePersonCenter(p);
+        if (c) out.push({ t: Number(f.t || 0), y: c.y, id: Number(p.id || 0), confidence: c.confidence });
+      }
+    }
+  }
+  return (out.length ? out : allPlayerPoints()).sort((a, b) => a.t - b.t);
+}
+
 // Capture a real frame per clip segment from the studio video into its filmstrip
 // background. Same-origin video, so the canvas is not tainted. Falls back to the
 // reel thumbnail already set on each .film.
@@ -1079,7 +1111,9 @@ function trackedRallies() {
 function poseReadyCount() {
   return (studio.item.rallies || []).filter(r => {
     const v = r.vision || {};
-    return Number(v.pose_quality || 0) > 0 || (Array.isArray(v.players_track) && v.players_track.length > 0);
+    return Number(v.pose_quality || 0) > 0
+      || (Array.isArray(v.pose_track) && v.pose_track.length > 0)
+      || (Array.isArray(v.players_track) && v.players_track.length > 0);
   }).length;
 }
 
@@ -1094,7 +1128,7 @@ function renderLayerList() {
     { id: "framing", ico: "⛶", title: "Framing", sub: frEdited ? `${fr.fit === "fill" ? "Crop" : "Fit"} · ${Math.round((fr.zoom || 1) * 100)}%` : "Original frame", state: frEdited ? "edited" : "auto" },
     { id: "camera", ico: "◎", title: "Camera", sub: cameraSub(state), state: (state.camera && state.camera.enabled) ? "on" : "auto" },
     { id: "shuttle", ico: "◉", title: "Shuttle FX", sub: `${styleLabel(state.overlays.shuttle.style)} · ${Math.round(state.overlays.shuttle.opacity * 100)}%`, state: state.overlays.shuttle.enabled ? "on" : "off" },
-    { id: "pose", ico: "◇", title: "Players & pose", sub: `boxes · ${poseReadyCount()} rallies`, state: state.overlays.pose.enabled ? "on" : "off" },
+    { id: "pose", ico: "◇", title: "Players & pose", sub: `tracks · ${poseReadyCount()} rallies`, state: state.overlays.pose.enabled ? "on" : "off" },
     { id: "soundtrack", ico: "♪", title: "Soundtrack", sub: "Current stitch bed", state: "fixed" },
   ];
   $("layerList").innerHTML = layers.map(l => `
@@ -1644,16 +1678,49 @@ function renderPlayerBox(b, po, isTarget) {
     `<span class="player-tag">P${Number(b.id) + 1}</span></div>`;
 }
 
-// Real pose keypoints for the current time, or null. Populated by TASK-015 (player
-// /pose tracks in the public job payload); returns null until that lands.
+// Real pose keypoints for the current time, or null. Maps reel time to source time
+// the same way shuttle/player tracks do, then takes the nearest sampled pose frame.
 function currentPose() {
-  return null;
+  const v = $("stVideo");
+  if (!studio.item || !v.duration) return null;
+  const pick = (vision, t) => nearestTrackPoint((vision || {}).pose_track || [], t, 1.0);
+  if (studio.mode === "source") {
+    for (const seg of reelSegments()) {
+      const fr = pick(seg.vision, v.currentTime);
+      if (fr) return fr;
+    }
+    return null;
+  }
+  const seg = reelSegments().find(s => v.currentTime >= s.t0 && v.currentTime <= s.t1);
+  if (!seg) return null;
+  return pick(seg.vision, seg.sourceStart + (v.currentTime - seg.t0));
 }
 
+const POSE_LIMBS = [
+  [5, 7], [7, 9], [6, 8], [8, 10], [5, 6], [5, 11], [6, 12], [11, 12],
+  [11, 13], [13, 15], [12, 14], [14, 16], [0, 1], [0, 2], [1, 3], [2, 4],
+];
+
 function renderPoseOverlay(pose, po) {
-  const pts = (pose.keypoints || []).map(k => videoFitPoint(Number(k.x), Number(k.y)));
-  const dots = pts.map(p => `<span class="pose-joint" style="left:${p.left}%;top:${p.top}%"></span>`).join("");
-  return `<div class="pose-figure ${esc(po.style)}" style="opacity:${po.opacity};--pose-width:${po.lineWidth}px">${dots}</div>`;
+  const people = (pose.people || []).filter(p => Array.isArray(p.keypoints));
+  if (!people.length) return "";
+  const parts = [];
+  for (const person of people) {
+    const pts = person.keypoints.map(k => {
+      if (Number(k.confidence || 0) < 0.12) return null;
+      return videoFitPoint(Number(k.x), Number(k.y));
+    });
+    for (const [a, b] of POSE_LIMBS) {
+      if (!pts[a] || !pts[b]) continue;
+      parts.push(`<line class="pose-limb p${Number(person.id || 0) % 4}" x1="${pts[a].left.toFixed(2)}" y1="${pts[a].top.toFixed(2)}" x2="${pts[b].left.toFixed(2)}" y2="${pts[b].top.toFixed(2)}"></line>`);
+    }
+    pts.forEach((p, i) => {
+      if (!p) return;
+      parts.push(`<circle class="pose-joint p${Number(person.id || 0) % 4}" data-kp="${i}" cx="${p.left.toFixed(2)}" cy="${p.top.toFixed(2)}" r="2.8"></circle>`);
+    });
+  }
+  if (!parts.length) return "";
+  return `<svg class="pose-figure ${esc(po.style)}" viewBox="0 0 100 100" preserveAspectRatio="none" style="opacity:${po.opacity};--pose-width:${po.lineWidth}px">${parts.join("")}</svg>`;
 }
 
 /* ---------- studio edit mode: pick / reorder / mirror / rebuild ---------- */

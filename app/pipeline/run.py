@@ -50,6 +50,17 @@ def _why(v: dict) -> str:
     return ", ".join(f"{f.get('framing')}@{f.get('t')}s" for f in bad[:3]) or "gemini"
 
 
+def _can_use_vision_camera(pov: bool, vision_rally: dict | None) -> bool:
+    """POV footage usually rejects frame-diff tracking, but high-quality TrackNet
+    shuttle points are source-frame coordinates and can still drive the crop."""
+    if not pov:
+        return True
+    try:
+        return float((vision_rally or {}).get("shuttle_quality") or 0.0) >= config.POV_SHUTTLE_FOLLOW_MIN_QUALITY
+    except (TypeError, ValueError):
+        return False
+
+
 def _order_clips(paths: list[Path], log) -> tuple[list[Path], str]:
     """Sort multi-clip uploads by recording time when every clip has one."""
     stamps = [(p, media.creation_time(p)) for p in paths]
@@ -135,12 +146,13 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
         t1 = min(info.duration, r["end"] + config.PAD_AFTER)
         note("tracking", f"rally {i}/{len(picked)}: tracking action {t0:.0f}s-{t1:.0f}s")
         vision_rally = vision_engine.rally(vision, i)
-        path = track.from_vision(proxy, t0, t1, vision_rally) if not pov else None
+        path = track.from_vision(proxy, t0, t1, vision_rally) if _can_use_vision_camera(pov, vision_rally) else None
         shuttle_cam = path is not None   # shuttle-follow camera → lenient framing audit
         if path is None:
             path = track.track(proxy, t0, t1, force_gentle=pov)
         else:
-            note("tracking", f"rally {i}: using shuttle-follow camera")
+            note("tracking", f"rally {i}: using shuttle-follow camera"
+                             f"{' on POV source' if pov else ''}")
         cw_norm, ch_norm = track._crop_norms(proxy)
         ps = validate.path_smoothness(path, cw_norm, ch_norm)
         if not ps["ok"]:
@@ -167,7 +179,7 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
                 nt0, nt1 = t0 + win[0], t0 + win[1]
                 note("validate", f"rally {i}: failed ({_why(v)}) — trimming to clean "
                                  f"window {win[0]:.1f}-{win[1]:.1f}s")
-                path = track.from_vision(proxy, nt0, nt1, vision_rally) if not pov else None
+                path = track.from_vision(proxy, nt0, nt1, vision_rally) if _can_use_vision_camera(pov, vision_rally) else None
                 trim_shuttle_cam = path is not None
                 if path is None:
                     path = track.track(proxy, nt0, nt1, force_gentle=pov)
@@ -200,7 +212,7 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
                 "status", "camera_mode", "shuttle_quality", "player_quality",
                 "pose_quality", "racquet_quality", "pose_samples", "racquet_samples",
                 "racquet_candidate_quality", "racquet_candidate_samples",
-                "mask_enabled", "shuttle_engine", "tracknet", "shuttle", "players"
+                "mask_enabled", "shuttle_engine", "tracknet", "shuttle", "players", "poses"
             )}
         rendered.append(entry)
 
@@ -311,7 +323,8 @@ def remix(input_path, workdir: str | Path, order: list[int], mirror: bool = Fals
             seg = track.camera_segment_for_rally(camera, reel_t0, reel_t0 + clip_dur, t0)
             path = track.from_camera_plan(proxy, t0, t1, r.get("vision"), seg)
             if path is None:   # nothing resolvable → auto camera
-                path = (track.from_vision(proxy, t0, t1, r.get("vision")) if not pov else None) \
+                path = (track.from_vision(proxy, t0, t1, r.get("vision"))
+                        if _can_use_vision_camera(pov, r.get("vision")) else None) \
                     or track.track(proxy, t0, t1, force_gentle=pov)
             clip = workdir / "clips" / f"cam_{r['clip']}"
             render.render_rally(src, info, t0, t1, path, clip,
@@ -319,7 +332,8 @@ def remix(input_path, workdir: str | Path, order: list[int], mirror: bool = Fals
                                 mirror=mirror, annotations=r.get("vision"))
         elif mirror:
             note("render", f"rally {slot}/{len(chosen)}: mirrored re-render")
-            path = track.from_vision(proxy, t0, t1, r.get("vision")) if not pov else None
+            path = (track.from_vision(proxy, t0, t1, r.get("vision"))
+                    if _can_use_vision_camera(pov, r.get("vision")) else None)
             if path is None:
                 path = track.track(proxy, t0, t1, force_gentle=pov)
             clip = workdir / "clips" / f"mirror_{r['clip']}"
