@@ -213,9 +213,15 @@ def _sample_shuttle_track(points: list | None, max_points: int = 180) -> list[di
 
     Internal vision output can contain dense frame-by-frame points. The editor only
     needs enough normalized samples to place/preview shuttle graphics, so keep the
-    response small and strip non-coordinate vendor details.
+    response small and strip non-coordinate vendor details. False detections are
+    filtered with the same outlier rejection the camera uses, so the overlay never
+    shows a marker jumping to a light or a shirt.
     """
     if not isinstance(points, list) or not points:
+        return []
+    from .pipeline import track as _track
+    points = _track.filter_shuttle_points(points)
+    if not points:
         return []
     step = max(1, math.ceil(len(points) / max_points))
     out = []

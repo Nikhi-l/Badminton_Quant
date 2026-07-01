@@ -664,18 +664,19 @@ function renderComposeLibrary() {
       <span class="lib-thumb"${c.thumb ? ` style="background-image:url('${esc(c.thumb)}')"` : ""}></span>
       <span class="lib-label"><b>${esc(c.label)}</b><span>${esc(c.kind)}</span></span>
     </button>`).join("") || `<div class="muted" style="padding:8px;font-size:11px">No clips yet — generate a few reels first.</div>`;
-  list.querySelectorAll("[data-lib]").forEach(b => b.onclick = () => addClipNode(clips[Number(b.dataset.lib)]));
+  list.querySelectorAll("[data-lib]").forEach(b => initLibraryDrag(b, clips[Number(b.dataset.lib)]));
 }
 
 let _nodeSeq = 0;
-function addClipNode(clip) {
+function addClipNode(clip, at = null) {
   const comp = compositionState();
   const n = comp.nodes.length;
   comp.nodes.push({
     id: `n${_nodeSeq++}_${comp.nodes.length}`,
     kind: clip.kind, refId: clip.refId, src: clip.src, label: clip.label, thumb: clip.thumb,
     t0: clip.t0, t1: clip.t1,
-    x: 40 + (n % 4) * 34, y: 40 + (n % 4) * 28,   // stagger drops
+    x: at ? at.x : 40 + (n % 4) * 34,   // drop position, or staggered default
+    y: at ? at.y : 40 + (n % 4) * 28,
   });
   saveEditorState();
   renderCanvasNodes();
@@ -706,12 +707,27 @@ function renderCanvasNodes() {
   $("composeHint").hidden = comp.nodes.length > 0;
 }
 
-// Drag a clip node in canvas space (screen delta / scale = world delta).
+// Convert a client (screen) point into canvas-node world coordinates, inverting
+// the canvas translate+scale (transform-origin is the stage centre).
+function clientToWorld(clientX, clientY) {
+  const stage = $("studioStage"), rect = stage.getBoundingClientRect();
+  const c = studio.canvas, s = c.scale || 1;
+  const cx = rect.width / 2, cy = rect.height / 2;
+  return {
+    x: (clientX - rect.left - cx - c.x) / s + cx,
+    y: (clientY - rect.top - cy - c.y) / s + cy,
+  };
+}
+
+// Drag a clip node in canvas space. Listeners go on WINDOW: element-bound
+// pointermove stops firing the instant a fast drag outruns the node (the "drag
+// doesn't work properly" bug) — window-level tracking never loses the pointer.
 function initNodeDrag(el) {
   const id = el.dataset.node;
   el.addEventListener("pointerdown", (e) => {
     if (e.target.closest(".clip-node-x")) return;
     e.stopPropagation();   // don't pan the canvas while dragging a node
+    e.preventDefault();
     const nd = compositionState().nodes.find(n => n.id === id);
     if (!nd) return;
     const start = { x: e.clientX, y: e.clientY, ox: nd.x, oy: nd.y };
@@ -722,18 +738,51 @@ function initNodeDrag(el) {
       nd.y = start.oy + (ev.clientY - start.y) / s;
       el.style.left = `${nd.x}px`; el.style.top = `${nd.y}px`;
     };
-    const up = (ev) => {
+    const up = () => {
       el.classList.remove("dragging");
-      try { el.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
-      el.removeEventListener("pointermove", move);
-      el.removeEventListener("pointerup", up);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
       saveEditorState();
     };
-    // bind move/up BEFORE capturing — setPointerCapture can throw, and the drag must
-    // still work if it does.
-    el.addEventListener("pointermove", move);
-    el.addEventListener("pointerup", up);
-    try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  });
+}
+
+// Drag a clip from the library onto the canvas: a ghost follows the pointer and
+// the node lands where you drop it (in world coordinates). A plain click (no
+// movement) still adds the clip at the staggered default spot.
+function initLibraryDrag(btn, clip) {
+  btn.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    const startX = e.clientX, startY = e.clientY;
+    let ghost = null;
+    const move = (ev) => {
+      if (!ghost && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 6) {
+        ghost = document.createElement("div");
+        ghost.className = "lib-ghost";
+        ghost.textContent = clip.label;
+        document.body.appendChild(ghost);
+      }
+      if (ghost) { ghost.style.left = `${ev.clientX + 10}px`; ghost.style.top = `${ev.clientY + 8}px`; }
+    };
+    const up = (ev) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      if (!ghost) { addClipNode(clip); return; }          // plain click
+      ghost.remove();
+      const stage = $("studioStage"), r = stage.getBoundingClientRect();
+      const inStage = ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
+      if (!inStage) return;                                // dropped outside — cancel
+      const w = clientToWorld(ev.clientX, ev.clientY);
+      addClipNode(clip, { x: w.x - 86, y: w.y - 48 });     // centre the card on the drop
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   });
 }
 
@@ -1625,14 +1674,27 @@ function recentShuttleScreenPoints(windowSec = 0.7) {
     .map(p => videoFitPoint(Number(p.x), Number(p.y)));
 }
 
+// Comet-style trail: per-segment opacity and width ramp from the oldest point to
+// the newest, so the trail fades out behind the shuttle instead of reading as a
+// flat line. A soft glow dot marks the freshest end.
 function shuttleTrailSvg(sh) {
   const pts = recentShuttleScreenPoints();
   if (pts.length < 2) return "";
-  const poly = pts.map(p => `${p.left.toFixed(2)},${p.top.toFixed(2)}`).join(" ");
-  return `<svg class="shuttle-trail-svg" viewBox="0 0 100 100" preserveAspectRatio="none">` +
-    `<polyline points="${poly}" fill="none" stroke="var(--lime)" stroke-width="2.4" ` +
-    `stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" ` +
-    `style="opacity:${0.55 * sh.opacity}"/></svg>`;
+  const segs = [];
+  const n = pts.length - 1;
+  for (let i = 0; i < n; i++) {
+    const k = (i + 1) / n;                       // 0 oldest → 1 newest
+    const w = (0.8 + 2.6 * k).toFixed(2);
+    const o = (sh.opacity * (0.08 + 0.62 * k)).toFixed(3);
+    segs.push(`<line x1="${pts[i].left.toFixed(2)}" y1="${pts[i].top.toFixed(2)}" ` +
+      `x2="${pts[i + 1].left.toFixed(2)}" y2="${pts[i + 1].top.toFixed(2)}" ` +
+      `stroke="var(--lime)" stroke-width="${w}" stroke-linecap="round" ` +
+      `vector-effect="non-scaling-stroke" opacity="${o}"></line>`);
+  }
+  const tip = pts[pts.length - 1];
+  segs.push(`<circle cx="${tip.left.toFixed(2)}" cy="${tip.top.toFixed(2)}" r="1.6" ` +
+    `fill="var(--lime)" opacity="${(sh.opacity * 0.5).toFixed(3)}" class="trail-tip"></circle>`);
+  return `<svg class="shuttle-trail-svg" viewBox="0 0 100 100" preserveAspectRatio="none">${segs.join("")}</svg>`;
 }
 
 function updateOverlayPreview() {

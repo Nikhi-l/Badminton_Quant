@@ -509,10 +509,68 @@ def _two_player_tracks(player_frames: list, times) -> list:
     return res
 
 
+def filter_shuttle_points(shuttle_frames: list, min_conf: float = 0.3,
+                          window: int = 3, max_residual: float = 0.16,
+                          speed_k: float = 2.5, iterations: int = 2) -> list:
+    """Reject false shuttle detections (custom tracking filter).
+
+    TrackNet false positives are usually isolated teleports — a single detection
+    far from the local trajectory (a light, a line judge's shirt) that yanks the
+    camera. Hampel-style pass: each point is compared to the median of up to
+    ``window`` kept neighbours per side; the allowed residual scales with the
+    local motion (``speed_k`` × median neighbour step) so genuine fast smashes
+    survive while isolated spikes do not. Runs ``iterations`` times so a spike
+    inside an endpoint's window can't poison the median and drop real points —
+    the second pass re-evaluates everything against spike-free windows.
+    Low-confidence and out-of-frame points are dropped. Order is preserved.
+    """
+    cands = []
+    for s in (shuttle_frames or []):
+        try:
+            t, x, y = float(s["t"]), float(s["x"]), float(s["y"])
+            conf = float(s.get("confidence", 0.0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if conf >= min_conf and 0.0 < x <= 1.0 and 0.0 < y <= 1.0:
+            cands.append((t, x, y, s))
+    if len(cands) < 3:
+        return [c[3] for c in cands]
+    cands.sort(key=lambda r: r[0])
+    n = len(cands)
+    xs = np.array([c[1] for c in cands])
+    ys = np.array([c[2] for c in cands])
+    keep = np.ones(n, dtype=bool)
+    for _ in range(max(1, iterations)):
+        kept_idx = np.where(keep)[0]
+        if len(kept_idx) < 2:
+            break
+        new_keep = np.ones(n, dtype=bool)
+        for i in range(n):
+            pos = int(np.searchsorted(kept_idx, i))
+            left = [int(j) for j in kept_idx[max(0, pos - window):pos] if j != i]
+            right = [int(j) for j in kept_idx[pos:pos + window + 1] if j != i][:window]
+            nb = left + right
+            if not nb:
+                continue
+            med_x, med_y = float(np.median(xs[nb])), float(np.median(ys[nb]))
+            res = float(np.hypot(xs[i] - med_x, ys[i] - med_y))
+            if len(nb) > 1:
+                steps = np.hypot(np.diff(xs[nb]), np.diff(ys[nb]))
+                allowed = max(max_residual, speed_k * float(np.median(steps)))
+            else:
+                allowed = max_residual
+            new_keep[i] = res <= allowed
+        keep = new_keep
+    return [cands[i][3] for i in range(n) if keep[i]]
+
+
 def _shuttle_track(shuttle_frames: list, times, max_gap_s: float = 0.5):
     """Per-frame interpolated shuttle (x, y), NaN where there is no confident
     detection within `max_gap_s`. Linear interpolation across short gaps keeps the
-    camera following continuously instead of snapping back on every missed frame."""
+    camera following continuously instead of snapping back on every missed frame.
+    False detections are filtered out first so a single bad point can't yank the
+    interpolated path (and with it the camera)."""
+    shuttle_frames = filter_shuttle_points(shuttle_frames)
     pts = sorted(((float(s["t"]), float(s["x"]), float(s["y"]))
                   for s in (shuttle_frames or [])
                   if float(s.get("confidence", 0.0)) >= 0.3
@@ -541,6 +599,70 @@ def _shuttle_track(shuttle_frames: list, times, max_gap_s: float = 0.5):
         elif right is not None and (ts[right] - t) <= max_gap_s:
             sx[i], sy[i] = px[right], py[right]
     return sx, sy
+
+
+def _contain_targets(xs, ys, zs, cw, ch, shu_x, shu_y, tracks,
+                     pad: float = 0.035, smooth_win: int = 9):
+    """Post-smoothing guarantee that the crop keeps its subjects in frame.
+
+    The heavy path solver optimises smoothness, which can drag the crop off a
+    fast shuttle or the near player ("the highlight loses the player/shuttle").
+    Per frame this pass gathers the required extents — the shuttle point and the
+    near player's body box — and (a) zooms out when they can't fit at the current
+    zoom, (b) shifts the centre minimally to contain them. Runs shift → light
+    re-smooth → shift so the final path is both smooth and containing; the last
+    pass is unsmoothed, so containment wins at output.
+    """
+    xs = np.asarray(xs, np.float64).copy()
+    ys = np.asarray(ys, np.float64).copy()
+    zs = np.asarray(zs, np.float64).copy()
+    n = len(xs)
+
+    def required_extent(i):
+        rx, ry = [], []
+        sx, sy = float(shu_x[i]), float(shu_y[i])
+        if not np.isnan(sx):
+            rx.append(sx)
+            ry.append(sy)
+        near = tracks[i][0] if i < len(tracks) else None
+        if near is not None:
+            bx, by, bhw, bhh = near
+            rx += [bx - bhw * 0.6, bx + bhw * 0.6]
+            ry += [by - bhh * 0.8, by + bhh * 0.8]
+        return rx, ry
+
+    def shift_pass():
+        for i in range(n):
+            rx, ry = required_extent(i)
+            if not rx:
+                continue
+            hw, hh = cw / (2 * zs[i]), ch / (2 * zs[i])
+            need_hw = (max(rx) - min(rx)) / 2 + pad
+            need_hh = (max(ry) - min(ry)) / 2 + pad
+            if need_hw > hw or need_hh > hh:      # zoom out until they fit
+                z_fit = min(cw / (2 * need_hw), ch / (2 * need_hh))
+                zs[i] = max(Z_HARD, min(zs[i], z_fit))
+                hw, hh = cw / (2 * zs[i]), ch / (2 * zs[i])
+            lo = max(rx) + pad - hw
+            hi = min(rx) - pad + hw
+            xs[i] = min(max(xs[i], lo), hi) if lo <= hi else (min(rx) + max(rx)) / 2
+            lo = max(ry) + pad - hh
+            hi = min(ry) - pad + hh
+            ys[i] = min(max(ys[i], lo), hi) if lo <= hi else (min(ry) + max(ry)) / 2
+            xs[i] = float(np.clip(xs[i], hw, 1 - hw))
+            ys[i] = float(np.clip(ys[i], hh, 1 - hh))
+
+    win = smooth_win if n >= smooth_win else max(3, n | 1)
+    shift_pass()
+    xs = _hann_smooth(xs.astype(np.float32), win).astype(np.float64)
+    ys = _hann_smooth(ys.astype(np.float32), win).astype(np.float64)
+    zs = _hann_smooth(zs.astype(np.float32), win).astype(np.float64)
+    shift_pass()                                   # final, unsmoothed → guaranteed
+    hw = cw / (2 * zs)
+    hh = ch / (2 * zs)
+    xs = np.clip(xs, hw, 1 - hw)
+    ys = np.clip(ys, hh, 1 - hh)
+    return xs, ys, zs.astype(np.float32)
 
 
 def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
@@ -671,13 +793,21 @@ def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
     win = 17 if n >= 17 else max(3, n | 1)
     xs = _hann_smooth(xs, win)
     ys = _hann_smooth(ys, win)
-    zs = _hann_smooth(zs, win)
+    # Zoom gets a wider window than pan: zoom "breathing" reads much worse than a
+    # slightly lagged pan, so smooth z over ~2x the pan window.
+    zwin = min(n | 1, win * 2 + 1)
+    zs = _hann_smooth(zs, zwin)
     hw = cw / (2 * zs)
     hh = ch / (2 * zs)
     xs = _solve_smooth_path(xs.astype(np.float64), hw.astype(np.float64),
                             (1.0 - hw).astype(np.float64), beta=5e4, w_bound=600.0)
     ys = _solve_smooth_path(ys.astype(np.float64), hh.astype(np.float64),
                             (1.0 - hh).astype(np.float64), beta=2e4, w_bound=600.0)
+    # Keep-in-frame guarantee: never let smoothing drag the crop off the shuttle
+    # or the near player (shift + zoom-out where required, lightly re-smoothed).
+    # In shuttle-led mode the boxes are untrusted, so only the shuttle is required.
+    xs, ys, zs = _contain_targets(xs, ys, zs, cw, ch, shu_x, shu_y,
+                                  [] if shuttle_led else tracks)
     return FocusPath(t0=t0, fps=fps, xs=xs, ys=ys, zs=zs.astype(np.float32))
 
 

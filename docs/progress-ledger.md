@@ -31,14 +31,13 @@ docs commit after each functional slice.
 | 2026-06-21 | Landscape view + Source framing | Merged (deploy pending) | TASK-013, Cycle 9 — Portrait/Landscape toggle (source native aspect); framing crop/zoom/pan in Source mode; cache-bust v=18. Verified in preview |
 | 2026-06-23 | Configurable camera + keyframes | Merged (deploy pending) | TASK-014, Cycle 10 — target shuttle\|player\|point + keyframes; Camera layer/inspector + timeline lane; preview follows target w/ blend; backend from_camera_plan + camera_segment_for_rally + remix(camera=) bake; _validate_camera. 6 unit tests. e2e MP4 bake wired but not yet visually confirmed on a real render |
 | 2026-06-23 | Player/person tracking | Merged (deploy pending) | TASK-015, Cycle 10 — players_track (stable ids) exposed; player boxes overlay (hide when untracked) + Pose-lane presence dots; layer "Players & pose"; feeds TASK-014 player target. Unit-tested |
-| 2026-06-26 | Pose contract + model/camera upgrade | Active branch | TASK-017/018/019/020, Cycle 12 — preserve pose keypoints as `pose_track`, configurable YOLO pose model metadata/routing, real Studio skeleton rendering + toggle gating, render zoom punch disabled by default, POV TrackNet shuttle-follow allowed when quality is high. |
+| 2026-06-26 | Pose contract + model/camera upgrade | Merged (Cycle 12) | TASK-017/018/019/020 — `pose_track` keypoints end-to-end, configurable YOLO pose (yolo26, verified via build-time weight bake; yolo11n fallback), real Studio skeletons + toggle gating, zoom punch off by default, POV shuttle-follow when quality high. Takeover hardening: deterministic routing tests, GPU-first routing test |
+| 2026-06-26 | Shuttle filter + keep-in-frame + compose drag | Merged (Cycle 12) | User feedback batch — Hampel-style false-detection filter (camera + overlay), `_contain_targets` keep-in-frame guarantee, wider zoom smoothing, Compose drag via window listeners + library ghost-drag-to-drop, comet trail effect, UI polish. 5 new regression tests |
 
 ## Active priorities
-1. Finish and review `feat/TASK-017-pose-camera-upgrades`:
-   TASK-017/018/019/020 are implemented together because Studio skeleton rendering
-   depends on the pose contract, and the model/router/camera changes share the same
-   vision metadata surface.
-2. After merge/deploy, run one representative RunPod smoke job and record actual
+1. **Rebuild + redeploy the RunPod worker image** (handler now emits `poses`; weights
+   baked) and deploy the VM — pose skeletons on GPU jobs need both.
+2. After deploy, run one representative RunPod smoke job and record actual
    `pose_model`, `pose_quality`, `pose_samples`, `shuttle_quality`, latency, and
    Studio screenshot/render notes.
 - Follow-ups (not blocking): unify render-time player identity (near/far) with the
@@ -50,13 +49,11 @@ docs commit after each functional slice.
 |---|---|---|---|
 | Mumbai move needs GoDaddy DNS cutover | Low | Cycle 7 GCP audit | TASK-006 completed in place; Mumbai remains optional future migration |
 | Original upload soft (rendered from 480p proxy; ~/Downloads TCC-blocked) | Med | session 2026-06-19 | re-run on sharp source when file access restored |
-| YOLO26 pose defaults depend on deployed `ultralytics` support and weight availability | Med | TASK-018 | configured fallback remains `yolo11n-pose.pt`; RunPod smoke must record actual loaded model |
+| YOLO26 pose defaults depend on deployed `ultralytics` support and weight availability | Closed | TASK-018 | yolo26s verified loading locally (ultralytics 8.4.70); worker Dockerfile bakes yolo26m+yolo11n at build (build fails fast if unavailable) |
 | Pose keypoint tracks increase full job payload size | Low | TASK-017 | bounded `pose_track` sampler; gallery light payload still omits per-rally tracks |
 
 ## Next checkpoint
-- Goal: finish TASK-017/018/019/020 tests on `feat/TASK-017-pose-camera-upgrades`,
-  then open PR.
-- Required tests: targeted pose/camera/editor tests, `node --check web/app.js`,
-  and `./scripts/check.sh`.
-- Expected deploy proof after merge: baddyai.com health plus a representative
-  RunPod pose/shuttle job opened in Studio.
+- Goal: worker image rebuilt (`pose` output + baked weights) + VM deployed; then a
+  representative RunPod pose/shuttle job opened in Studio showing skeletons.
+- Required tests: `./scripts/check.sh` (32 passing), baddyai.com health, workers
+  ready on the new image.

@@ -1,6 +1,6 @@
 # TASK-020: Camera framing smoothing
 
-**Status:** active
+**Status:** done (2026-06-26) — finished + hardened by the takeover session: deterministic pipeline-routing tests, yolo26 verified via build-time weight bake, shuttle false-detection filter, keep-in-frame containment, compose drag fix, comet trail, UI polish.
 **Branch:** `feat/TASK-017-pose-camera-upgrades`
 **Base SHA:** `251be38`
 **PRD section:** §1 / §4 / §16 P0 camera follows shuttle

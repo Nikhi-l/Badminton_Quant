@@ -1,6 +1,6 @@
 # TASK-019: Studio pose toggle and skeleton render
 
-**Status:** active
+**Status:** done (2026-06-26) — finished + hardened by the takeover session: deterministic pipeline-routing tests, yolo26 verified via build-time weight bake, shuttle false-detection filter, keep-in-frame containment, compose drag fix, comet trail, UI polish.
 **Branch:** `feat/TASK-017-pose-camera-upgrades`
 **Base SHA:** `251be38`
 **PRD section:** §8a / §16 TASK-011 + TASK-012 follow-up
