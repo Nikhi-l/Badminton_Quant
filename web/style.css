@@ -435,6 +435,51 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
 .q-chip.done{color:#07080b;background:var(--lime);border-color:var(--lime)}
 .q-chip.failed{color:#fff;background:#d9484a;border-color:#d9484a}
 .q-chip.queued{color:#aeb5c6}
+/* TASK-021: AI Coach dashboard + session report card */
+.hero-strip{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:26px auto 6px;max-width:940px}
+.hs{flex:1 1 190px;max-width:230px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:rgba(16,18,24,.55);backdrop-filter:blur(6px);text-align:left}
+.hs b{display:block;font-size:13px;color:#e7eaf0;font-family:"Space Grotesk",Inter,sans-serif}
+.hs span{display:block;font-size:11px;color:#8b93a6;margin-top:3px}
+.coach-dash{max-width:1100px;margin:0 auto;padding:26px 24px 8px}
+.coach-sub{font-size:12.5px;margin-top:4px}
+.report-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:14px 0 16px}
+.rs-tile{padding:14px 12px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,rgba(183,245,66,.05),rgba(255,255,255,.015));text-align:center}
+.rs-tile b{display:block;font-size:22px;font-family:"Space Grotesk",Inter,sans-serif;background:linear-gradient(135deg,var(--lime),var(--cyan));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.rs-tile span{display:block;font-size:10.5px;color:#8b93a6;margin-top:4px;text-transform:uppercase;letter-spacing:.05em}
+.session-list{display:flex;flex-direction:column;gap:10px}
+.q-item.sess{cursor:default}
+.q-item.sess.q-done{cursor:pointer}
+.q-item.sess.q-done:hover{border-color:rgba(183,245,66,.4)}
+.sess-thumb{width:96px;height:56px}
+.sess-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+.sess-chips .pill{font-size:10px;padding:2px 8px}
+.pill-coach{border-color:rgba(183,245,66,.4);color:var(--lime)}
+.sess-actions{display:flex;flex-direction:column;gap:6px;flex:0 0 auto}
+/* report card modal */
+.report-modal .modal-card{max-width:820px;width:min(820px,94vw);max-height:92vh;overflow-y:auto}
+.report-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:10px}
+.report-head h3{font-family:"Space Grotesk",Inter,sans-serif;font-size:18px}
+.report-head .muted{font-size:11.5px}
+#reportVideo{width:100%;max-height:340px;background:#000;border-radius:12px}
+.report-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin:14px 0}
+.report-metrics .rs-tile{padding:10px 8px}
+.report-metrics .rs-tile b{font-size:17px}
+.report-block{margin:16px 0 0;border-top:1px solid var(--line);padding-top:14px}
+.report-block h4{font-size:13px;letter-spacing:.02em;margin-bottom:10px}
+.report-block h5{font-size:11.5px;color:#aeb5c6;margin:10px 0 6px;text-transform:uppercase;letter-spacing:.06em}
+.rally-bars{display:flex;align-items:flex-end;gap:5px;height:110px;padding:6px 2px;overflow-x:auto}
+.rb{flex:1 0 22px;max-width:40px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px;cursor:default}
+.rb i{display:block;width:100%;border-radius:5px 5px 2px 2px;background:#2b2f3a;transition:.15s}
+.rb.used i{background:linear-gradient(180deg,var(--lime),rgba(183,245,66,.45));box-shadow:0 0 12px rgba(183,245,66,.25)}
+.rb:hover i{filter:brightness(1.25)}
+.rb em{font-style:normal;font-size:9px;color:#7a8499}
+.coach-headline{font-size:14.5px;color:#e7eaf0;margin:6px 0 10px;font-style:italic}
+.coach-cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.coach-cols ul,.coach-moments{margin:0;padding-left:18px;display:grid;gap:5px}
+.coach-cols li,.coach-moments li{font-size:12.5px;color:#c6ccd9;line-height:1.45}
+.coach-caveats{font-size:11px;margin-top:10px}
+.report-actions{display:flex;gap:10px;margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+@media (max-width:720px){.coach-cols{grid-template-columns:1fr}.sess-actions{flex-direction:row}}
 .seg.audio.has-wave{background:rgba(255,207,106,.06);padding:0}
 .seg.audio.has-wave>b,.seg.audio.has-wave>span{position:relative;z-index:1;padding-left:4px}
 

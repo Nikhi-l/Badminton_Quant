@@ -59,8 +59,22 @@ generation time = `finished_at − started_at`.
   status, pipeline, submitted_at, gen_seconds.
 
 ## 8. Frontend flows
-Upload → job appears in **Queue** with live status + timer → on done moves to
-gallery / My Reels. Queue shows failed jobs with the error.
+Upload → session appears in **Your AI Coach** with live status + timer → on done
+it becomes a scored session on the user's report card (and lands in gallery /
+My Reels). Failed sessions show the error inline.
+
+### 8b. AI Coach dashboard (TASK-021)
+The home page is positioned as **AI-powered badminton analytics** (an AI coach,
+not just a highlight generator). Per user (localStorage-scoped until auth):
+- an aggregate **report strip** — sessions, rallies analyzed, play time analyzed,
+  highlight reels, avg shuttle-tracking quality, coach reports;
+- a **session history** list — recording thumb, live status, pipeline + timing,
+  per-session metric pills, and actions;
+- a per-session **report card** modal — the recording, metric tiles (rallies
+  found/used, longest/avg rally, play analyzed, tracking quality), a
+  rally-breakdown bar chart (lime = in the reel), grounded Gemini coach notes
+  (headline/strengths/work-on/key moments/caveats), and **Create highlight
+  clips** → Studio.
 
 ### 8a. Reel editor UI
 After a reel is done, **Studio** opens as a professional AI reel editor, not just
@@ -117,6 +131,7 @@ Source: user request 2026-06-20 (this session) + harness PDF.
 | P1 | Decouple public pose option from model version; configure stronger YOLO pose models and GPU-first pose routing | Accept | TASK-018 |
 | P1 | Make Studio Pose layer a true toggle and render skeletons from `pose_track` | Accept | TASK-019 |
 | P1 | Smooth camera zoom by removing hardcoded opening punch and allowing high-quality TrackNet shuttle-follow on POV clips | Accept | TASK-020 |
+| P1 | Reposition UI as AI badminton analytics: AI Coach dashboard (per-user session history + report card w/ recordings, analytics, coach notes) keeping highlight creation | Accept | TASK-021 (on branch) |
 
 Intake: `docs/reviews/2026-06-21-studio-camera-feedback.md`. **TASK-011/012/013
 (Cycle 9) and TASK-010/014/015 (Cycle 10) are merged to `main`** (statuses +

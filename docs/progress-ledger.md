@@ -33,6 +33,7 @@ docs commit after each functional slice.
 | 2026-06-23 | Player/person tracking | Merged (deploy pending) | TASK-015, Cycle 10 — players_track (stable ids) exposed; player boxes overlay (hide when untracked) + Pose-lane presence dots; layer "Players & pose"; feeds TASK-014 player target. Unit-tested |
 | 2026-06-26 | Pose contract + model/camera upgrade | Merged (Cycle 12) | TASK-017/018/019/020 — `pose_track` keypoints end-to-end, configurable YOLO pose (yolo26, verified via build-time weight bake; yolo11n fallback), real Studio skeletons + toggle gating, zoom punch off by default, POV shuttle-follow when quality high. Takeover hardening: deterministic routing tests, GPU-first routing test |
 | 2026-06-26 | Shuttle filter + keep-in-frame + compose drag | Merged (Cycle 12) | User feedback batch — Hampel-style false-detection filter (camera + overlay), `_contain_targets` keep-in-frame guarantee, wider zoom smoothing, Compose drag via window listeners + library ghost-drag-to-drop, comet trail effect, UI polish. 5 new regression tests |
+| 2026-07-03 | AI Coach analytics UI | On branch (review) | TASK-021 — repositioned home as AI badminton analytics (stupa-inspired tone, original copy); AI Coach dashboard: aggregate report strip + session history; per-session report-card modal (metrics, rally bars, Gemini coach notes) → Studio. v=26. Preview-verified; awaiting merge/deploy approval |
 
 ## Active priorities
 1. ~~Rebuild + redeploy the RunPod worker~~ **DONE 2026-07-01**: image

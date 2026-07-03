@@ -381,50 +381,178 @@ document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
   renderGallery();
 });
 
-/* ---------- TASK-005: job queue (live status of your submissions) ---------- */
+/* ---------- TASK-021: AI Coach dashboard — sessions, report card, analytics ---------- */
 let queueTimer = null;
 
-async function loadQueue() {
+async function loadCoach() {
   try {
-    const all = (await (await fetch("/api/jobs")).json()).jobs || [];
-    const mine = all.filter(j => myJobs.has(j.id));
-    renderQueue(mine);
+    const [jobsRes, galRes] = await Promise.all([
+      fetch("/api/jobs").then(r => r.json()),
+      fetch("/api/gallery").then(r => r.json()).catch(() => ({ items: [] })),
+    ]);
+    const byId = {};
+    (galRes.items || []).forEach(g => { byId[g.id] = g; });
+    const mine = (jobsRes.jobs || []).filter(j => myJobs.has(j.id))
+      .map(j => ({ ...(byId[j.id] || {}), ...j }));
+    renderCoach(mine);
     const active = mine.some(j => j.status === "queued" || j.status === "processing");
     clearTimeout(queueTimer);
-    if (active) queueTimer = setTimeout(loadQueue, 4000);   // live refresh while jobs run
-  } catch { /* queue is best-effort */ }
+    if (active) queueTimer = setTimeout(loadCoach, 4000);   // live refresh while jobs run
+  } catch { /* dashboard is best-effort */ }
 }
+const loadQueue = loadCoach;   // legacy callers
 
 function fmtDur(sec) {
   sec = Math.max(0, Math.round(Number(sec) || 0));
+  if (sec >= 3600) return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
   return sec >= 60 ? `${Math.floor(sec / 60)}m ${sec % 60}s` : `${sec}s`;
 }
 
-function renderQueue(jobs) {
-  const sec = $("queueSection"), list = $("queueList");
-  if (!jobs.length) { sec.hidden = true; return; }
-  sec.hidden = false;
-  list.innerHTML = jobs.map(j => {
+// Aggregate report strip: the user's whole badminton journey in one line.
+function coachAggregates(sessions) {
+  const done = sessions.filter(s => s.status === "done");
+  const sum = (f) => done.reduce((a, s) => a + (Number(f(s)) || 0), 0);
+  const qs = done.map(s => Number(((s.vision || {}).summary || {}).shuttle_quality) || 0).filter(q => q > 0);
+  return {
+    sessions: sessions.length,
+    rallies: sum(s => s.n_rallies_found || s.n_rallies_used),
+    playTime: sum(s => s.source_duration),
+    reels: done.length,
+    avgShuttleQ: qs.length ? qs.reduce((a, b) => a + b, 0) / qs.length : 0,
+    coachNotes: done.filter(s => s.coach && s.coach.status === "ok").length,
+  };
+}
+
+function renderCoach(sessions) {
+  const list = $("sessionList"), strip = $("coachStrip");
+  $("coachEmpty").hidden = sessions.length > 0;
+  if (!sessions.length) { strip.hidden = true; list.innerHTML = ""; return; }
+
+  const a = coachAggregates(sessions);
+  strip.hidden = false;
+  strip.innerHTML = `
+    <div class="rs-tile"><b>${a.sessions}</b><span>session${a.sessions === 1 ? "" : "s"}</span></div>
+    <div class="rs-tile"><b>${a.rallies}</b><span>rallies analyzed</span></div>
+    <div class="rs-tile"><b>${a.playTime ? fmtDur(a.playTime) : "—"}</b><span>play analyzed</span></div>
+    <div class="rs-tile"><b>${a.reels}</b><span>highlight reels</span></div>
+    <div class="rs-tile"><b>${a.avgShuttleQ ? fmtPct(a.avgShuttleQ) : "—"}</b><span>avg shuttle tracking</span></div>
+    <div class="rs-tile"><b>${a.coachNotes}</b><span>coach reports</span></div>`;
+
+  list.innerHTML = sessions.map(j => {
     const st = j.status || "queued";
     const pipe = (j.pipeline && j.pipeline !== "unknown") ? j.pipeline.toUpperCase() : "";
-    const timing = st === "done" && j.gen_seconds != null ? `generated in ${fmtDur(j.gen_seconds)}`
-      : st === "processing" ? `running${j.expected_gen_seconds ? ` · ~${fmtDur(j.expected_gen_seconds)}` : ""}`
+    const timing = st === "done" && j.gen_seconds != null ? `analyzed in ${fmtDur(j.gen_seconds)}`
+      : st === "processing" ? `${esc(j.stage || "running")}${j.expected_gen_seconds ? ` · ~${fmtDur(j.expected_gen_seconds)}` : ""}`
       : st === "queued" ? "waiting in queue"
       : "did not finish";
-    const stageTxt = (st === "processing" && j.stage) ? ` · ${esc(j.stage)}` : "";
-    const ic = st === "failed" ? "⚠" : st === "done" ? "✓" : st === "processing" ? "●" : "…";
-    return `<div class="q-item q-${st}">
-      <div class="q-thumb">${j.thumb ? `<img src="${esc(j.thumb)}" alt="">` : `<span class="q-ic">${ic}</span>`}</div>
+    const q = ((j.vision || {}).summary || {});
+    const chips = st === "done" ? `
+      <div class="sess-chips">
+        ${j.duration ? `<span class="pill">⏱ ${Math.round(j.duration)}s reel</span>` : ""}
+        ${j.n_rallies_found ? `<span class="pill">🏸 ${j.n_rallies_used || 0}/${j.n_rallies_found} rallies</span>` : ""}
+        ${q.shuttle_quality ? `<span class="pill">🎯 ${fmtPct(q.shuttle_quality)} shuttle</span>` : ""}
+        ${q.pose_quality ? `<span class="pill">🦴 ${fmtPct(q.pose_quality)} pose</span>` : ""}
+        ${j.coach && j.coach.status === "ok" ? `<span class="pill pill-coach">🧠 coach ${fmtPct(j.coach.confidence)}</span>` : ""}
+      </div>` : "";
+    const ic = st === "failed" ? "⚠" : st === "processing" ? "●" : "…";
+    return `<div class="q-item sess q-${st}" data-sid="${esc(j.id)}">
+      <div class="q-thumb sess-thumb">${j.thumb ? `<img src="${esc(j.thumb)}" alt="">` : `<span class="q-ic">${ic}</span>`}</div>
       <div class="q-body">
         <div class="q-top"><b>${esc(j.filename || j.id)}</b><span class="q-chip ${st}">${st}</span></div>
-        <div class="q-meta">${pipe ? `${esc(pipe)} · ` : ""}${esc(timeAgo(j.submitted_at))}${stageTxt} · ${esc(timing)}</div>
+        <div class="q-meta">${pipe ? `${esc(pipe)} · ` : ""}${esc(timeAgo(j.submitted_at))} · ${timing}</div>
         ${st === "failed" && j.error ? `<div class="q-err">${esc(j.error)}</div>` : ""}
+        ${chips}
       </div>
-      ${st === "done" ? `<button class="btn btn-small q-open" data-qid="${esc(j.id)}">🎬 Studio</button>` : ""}
+      <div class="sess-actions">
+        ${st === "done" ? `<button class="btn btn-small sess-report" data-rid="${esc(j.id)}">📊 Report card</button>` : ""}
+        ${st === "done" ? `<button class="btn btn-small btn-ghost sess-studio" data-qid="${esc(j.id)}">🎬 Highlights</button>` : ""}
+      </div>
     </div>`;
   }).join("");
-  list.querySelectorAll(".q-open").forEach(b => b.onclick = () => openStudioById(b.dataset.qid));
+  list.querySelectorAll(".sess-studio").forEach(b => b.onclick = (e) => { e.stopPropagation(); openStudioById(b.dataset.qid); });
+  list.querySelectorAll(".sess-report").forEach(b => b.onclick = (e) => { e.stopPropagation(); openReport(b.dataset.rid); });
+  list.querySelectorAll(".q-item.q-done").forEach(row => row.onclick = () => openReport(row.dataset.sid));
 }
+
+/* ---------- per-session report card ---------- */
+let _reportId = null;
+
+async function openReport(id) {
+  let job = null;
+  try { job = await jfetch(`/api/jobs/${id}`); } catch { return; }
+  const r = job && job.result;
+  if (!r) return;
+  _reportId = id;
+  $("reportTitle").textContent = job.filename || "Session report card";
+  $("reportMeta").textContent = [
+    timeAgo(job.submitted_at), job.pipeline && job.pipeline !== "unknown" ? `${job.pipeline.toUpperCase()} pipeline` : "",
+    job.gen_seconds != null ? `analyzed in ${fmtDur(job.gen_seconds)}` : "",
+  ].filter(Boolean).join(" · ");
+  $("reportVideo").src = r.video + `?r=${Math.floor(job.finished_at || 0)}`;
+  $("reportDownload").href = r.video;
+
+  const rallies = (r.all_rallies && r.all_rallies.length ? r.all_rallies : r.rallies) || [];
+  const used = new Set((r.rallies || []).map(x => x.start));
+  const durs = rallies.map(x => Number(x.dur || (x.end - x.start)) || 0);
+  const longest = durs.length ? Math.max(...durs) : 0;
+  const avg = durs.length ? durs.reduce((a, b) => a + b, 0) / durs.length : 0;
+  const q = ((r.vision || {}).summary || {});
+  $("reportMetrics").innerHTML = [
+    [r.n_rallies_found || rallies.length, "rallies found"],
+    [r.n_rallies_used || (r.rallies || []).length, "in your reel"],
+    [longest ? `${longest.toFixed(0)}s` : "—", "longest rally"],
+    [avg ? `${avg.toFixed(1)}s` : "—", "avg rally"],
+    [r.source_duration ? fmtDur(r.source_duration) : "—", "play analyzed"],
+    [q.shuttle_quality ? fmtPct(q.shuttle_quality) : "—", "shuttle tracking"],
+    [q.pose_quality ? fmtPct(q.pose_quality) : "—", "pose tracking"],
+    [q.player_quality ? fmtPct(q.player_quality) : "—", "player tracking"],
+  ].map(([v, l]) => `<div class="rs-tile"><b>${v}</b><span>${l}</span></div>`).join("");
+
+  // Rally breakdown: one bar per rally, height ∝ duration, lime = in the reel.
+  const maxD = Math.max(longest, 1);
+  $("rallyBarsMeta").textContent = rallies.length ? `· ${rallies.length} rallies · lime = in your reel` : "";
+  $("rallyBars").innerHTML = rallies.length ? rallies.map((x, i) => {
+    const d = Number(x.dur || (x.end - x.start)) || 0;
+    const inReel = used.has(x.start);
+    return `<div class="rb ${inReel ? "used" : ""}" title="R${i + 1} · ${d.toFixed(1)}s${x.note ? " · " + esc(x.note) : ""}">
+      <i style="height:${Math.max(8, d / maxD * 100)}%"></i><em>R${i + 1}</em></div>`;
+  }).join("") : `<div class="muted">No rally data for this session.</div>`;
+
+  $("reportCoach").innerHTML = coachReportHtml(r.coach);
+  $("reportModal").hidden = false;
+  document.body.style.overflow = "hidden";
+}
+
+function coachReportHtml(coach) {
+  if (!coach || coach.status === "disabled") {
+    return `<h4>Coach notes</h4><p class="muted">Enable 🧠 Coach notes on your next upload to get personalized feedback here.</p>`;
+  }
+  if (coach.status !== "ok") {
+    return `<h4>Coach notes</h4><p class="muted">${esc(coach.message || "Coach notes didn't complete for this session.")}</p>`;
+  }
+  const li = (arr) => (arr || []).map(s => `<li>${esc(s)}</li>`).join("");
+  const moments = (coach.moments || []).map(m =>
+    `<li><b>Rally ${Number(m.rally_index) + 1}</b> — ${esc(m.label)}<span class="muted"> · ${esc(m.reason)}</span></li>`).join("");
+  return `
+    <h4>Coach notes <span class="muted">· confidence ${fmtPct(coach.confidence)}</span></h4>
+    <p class="coach-headline">“${esc(coach.headline || "")}”</p>
+    <div class="coach-cols">
+      ${(coach.strengths || []).length ? `<div><h5>✅ Strengths</h5><ul>${li(coach.strengths)}</ul></div>` : ""}
+      ${(coach.work_on || []).length ? `<div><h5>🎯 Work on</h5><ul>${li(coach.work_on)}</ul></div>` : ""}
+    </div>
+    ${moments ? `<h5>⭐ Key moments</h5><ul class="coach-moments">${moments}</ul>` : ""}
+    ${(coach.caveats || []).length ? `<p class="muted coach-caveats">${esc((coach.caveats || []).join(" · "))}</p>` : ""}`;
+}
+
+const closeReport = () => {
+  $("reportModal").hidden = true;
+  $("reportVideo").pause();
+  $("reportVideo").src = "";
+  document.body.style.overflow = "";
+};
+$("reportX").onclick = closeReport;
+$("reportModal").onclick = (e) => { if (e.target === $("reportModal")) closeReport(); };
+$("reportStudio").onclick = () => { const id = _reportId; closeReport(); if (id) openStudioById(id); };
 
 async function openStudioById(id) {
   let item = galleryItems.find(i => i.id === id);
@@ -442,7 +570,7 @@ async function openStudioById(id) {
   if (item) openStudio(item);
 }
 
-$("queueRefresh").onclick = () => loadQueue();
+$("coachRefresh").onclick = () => loadCoach();
 
 /* ---------- studio: AI reel editor ---------- */
 const studio = {

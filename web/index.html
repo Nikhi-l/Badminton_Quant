@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Baddy — AI Badminton Highlights</title>
-<meta name="description" content="Drop a badminton video. AI finds every rally, a virtual camera follows the action, and you get a beat-synced vertical highlight reel.">
+<title>Baddy — AI Badminton Analytics · Your AI Coach</title>
+<meta name="description" content="AI-powered badminton analytics. Upload your game: Baddy measures every rally, tracks the shuttle and players, writes coach notes, and builds your highlight reel — your whole badminton journey on one report card.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=25">
+<link rel="stylesheet" href="/style.css?v=26">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🏸</text></svg>">
 </head>
 <body>
@@ -22,9 +22,10 @@
       BADDY
     </a>
     <div class="nav-links">
-      <a href="#how">How it works</a>
+      <a href="#coach">My Coach</a>
       <a href="#gallery">Gallery</a>
-      <a href="#create" class="btn btn-small">Create a reel</a>
+      <a href="#how">How it works</a>
+      <a href="#create" class="btn btn-small">Analyze a match</a>
     </div>
   </div>
 </nav>
@@ -36,11 +37,18 @@
     </video>
     <div class="hero-shade"></div>
   </div>
-  <p class="eyebrow">YOUR SPORTS HIGHLIGHT GENERATOR</p>
-  <h1>Raw game in.<br><span class="grad">Highlights out.</span></h1>
-  <p class="sub">Drop a full badminton recording. Gemini watches the whole game and finds every rally,
-  an AI virtual camera tracks the action like a broadcast operator, and you get a beat-synced
-  vertical reel of your longest rallies — story-ready.</p>
+  <p class="eyebrow">AI-POWERED BADMINTON ANALYTICS</p>
+  <h1>Every session, measured.<br><span class="grad">Every rally, analyzed.</span></h1>
+  <p class="sub">Baddy is your AI badminton coach. Upload a match and it detects every rally,
+  tracks the shuttle and both players frame by frame, writes grounded coach notes — and cuts
+  your highlight reel. Every session lands on your report card, so you can watch yourself improve.</p>
+
+  <div class="hero-strip" id="heroStats">
+    <div class="hs"><b>Rally detection</b><span>Gemini watches the full match</span></div>
+    <div class="hs"><b>Shuttle tracking</b><span>TrackNetV3 · every frame</span></div>
+    <div class="hs"><b>Player &amp; pose analytics</b><span>YOLO pose · 17 keypoints</span></div>
+    <div class="hs"><b>Coach notes</b><span>grounded in measured signals</span></div>
+  </div>
 
   <div class="drop" id="drop">
     <input type="file" id="file" multiple accept="video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.mkv,.webm" hidden>
@@ -76,10 +84,10 @@
   </div>
 
   <div class="chips">
-    <span class="chip">🎯 Gemini rally detection</span>
+    <span class="chip">📊 session report card</span>
+    <span class="chip">🎯 rally-by-rally breakdown</span>
     <span class="chip">🎥 AI virtual camera</span>
-    <span class="chip">🎵 beat-synced edit</span>
-    <span class="chip">📱 9:16 story format</span>
+    <span class="chip">📱 9:16 highlight reels</span>
   </div>
 </header>
 
@@ -109,13 +117,47 @@
   </div>
 </section>
 
-<section class="queue" id="queueSection" hidden>
+<section class="coach-dash" id="coach">
   <div class="gallery-head">
-    <h2>Your queue</h2>
-    <button class="btn btn-small btn-ghost" id="queueRefresh">Refresh</button>
+    <div>
+      <h2>Your AI Coach</h2>
+      <p class="coach-sub muted">Every session you upload, saved and scored — recordings, analytics, highlights.</p>
+    </div>
+    <button class="btn btn-small btn-ghost" id="coachRefresh">Refresh</button>
   </div>
-  <div class="queue-list" id="queueList"></div>
+
+  <div class="report-strip" id="coachStrip" hidden></div>
+
+  <div class="session-list" id="sessionList"></div>
+
+  <div class="empty" id="coachEmpty">
+    <p>🏸 No sessions yet.</p>
+    <p class="muted">Upload your first match above — your analytics, coach notes and highlights will build your report card here.</p>
+  </div>
 </section>
+
+<div class="modal report-modal" id="reportModal" hidden>
+  <div class="modal-card report-card-modal">
+    <button class="modal-x" id="reportX">✕</button>
+    <div class="report-head">
+      <div>
+        <h3 id="reportTitle">Session report card</h3>
+        <div class="muted" id="reportMeta"></div>
+      </div>
+    </div>
+    <video id="reportVideo" controls playsinline></video>
+    <div class="report-metrics" id="reportMetrics"></div>
+    <div class="report-block">
+      <h4>Rally breakdown <span class="muted" id="rallyBarsMeta"></span></h4>
+      <div class="rally-bars" id="rallyBars"></div>
+    </div>
+    <div class="report-block" id="reportCoach"></div>
+    <div class="report-actions">
+      <button class="btn" id="reportStudio">🎬 Create highlight clips</button>
+      <a class="btn btn-ghost" id="reportDownload" download="baddy-reel.mp4">⬇ Download reel</a>
+    </div>
+  </div>
+</div>
 
 <section class="gallery" id="gallery">
   <div class="gallery-head">
@@ -133,18 +175,18 @@
 </section>
 
 <section class="how" id="how">
-  <h2>How it works</h2>
+  <h2>How your coach works</h2>
   <div class="steps">
-    <div class="step"><div class="step-n">01</div><h3>Upload</h3><p>Any length, any phone. We build a low-res proxy for analysis and keep your original for the final render.</p></div>
-    <div class="step"><div class="step-n">02</div><h3>Rally detection</h3><p>Gemini watches the proxy and timestamps every rally — serve to floor — then ranks them by length and intensity.</p></div>
-    <div class="step"><div class="step-n">03</div><h3>Virtual camera</h3><p>Runpod vision adds player pose and shuttle tracks; the crop follows the action and renders from your full-res frames.</p></div>
-    <div class="step"><div class="step-n">04</div><h3>Beat-synced stitch</h3><p>Longest rallies first, court audio kept, a 120 BPM bed underneath, packed into a vertical story-ready reel.</p></div>
+    <div class="step"><div class="step-n">01</div><h3>Record &amp; upload</h3><p>Any length, any phone. We build an analysis proxy and keep your original for the final render.</p></div>
+    <div class="step"><div class="step-n">02</div><h3>Match analysis</h3><p>Gemini watches the whole game and timestamps every rally — serve to floor — ranked by length and intensity.</p></div>
+    <div class="step"><div class="step-n">03</div><h3>Tracking analytics</h3><p>TrackNetV3 follows the shuttle frame by frame; YOLO pose tracks both players and 17 body keypoints.</p></div>
+    <div class="step"><div class="step-n">04</div><h3>Report card + highlights</h3><p>Session metrics, rally breakdown and grounded coach notes land on your report card — with a beat-synced highlight reel to share.</p></div>
   </div>
 </section>
 
 <footer>
-  <span>BADDY · AI sports highlights</span>
-  <span class="muted">rally detection by Gemini · Runpod vision with TrackNetV3 shuttle tracking</span>
+  <span>BADDY · AI badminton analytics</span>
+  <span class="muted">rally detection by Gemini · TrackNetV3 shuttle tracking · YOLO pose analytics</span>
 </footer>
 
 <div class="studio" id="studio" hidden>
@@ -257,6 +299,6 @@
   </div>
 </div>
 
-<script src="/app.js?v=25"></script>
+<script src="/app.js?v=26"></script>
 </body>
 </html>
