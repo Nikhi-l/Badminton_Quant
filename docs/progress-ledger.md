@@ -5,8 +5,8 @@ docs commit after each functional slice.
 
 ## Current branch / mission
 - Main branch: `main` (protected; releasable; live at baddyai.com)
-- Active branch: `feat/TASK-017-pose-camera-upgrades`
-- Current branch base SHA: `251be38`
+- Active branch: `fix/TASK-021-studio-review-fixes`
+- Current branch base SHA: `29af265`
 - **Deployed 2026-06-24:** the full editor/camera/queue sweep is LIVE on baddyai.com,
   plus a follow-up Studio polish deploy (`227e05a`, v=19 assets): real shuttle
   trail (was a stray green bar) + temporal smoothing (EMA, snap-on-cut) for the
@@ -33,6 +33,8 @@ docs commit after each functional slice.
 | 2026-06-23 | Player/person tracking | Merged (deploy pending) | TASK-015, Cycle 10 — players_track (stable ids) exposed; player boxes overlay (hide when untracked) + Pose-lane presence dots; layer "Players & pose"; feeds TASK-014 player target. Unit-tested |
 | 2026-06-26 | Pose contract + model/camera upgrade | Merged (Cycle 12) | TASK-017/018/019/020 — `pose_track` keypoints end-to-end, configurable YOLO pose (yolo26, verified via build-time weight bake; yolo11n fallback), real Studio skeletons + toggle gating, zoom punch off by default, POV shuttle-follow when quality high. Takeover hardening: deterministic routing tests, GPU-first routing test |
 | 2026-06-26 | Shuttle filter + keep-in-frame + compose drag | Merged (Cycle 12) | User feedback batch — Hampel-style false-detection filter (camera + overlay), `_contain_targets` keep-in-frame guarantee, wider zoom smoothing, Compose drag via window listeners + library ghost-drag-to-drop, comet trail effect, UI polish. 5 new regression tests |
+| 2026-07-07 | Portrait overlay projection + review bug batch | On branch (Cycle 13) | TASK-021 — renderer exports `camera_path`/`render_window`; Studio inverts the baked crop (portrait pixel-exact ≤0.41% vs ground-truth fixture), xfade-aware reel time, landscape = source time; timeline drag-to-scrub + stacking fix; pixel-space skeletons (blob bug); worker pose/box pairing fix; `_stable_ids` (near player = P1, fragment merge). 42 tests green |
+| 2026-07-07 | Interpolation + court.py + heatmaps | On branch (Cycle 13) | TASK-022 — shuttle/box/pose lerp between ≤10Hz samples; `court.py` corners/lines/net + homography to court-plane meters (`result["court"]`), Court overlay layer, per-player post-game movement heatmaps, ground-truth Studio fixture (`scripts/make_studio_fixture.py`) |
 
 ## Active priorities
 1. ~~Rebuild + redeploy the RunPod worker~~ **DONE 2026-07-01**: image
@@ -40,12 +42,20 @@ docs commit after each functional slice.
    bake step doubles as build-time model verification); template `ic265brof1`
    patched from `tracknet-src-20260621b`; endpoint `radst7uhhhl6q0` health:
    workers ready 2 / unhealthy 0. VM deployed (v=25), health ok.
-2. **Definitive e2e pose proof**: run one job with Pose enabled and confirm
-   `worker_version=pose-model-config-20260626`, actual `pose_model`, and skeletons
-   in Studio; record quality/latency here.
+2. **Merge + deploy TASK-021/022** (Cycle 13): PR `fix/TASK-021-studio-review-fixes`
+   → main → VM deploy (assets v=27). Note: overlays on portrait reels only align
+   for jobs rendered AFTER this deploy (camera_path export) — old reels show the
+   rebuild hint by design.
+3. **Rebuild RunPod worker** with the pose/box pairing fix
+   (`pose-pairing-20260707`) — same Cloud Build flow as pose-20260626a.
+4. TASK-024 worker-side ByteTrack ids (kills residual P3 fragments on real footage).
+5. TASK-025 3D replay layer (toggleable, low-fps) per
+   `docs/roadmap/RALLY_3D_RECONSTRUCTION.md`; TASK-026 Schools P0 per
+   `docs/roadmap/SCHOOL_PLATFORM_PRD.md`.
 - Follow-ups (not blocking): unify render-time player identity (near/far) with the
   editor's per-player ids; persist full `baddy.editor.v1` (overlay styles) into the
-  MP4; click-to-set fixed point on the preview.
+  MP4; click-to-set fixed point on the preview; definitive e2e GPU pose-proof job
+  record (pose-20260626a live per 2026-07-01 note).
 
 ## Open risks
 | Risk | Severity | Source | Mitigation / next task |

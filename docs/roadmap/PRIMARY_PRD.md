@@ -117,6 +117,12 @@ Source: user request 2026-06-20 (this session) + harness PDF.
 | P1 | Decouple public pose option from model version; configure stronger YOLO pose models and GPU-first pose routing | Accept | TASK-018 |
 | P1 | Make Studio Pose layer a true toggle and render skeletons from `pose_track` | Accept | TASK-019 |
 | P1 | Smooth camera zoom by removing hardcoded opening punch and allowing high-quality TrackNet shuttle-follow on POV clips | Accept | TASK-020 |
+| P0 | (bug, review 2026-07-07) Portrait overlay misalignment: invert the baked virtual camera (export `camera_path`/`render_window`), xfade-aware reel time; timeline drag-to-scrub + stacking; pixel-space pose skeletons; stable bounded player ids (near player = P1) | Accept | TASK-021 (**done**) |
+| P1 | Tracking polish batch: track interpolation (shuttle/boxes/pose), `court.py` line/corner detection + homography, Studio Court layer, post-game per-player movement heatmaps, ground-truth fixture harness | Accept | TASK-022 (**done**) |
+| P2 | Gemini court-corner refinement fallback when classical detection is low-confidence | Accept | TASK-023 |
+| P1 | Worker-side identity: ultralytics ByteTrack (`model.track(persist=True)`) so player ids come from the tracker, not serve-time heuristics; carry ids through `players`/`poses` payloads | Accept | TASK-024 |
+| P1 | 3D rally replay layer (toggleable, low-fps sim): camera pose from court homography, ballistic shuttle 3D fit, three.js court/net/players/replay — see `docs/roadmap/RALLY_3D_RECONSTRUCTION.md` | Accept | TASK-025 |
+| P1 | Schools platform P0: auth (admin/coach/student), school tenancy on jobs, role dashboards — see `docs/roadmap/SCHOOL_PLATFORM_PRD.md` | Accept | TASK-026 |
 
 Intake: `docs/reviews/2026-06-21-studio-camera-feedback.md`. **TASK-011/012/013
 (Cycle 9) and TASK-010/014/015 (Cycle 10) are merged to `main`** (statuses +

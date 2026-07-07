@@ -5,6 +5,59 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 13: Review fixes — portrait projection, court geometry, heatmaps (TASK-021/022)
+**Date:** 2026-07-07
+**Goal:** Fix the four baddyai.com review defects (portrait overlay shift, timeline
+drag hijacked by the canvas, pose rendering as giant blobs, "only P1 tracked") and
+land the tracking-first feature batch: track interpolation, `court.py`, Court
+overlay, post-game movement heatmaps.
+**Roadmap alignment:** PRD §16 TASK-021/022 (review intake 2026-07-07).
+**Branch:** `fix/TASK-021-studio-review-fixes` off `29af265`.
+**Files changed:** `app/pipeline/{render,run,court}.py`, `app/main.py`,
+`runpod_worker/handler.py`, `web/{app.js,style.css,index.html}`,
+`scripts/make_studio_fixture.py`, tests (3 new files / extended).
+**Root causes fixed:**
+- Portrait shift: the reel is a per-frame virtual-camera CROP; the Studio mapped
+  source-normalized track coords onto it as if it were the source frame, and the
+  reel→source time base ignored PAD_BEFORE (1.0s) and the 0.45s stitch crossfade
+  per boundary. Renderer now exports the exact crop rect (`camera_path`) +
+  `render_window`; the Studio inverts them (`toDisplayNorm`), landscape runs on
+  source time (`effectiveMode`), legacy reels hide overlays with a rebuild hint.
+- Timeline: no drag-to-scrub existed and the old seek divided by the whole #tl
+  rect (label column skew); the transformed stage-frame painted above the
+  non-positioned transport. Added board scrubbing with lane-rect math + pointer
+  capture; transport/timeline got a stacking context.
+- Pose blobs: 0–100 viewBox + `preserveAspectRatio:none` stretched joint circles
+  to ~3% of frame WIDTH; skeleton SVG now renders in pixel space, 4 styles,
+  velocity mode colored by measured motion.
+- "Only P1": worker sorted boxes after building poses (pairing desync, fixed in
+  `_detect_pose`) and serve-time greedy `next_id++` churned ids past a 0.22 gate;
+  replaced with `_stable_ids` — bounded slot pool, motion+size-aware costs,
+  size-based reuse after dropouts, fragment merging, near-player-first relabel.
+**Features:** shuttle/box/pose keypoint interpolation between ≤10Hz samples;
+`court.py` (line mask → Hough → quad + DLT homography to 6.10×13.40m plane,
+`result["court"]`); Studio Court layer (boundary/net/corners through the same
+projection); per-player post-game heatmaps (court-plane via homography, camera
+space fallback); `scripts/make_studio_fixture.py` ground-truth fixture job.
+**Tests/verification performed:**
+- `./scripts/check.sh` → 42 passed (new: crop-rect export/inversion, camera_path
+  passthrough, fast-motion+dropout id stability, 4 court-detection tests).
+- Fixture verification in Chrome against baked ground truth: portrait-reel
+  shuttle marker vs actual white-dot pixels ≤0.41% error at 5 probe times
+  (both rallies, across the crossfade); landscape P1/P2 box centers exact
+  (32.1/30.0 vs expected 32.1/30.0); court quad on the drawn lines in all views;
+  drag-scrub seeks 3.0→10.53→3.95 across a synthetic pointer drag; legacy job
+  (no camera_path) hides overlays + shows the rebuild hint in portrait and
+  aligns correctly in landscape.
+**Docs updated:** this log, `docs/progress-ledger.md`, PRD §16 rows
+TASK-021..026, `docs/roadmap/RALLY_3D_RECONSTRUCTION.md`,
+`docs/roadmap/SCHOOL_PLATFORM_PRD.md`, task files.
+**Open risks / next steps:**
+- RunPod worker pairing fix needs an image rebuild/deploy (`pose-pairing-20260707`).
+- Real-footage identity still fragments under long occlusions (P3 shows up
+  occasionally) → TASK-024 ByteTrack in the worker.
+- 3D replay (TASK-025) and Schools P0 (TASK-026) are specced, not started.
+
 ## Cycle 12: Pose end-to-end + tracking robustness (TASK-017/018/019/020 + feedback batch)
 **Date:** 2026-06-26
 **Goal:** Ship real pose skeletons in Studio, harden shuttle tracking (false-detection

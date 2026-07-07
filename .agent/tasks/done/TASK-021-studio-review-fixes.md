@@ -1,6 +1,6 @@
 # TASK-021: Studio review fixes — portrait overlays, timeline scrub, pose skeleton, stable player ids
 
-**Status:** active
+**Status:** done (Cycle 13; verified against ground-truth fixture)
 **Branch:** `fix/TASK-021-studio-review-fixes`
 **Base SHA:** `29af265`
 **PRD section:** §Studio editor / remediation (baddyai.com review 2026-07-07)
