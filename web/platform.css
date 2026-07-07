@@ -1,0 +1,97 @@
+/* Baddy Schools platform (TASK-026 P0) — carries the dark design system. */
+
+/* ---------- auth page ---------- */
+.auth-body{min-height:100vh;display:flex;flex-direction:column}
+.auth-wrap{position:relative;z-index:1;width:100%;max-width:440px;margin:9vh auto 40px;padding:0 20px;text-align:center}
+.auth-brand{justify-content:center;font-size:19px}
+.schools-tag{font-size:10px;font-weight:800;letter-spacing:.18em;color:#07080b;background:var(--grad);padding:2px 8px;border-radius:99px;margin-left:6px}
+.auth-sub{color:var(--muted);font-size:14px;margin:12px 0 24px}
+.auth-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:22px;text-align:left}
+.auth-tabs{display:flex;gap:5px;background:rgba(255,255,255,.04);border:1px solid var(--line);padding:4px;border-radius:11px;margin-bottom:18px}
+.auth-tabs button{flex:1;border:0;background:transparent;color:var(--muted);padding:8px 6px;border-radius:8px;cursor:pointer;font:600 12.5px Inter;white-space:nowrap}
+.auth-tabs button.active{background:var(--panel2);color:var(--text)}
+.auth-form{display:grid;gap:13px}
+.auth-form label{display:grid;gap:6px;font-size:12px;color:#aab1c3;font-weight:600}
+.auth-form input{background:#0d0f14;border:1px solid var(--line);border-radius:10px;padding:11px 12px;color:var(--text);font:14px Inter;outline:none;transition:.13s}
+.auth-form input:focus{border-color:rgba(183,245,66,.55)}
+.auth-go{width:100%;margin-top:4px}
+.auth-hint{font-size:11.5px;color:var(--muted);line-height:1.45}
+.auth-err{color:#ff8f8f;font-size:12.5px;min-height:18px;margin-top:12px;text-align:center}
+.auth-foot{margin-top:22px;font-size:13px}
+.auth-foot a{color:var(--cyan)}
+
+/* ---------- app shell ---------- */
+.app-body{min-height:100vh;display:flex;flex-direction:column}
+.app-top{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:18px;padding:12px 22px;background:#0b0c10dd;backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.app-top .brand{font-size:15px}
+.app-school{flex:1;color:var(--muted);font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.app-user{display:flex;align-items:center;gap:10px}
+.user-chip{font-size:12.5px;color:var(--text);border:1px solid var(--line);background:var(--panel);padding:6px 12px;border-radius:99px;white-space:nowrap}
+.user-chip .role{color:var(--lime);font-weight:700;text-transform:uppercase;font-size:9.5px;letter-spacing:.08em;margin-left:6px}
+.app-layout{flex:1;display:grid;grid-template-columns:212px minmax(0,1fr);max-width:1280px;width:100%;margin:0 auto;gap:26px;padding:26px 22px}
+.app-nav{display:flex;flex-direction:column;gap:6px;position:sticky;top:76px;align-self:start}
+.app-nav button{display:flex;align-items:center;gap:10px;border:1px solid transparent;background:transparent;color:var(--muted);padding:10px 13px;border-radius:11px;cursor:pointer;font:600 13.5px Inter;text-align:left;transition:.13s}
+.app-nav button:hover{color:var(--text);background:rgba(255,255,255,.035)}
+.app-nav button.active{color:var(--text);background:var(--panel2);border-color:var(--line)}
+.app-main{min-width:0;padding-bottom:60px}
+.app-loading{color:var(--muted);padding:60px 0;text-align:center}
+.pg-title{font-family:"Space Grotesk";font-size:24px;letter-spacing:-.01em;margin-bottom:4px}
+.pg-sub{color:var(--muted);font-size:13px;margin-bottom:22px}
+
+/* cards + tables */
+.pcard{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px 20px;margin-bottom:18px}
+.pcard h3{font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.pcard h3 .muted{font-weight:500;font-size:11.5px}
+.code-row{display:flex;gap:12px;flex-wrap:wrap}
+.code-pill{display:flex;align-items:center;gap:10px;border:1px dashed rgba(183,245,66,.4);background:rgba(183,245,66,.05);border-radius:12px;padding:10px 14px}
+.code-pill b{font-family:ui-monospace,monospace;font-size:16px;letter-spacing:.08em;color:var(--lime)}
+.code-pill span{font-size:11px;color:var(--muted)}
+.code-copy{border:0;background:none;color:var(--cyan);cursor:pointer;font-size:12px}
+.ptable{width:100%;border-collapse:collapse;font-size:13px}
+.ptable th{text-align:left;color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;padding:6px 10px;border-bottom:1px solid var(--line)}
+.ptable td{padding:9px 10px;border-bottom:1px solid rgba(255,255,255,.05)}
+.ptable tr:hover td{background:rgba(255,255,255,.02)}
+.ptable .rowlink{cursor:pointer}
+.badge{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+.badge.done{color:#07080b;background:var(--lime);border-color:var(--lime)}
+.badge.processing{color:#07080b;background:var(--cyan);border-color:var(--cyan)}
+.badge.failed{color:#fff;background:#d9484a;border-color:#d9484a}
+.badge.student{color:var(--cyan)}
+.badge.coach,.badge.admin{color:var(--lime)}
+.assign-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.assign-row select{background:#0d0f14;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:7px 9px;font:12.5px Inter}
+.assignee-chip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;border:1px solid rgba(70,227,255,.35);background:rgba(70,227,255,.07);color:var(--text);border-radius:99px;padding:3px 10px;margin:2px 4px 2px 0}
+.assignee-chip button{border:0;background:none;color:var(--muted);cursor:pointer;font-size:12px;padding:0}
+.assignee-chip button:hover{color:#ff8f8f}
+.sess-thumb{width:74px;height:44px;border-radius:8px;object-fit:cover;background:#0c0e13;display:block}
+
+/* ---------- student profile ---------- */
+.profile-head{display:flex;align-items:center;gap:18px;margin-bottom:20px}
+.avatar{width:56px;height:56px;border-radius:50%;background:var(--grad);display:grid;place-items:center;font:800 22px "Space Grotesk";color:#07080b;flex:none}
+.profile-head .pg-title{margin-bottom:0}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:18px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.stat b{display:block;font-family:"Space Grotesk";font-size:22px;line-height:1.1}
+.stat span{display:block;color:var(--muted);font-size:11px;margin-top:4px}
+.spark{margin-top:8px;display:block}
+.sess-card{display:grid;grid-template-columns:190px minmax(0,1fr);gap:18px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+.sess-media video,.sess-media img{width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:11px;background:#000;display:block}
+.sess-body h4{font-size:14px;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sess-date{color:var(--muted);font-size:11.5px;margin-bottom:10px}
+.sess-metrics{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px;font-size:12px;color:#c9ceda}
+.sess-metrics b{color:var(--text)}
+.rally-chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.rally-chip{font-size:11px;border:1px solid var(--line);background:rgba(255,255,255,.03);border-radius:8px;padding:3px 9px;color:#c9ceda}
+.coach-box{border:1px solid rgba(183,245,66,.28);background:rgba(183,245,66,.05);border-radius:12px;padding:11px 13px;font-size:12.5px;line-height:1.5}
+.coach-box b{color:var(--lime)}
+.coach-box .cb-row{margin-top:5px;color:#c9ceda}
+.coach-box .cb-row span{color:var(--muted)}
+.empty-note{color:var(--muted);text-align:center;padding:44px 0;font-size:13.5px}
+
+@media (max-width:860px){
+  .app-layout{grid-template-columns:1fr;gap:14px}
+  .app-nav{flex-direction:row;position:static;overflow-x:auto}
+  .sess-card{grid-template-columns:1fr}
+  .sess-media video,.sess-media img{max-width:220px}
+  .app-school{display:none}
+}

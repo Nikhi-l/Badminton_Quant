@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baddy Schools — Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css?v=27">
+<link rel="stylesheet" href="/platform.css?v=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🏸</text></svg>">
+</head>
+<body class="auth-body">
+<div class="glow glow-a"></div>
+<div class="glow glow-b"></div>
+
+<main class="auth-wrap">
+  <a class="brand auth-brand" href="/">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M12 2L8 10l-4 9c-.4.9.5 1.8 1.4 1.4l9-4 8-4-2.5-2.5L12 2z" stroke="url(#g)" stroke-width="1.6" stroke-linejoin="round"/><circle cx="6.5" cy="17.5" r="2.2" fill="url(#g)"/><defs><linearGradient id="g" x1="0" y1="0" x2="24" y2="24"><stop stop-color="#b7f542"/><stop offset="1" stop-color="#46e3ff"/></linearGradient></defs></svg>
+    BADDY <span class="schools-tag">SCHOOLS</span>
+  </a>
+  <p class="auth-sub">Match analysis, AI coaching, and progress tracking for every student.</p>
+
+  <div class="auth-card">
+    <div class="auth-tabs" role="tablist">
+      <button class="active" data-tab="signin">Sign in</button>
+      <button data-tab="join">Join with code</button>
+      <button data-tab="create">Create a school</button>
+    </div>
+
+    <form class="auth-form" id="form-signin" data-pane="signin">
+      <label>Username <input name="username" autocomplete="username" required></label>
+      <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="btn auth-go">Sign in</button>
+    </form>
+
+    <form class="auth-form" id="form-join" data-pane="join" hidden>
+      <label>School join code <input name="code" placeholder="ST-XXXXXX or CO-XXXXXX" required></label>
+      <div class="auth-hint">Students and coaches get this code from their school admin.</div>
+      <label>Full name <input name="name" autocomplete="name" required></label>
+      <label>Pick a username <input name="username" autocomplete="username" required></label>
+      <label>Pick a password <input name="password" type="password" minlength="8" autocomplete="new-password" required></label>
+      <button class="btn auth-go">Join school</button>
+    </form>
+
+    <form class="auth-form" id="form-create" data-pane="create" hidden>
+      <label>School name <input name="school_name" required></label>
+      <label>Your full name <input name="name" autocomplete="name" required></label>
+      <label>Admin username <input name="username" autocomplete="username" required></label>
+      <label>Password <input name="password" type="password" minlength="8" autocomplete="new-password" required></label>
+      <div class="auth-hint">Creates the school and your admin account. You'll get join codes for coaches and students.</div>
+      <button class="btn auth-go">Create school</button>
+    </form>
+
+    <div class="auth-err" id="authErr"></div>
+  </div>
+
+  <p class="auth-foot muted">Just making reels? <a href="/">Use Baddy without an account →</a></p>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+document.querySelectorAll(".auth-tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".auth-tabs button").forEach(x => x.classList.toggle("active", x === b));
+  document.querySelectorAll(".auth-form").forEach(f => f.hidden = f.dataset.pane !== b.dataset.tab);
+  $("authErr").textContent = "";
+});
+const ROUTES = { signin: "/api/auth/login", join: "/api/auth/join", create: "/api/auth/register-school" };
+document.querySelectorAll(".auth-form").forEach(form => form.onsubmit = async (e) => {
+  e.preventDefault();
+  $("authErr").textContent = "";
+  const btn = form.querySelector(".auth-go");
+  btn.disabled = true;
+  try {
+    const body = Object.fromEntries(new FormData(form).entries());
+    const r = await fetch(ROUTES[form.dataset.pane], {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail || `HTTP ${r.status}`);
+    location.href = "/app.html";
+  } catch (err) {
+    $("authErr").textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+// Already signed in? Straight to the app.
+fetch("/api/auth/me").then(r => { if (r.ok) location.href = "/app.html"; }).catch(() => {});
+</script>
+</body>
+</html>

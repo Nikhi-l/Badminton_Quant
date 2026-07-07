@@ -1,2 +1,3 @@
 # Dev/test deps (not needed at runtime)
 pytest>=8
+httpx>=0.27  # starlette TestClient (schools auth tests)

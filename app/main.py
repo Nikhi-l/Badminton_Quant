@@ -6,11 +6,12 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import artifacts, config, db, worker
+from . import artifacts, auth, config, db, worker
+from .pipeline import court as court_geo
 from .pipeline import gpu as gpu_pipeline
 from .pipeline.run import STAGES
 
@@ -151,6 +152,11 @@ async def upload_finish(job_id: str, request: Request):
     label = names[0] if n_files == 1 else f"{names[0]} +{n_files - 1} more"
     options = config.normalize_options(payload.get("options"))
     db.create_job(job_id, label, options=options)
+    # Signed-in uploads belong to the uploader's school (TASK-026); anonymous
+    # uploads keep working exactly as before with NULL ownership.
+    user = auth.current_user(request)
+    if user and user.get("school_id"):
+        db.set_job_owner(job_id, user["school_id"], user["id"])
     worker.enqueue(job_id)
     return {"id": job_id, "files": n_files, "options": options}
 
@@ -723,6 +729,250 @@ def jobs_queue(limit: int = 60):
             item["thumb"] = f"/media/{job['id']}/thumb.jpg"
         out.append(item)
     return {"jobs": out}
+
+
+# ---------- schools platform: auth + panels (TASK-026 P0) ----------
+
+_LOGIN_HITS: dict[str, list[float]] = {}
+
+
+def _login_throttle(request: Request):
+    ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+          or (request.client.host if request.client else "?"))
+    now = time.time()
+    hits = [t for t in _LOGIN_HITS.get(ip, []) if now - t < 600]
+    if len(hits) >= 10:
+        raise HTTPException(429, "too many attempts — try again in a few minutes")
+    _LOGIN_HITS[ip] = hits + [now]
+
+
+@app.post("/api/auth/register-school")
+async def auth_register_school(payload: dict, request: Request, response: Response):
+    """Create a school + its first admin account, signed in on success."""
+    _login_throttle(request)
+    school_name = str(payload.get("school_name") or "").strip()
+    username = str(payload.get("username") or "")
+    name = str(payload.get("name") or "")
+    password = str(payload.get("password") or "")
+    if not 2 <= len(school_name) <= 80:
+        raise HTTPException(400, "school name is required")
+    err = auth.validate_credentials(username, password, name)
+    if err:
+        raise HTTPException(400, err)
+    user = auth.register_user(username, name, password)
+    school_id = uuid.uuid4().hex[:12]
+    db.create_school(school_id, school_name,
+                     auth.new_join_code("ST"), auth.new_join_code("CO"))
+    db.add_membership(user["id"], school_id, "admin")
+    auth.start_session(response, request, user["id"])
+    return {"ok": True, "school_id": school_id, "role": "admin"}
+
+
+@app.post("/api/auth/join")
+async def auth_join(payload: dict, request: Request, response: Response):
+    """Join an existing school with a student or coach code."""
+    _login_throttle(request)
+    resolved = db.school_by_join_code(str(payload.get("code") or ""))
+    if not resolved:
+        raise HTTPException(404, "unknown join code")
+    school, role = resolved
+    username = str(payload.get("username") or "")
+    name = str(payload.get("name") or "")
+    password = str(payload.get("password") or "")
+    err = auth.validate_credentials(username, password, name)
+    if err:
+        raise HTTPException(400, err)
+    user = auth.register_user(username, name, password)
+    db.add_membership(user["id"], school["id"], role)
+    auth.start_session(response, request, user["id"])
+    return {"ok": True, "school_id": school["id"], "role": role}
+
+
+@app.post("/api/auth/login")
+async def auth_login(payload: dict, request: Request, response: Response):
+    _login_throttle(request)
+    user = db.get_user_by_username(str(payload.get("username") or ""))
+    if not user or not auth.verify_password(str(payload.get("password") or ""), user["pass_hash"]):
+        raise HTTPException(401, "wrong username or password")
+    auth.start_session(response, request, user["id"])
+    m = db.membership_of(user["id"]) or {}
+    return {"ok": True, "role": m.get("role")}
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request, response: Response):
+    auth.end_session(request, response)
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    user = auth.current_user(request)
+    if not user:
+        raise HTTPException(401, "not signed in")
+    return user
+
+
+@app.get("/api/school/overview")
+def school_overview(request: Request):
+    """Coach/admin panel data: roster, join codes, recent school sessions."""
+    user = auth.require_role(request, "admin", "coach")
+    school = db.get_school(user["school_id"]) or {}
+    jobs = []
+    for job in db.school_jobs(user["school_id"]):
+        item = {
+            "id": job["id"], "filename": job.get("filename"), "status": job.get("status"),
+            "created_at": job.get("created_at"),
+            "assignees": db.job_assignees(job["id"]),
+        }
+        if job.get("status") == "done":
+            item["thumb"] = f"/media/{job['id']}/thumb.jpg"
+            r = _public_result(job, light=True)
+            if r:
+                item.update(duration=r.get("duration"), n_rallies_used=r.get("n_rallies_used"),
+                            vision=r.get("vision"))
+        jobs.append(item)
+    return {
+        "school": {"id": school.get("id"), "name": school.get("name")},
+        "join_codes": {
+            "student": school.get("student_code"),
+            "coach": school.get("coach_code") if user["role"] == "admin" else None,
+        },
+        "students": db.school_members(user["school_id"], "student"),
+        "coaches": [m for m in db.school_members(user["school_id"])
+                    if m["role"] in ("coach", "admin")],
+        "jobs": jobs,
+    }
+
+
+@app.post("/api/jobs/{job_id}/assign")
+async def job_assign(job_id: str, payload: dict, request: Request):
+    """Assign a session video to a student, optionally pinning which tracked
+    player (players_track id) is them — that pin drives per-student metrics."""
+    user = auth.require_role(request, "admin", "coach")
+    job = db.get_job(job_id)
+    if not job or job.get("school_id") != user["school_id"]:
+        raise HTTPException(404, "job not found in your school")
+    student_id = str(payload.get("student_id") or "")
+    students = {m["id"] for m in db.school_members(user["school_id"], "student")}
+    if student_id not in students:
+        raise HTTPException(404, "student not found in your school")
+    player_id = payload.get("player_id")
+    if player_id is not None:
+        try:
+            player_id = int(player_id)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "player_id must be an integer or null")
+    db.assign_job_student(job_id, student_id, player_id, user["id"])
+    return {"ok": True, "assignees": db.job_assignees(job_id)}
+
+
+@app.delete("/api/jobs/{job_id}/assign/{student_id}")
+def job_unassign(job_id: str, student_id: str, request: Request):
+    user = auth.require_role(request, "admin", "coach")
+    job = db.get_job(job_id)
+    if not job or job.get("school_id") != user["school_id"]:
+        raise HTTPException(404, "job not found in your school")
+    db.unassign_job_student(job_id, student_id)
+    return {"ok": True}
+
+
+def _movement_stats(result: dict, player_id: int | None) -> dict:
+    """Court-space movement for the pinned player across all rallies: distance
+    (m), court coverage (% of a 10x22 grid visited). Camera-space fallback
+    reports coverage only. Bounded by the same samplers the Studio uses."""
+    court_info = result.get("court") or {}
+    H = court_info.get("homography") if court_info.get("status") == "ok" else None
+    cells: set[tuple[int, int]] = set()
+    dist = 0.0
+    prev = None
+    n_pts = 0
+    for rr in result.get("rallies") or []:
+        players = ((rr.get("vision") or {}).get("players")) or []
+        for f in _sample_player_track(players):
+            for b in f["boxes"]:
+                if player_id is not None and b["id"] != player_id:
+                    continue
+                x, y = b["x"], b["y"] + b["h"] / 2  # foot point
+                n_pts += 1
+                if H:
+                    u, v = court_geo.project(H, x, y)
+                    if not (-1.0 <= u <= 7.1 and -1.5 <= v <= 14.9):
+                        prev = None
+                        continue
+                    cells.add((int(max(0.0, min(0.99, u / 6.1)) * 10),
+                               int(max(0.0, min(0.99, v / 13.4)) * 22)))
+                    if prev is not None:
+                        step = ((u - prev[0]) ** 2 + (v - prev[1]) ** 2) ** 0.5
+                        if step < 3.0:  # ignore teleports across sample gaps
+                            dist += step
+                    prev = (u, v)
+                else:
+                    cells.add((int(max(0.0, min(0.99, x)) * 10),
+                               int(max(0.0, min(0.99, y)) * 22)))
+        prev = None
+    return {
+        "points": n_pts,
+        "distance_m": round(dist, 1) if H else None,
+        "coverage_pct": round(len(cells) / (10 * 22) * 100, 1),
+        "court_space": bool(H),
+    }
+
+
+@app.get("/api/students/{student_id}/profile")
+def student_profile(student_id: str, request: Request):
+    """Everything the student panel shows: highlights, rallies, AI-coach notes,
+    per-session progress metrics. Visible to the student themself and to
+    coaches/admins of the same school."""
+    user = auth.require_user(request)
+    if user["id"] != student_id:
+        auth.require_role(request, "admin", "coach")
+    student = db.get_user(student_id)
+    member = next((m for m in db.school_members(user["school_id"], "student")
+                   if m["id"] == student_id), None)
+    if not student or member is None:
+        raise HTTPException(404, "student not found in your school")
+
+    sessions = []
+    for job in db.student_assignments(student_id):
+        try:
+            result = json.loads(job["result"]) if job.get("result") else {}
+        except ValueError:
+            continue
+        rallies = result.get("rallies") or []
+        durs = [float(r.get("dur") or 0) for r in rallies]
+        summary = ((result.get("vision") or {}).get("summary")) or {}
+        coach_out = result.get("coach") or {}
+        sessions.append({
+            "job_id": job["id"],
+            "filename": job.get("filename"),
+            "date": job.get("created_at"),
+            "video": f"/media/{job['id']}/reel.mp4",
+            "thumb": f"/media/{job['id']}/thumb.jpg",
+            "duration": result.get("duration"),
+            "player_id": job.get("player_id"),
+            "n_rallies": len(rallies),
+            "longest_rally": round(max(durs), 1) if durs else 0,
+            "rallies": [{"i": i + 1, "dur": r.get("dur"), "note": r.get("note"),
+                         "shuttle_quality": ((r.get("vision") or {}).get("shuttle_quality"))}
+                        for i, r in enumerate(rallies)],
+            "quality": {"shuttle": summary.get("shuttle_quality"),
+                        "pose": summary.get("pose_quality"),
+                        "players": summary.get("player_quality")},
+            "coach": ({"headline": coach_out.get("headline"),
+                       "confidence": coach_out.get("confidence"),
+                       "strengths": (coach_out.get("strengths") or [])[:3],
+                       "work_on": (coach_out.get("work_on") or [])[:3]}
+                      if coach_out.get("status") == "ok" else None),
+            "movement": _movement_stats(result, job.get("player_id")),
+        })
+    sessions.sort(key=lambda s: s["date"] or 0)
+    return {
+        "student": {"id": student["id"], "name": student["name"],
+                    "username": student["username"]},
+        "school": {"id": user["school_id"], "name": user["school_name"]},
+        "sessions": sessions,
+    }
 
 
 @app.get("/media/{job_id}/{name}")
