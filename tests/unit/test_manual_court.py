@@ -38,6 +38,8 @@ def test_manual_result_builds_right_handed_court():
 def client(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.sqlite")
     monkeypatch.setattr(config, "OUTPUTS", tmp_path / "outputs")
+    monkeypatch.setattr(config, "UPLOADS", tmp_path / "uploads")
+    (tmp_path / "uploads").mkdir()   # startup sweeps this dir
     db.init()
     with TestClient(app) as c:
         yield c
@@ -127,3 +129,25 @@ def test_racquet_track_exposed_bounded():
     track = out["vision"]["racquet_track"]
     assert 0 < len(track) <= 120
     assert set(track[0]["boxes"][0]) == {"x", "y", "w", "h", "confidence"}
+
+
+def test_retry_requeues_failed_job(client, monkeypatch):
+    calls = []
+    from app import worker
+    monkeypatch.setattr(worker, "enqueue", lambda jid: calls.append(jid))
+    (config.UPLOADS / "retryme").mkdir(parents=True, exist_ok=True)
+    (config.UPLOADS / "retryme" / "input_00.mp4").write_bytes(b"x")
+    db.create_job("retryme", "crashed.mp4", options={})
+    db.set_error("retryme", "ValueError: operands could not be broadcast")
+
+    r = client.post("/api/jobs/retryme/retry")
+    assert r.status_code == 200 and calls == ["retryme"]
+    job = db.get_job("retryme")
+    assert job["status"] == "queued" and job["error"] is None
+
+    # done jobs and missing uploads are refused
+    db.set_done("retryme", {"duration": 1})
+    assert client.post("/api/jobs/retryme/retry").status_code == 409
+    db.create_job("noinput", "gone.mp4", options={})
+    db.set_error("noinput", "boom")
+    assert client.post("/api/jobs/noinput/retry").status_code == 409

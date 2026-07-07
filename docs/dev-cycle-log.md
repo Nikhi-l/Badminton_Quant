@@ -5,6 +5,29 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 17: Production triage — GPU worker crash, render crash, doubles caps, retry (TASK-029)
+**Date:** 2026-07-08
+**Goal:** Fix the two crashes surfaced by real uploads and support doubles.
+**Root causes (from live logs + RunPod status API):**
+- Every GPU job that reached the pose-guided racquet-candidates fallback died:
+  `HoughLinesP` returns `(N,4)` on the worker's OpenCV build (not `(N,1,4)`),
+  so `line[0]` was a scalar → `TypeError: 'numpy.int32' object is not
+  iterable` → whole vision job FAILED → silent CPU fallback (that's why
+  today's job ran `local-…`). Latent since June; first executed when TASK-027
+  wired the racquet task into the router. Fix: shape-agnostic flatten.
+- Render crash `(138,1024,3) vs (138,1056,1)`: a long Gemini rally note made
+  the lower-third badge wider than the 1080px frame; `_blend` clipped the
+  frame slice but not the overlay. Fix: `_blend` crops both to the
+  intersection; `_badge` ellipsizes the note to fit (job 9cca230f32a6).
+- Doubles: worker/API capped players+poses at 2/frame → raised to 4 across
+  `_detect_pose`, canonical `players`, confidences, wrist gates.
+- `POST /api/jobs/{id}/retry` + queue Retry button: failed jobs re-run from
+  the still-on-disk upload (no re-upload, no wasted GPU pass).
+**Worker image:** `doubles-20260708` (Cloud Build) → template `ic265brof1`.
+**Tests:** 70 passing (blend clip regression with the exact failing shapes,
+badge cap, 4-player canonical passthrough, retry endpoint guards).
+**Verification:** live retry of the failed HSBC job recorded below.
+
 ## Cycle 16: Manual court drawing + configurable racquet chain (TASK-027)
 **Date:** 2026-07-07
 **Goal:** User-drawn court corners (upload + existing jobs, with instant

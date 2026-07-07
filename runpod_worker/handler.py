@@ -24,7 +24,7 @@ import requests
 import runpod
 
 CONTRACT = "baddy.vision.v1"
-WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "racquet-20260707")
+WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "doubles-20260708")
 SAMPLE_FPS = float(os.environ.get("BADDY_SAMPLE_FPS", "6"))
 MAX_FRAMES_PER_RALLY = int(os.environ.get("BADDY_MAX_FRAMES_PER_RALLY", "180"))
 YOLO_POSE_MODEL = os.environ.get("YOLO_POSE_MODEL",
@@ -225,7 +225,7 @@ def _detect_pose(frame: np.ndarray, reset_tracker: bool = False) -> tuple[list[d
                 pose["track_id"] = det["track_id"]
         entries.append((det, pose))
     entries.sort(key=lambda e: (e[0]["confidence"], _box_area(e[0])), reverse=True)
-    entries = entries[:2]
+    entries = entries[:4]   # doubles = up to 4 players
     players = [e[0] for e in entries]
     # Placeholder keeps poses index-aligned with players when keypoints are missing.
     poses = [e[1] or {"keypoints": [], "confidence": 0.0} for e in entries]
@@ -235,7 +235,7 @@ def _detect_pose(frame: np.ndarray, reset_tracker: bool = False) -> tuple[list[d
 
 def _wrists(poses: list[dict]) -> list[tuple[float, float]]:
     out = []
-    for pose in poses[:2]:
+    for pose in poses[:4]:
         for idx in (9, 10):
             pt = _pose_point(pose, idx)
             if pt:
@@ -297,7 +297,7 @@ def _detect_racquet_candidates(frame: np.ndarray, poses: list[dict]) -> tuple[li
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     candidates = []
-    for pose in poses[:2]:
+    for pose in poses[:4]:
         for wrist_idx, elbow_idx in ((9, 7), (10, 8)):
             wrist = _pose_point(pose, wrist_idx)
             if not wrist:
@@ -324,7 +324,10 @@ def _detect_racquet_candidates(frame: np.ndarray, poses: list[dict]) -> tuple[li
             if lines is None:
                 continue
             for line in lines[:12]:
-                lx1, ly1, lx2, ly2 = [int(v) for v in line[0]]
+                # HoughLinesP returns (N,1,4) or (N,4) depending on the OpenCV
+                # build; flattening handles both (the (N,4) shape made line[0]
+                # a scalar and crashed every GPU job that reached this fallback).
+                lx1, ly1, lx2, ly2 = np.asarray(line).reshape(-1)[:4].astype(int).tolist()
                 length = math.hypot(lx2 - lx1, ly2 - ly1)
                 if length < max(10, r * 0.45):
                     continue
@@ -556,7 +559,7 @@ def _process_rally(cap, meta: dict, rally: dict, video_path: Path, workdir: Path
             row["shuttle"] = shuttle
             shuttle_confs.append(shuttle["confidence"])
         frames.append(row)
-        player_confs.extend([p["confidence"] for p in players[:2]])
+        player_confs.extend([p["confidence"] for p in players[:4]])
         pose_confs.append(pose_q)
         racquet_confs.append(racquet_q)
         candidate_confs.append(candidate_q)

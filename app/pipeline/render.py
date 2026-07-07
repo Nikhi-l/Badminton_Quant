@@ -31,10 +31,17 @@ def _font(size: int):
 
 
 def _badge(text: str, sub: str) -> np.ndarray:
-    """Lower-third rally badge: lime accent bar + glass panel, broadcast style."""
+    """Lower-third rally badge: lime accent bar + glass panel, broadcast style.
+    Width is capped to fit the output frame — the sub line (Gemini's rally note)
+    is unbounded text and gets ellipsized rather than overflowing the render."""
     f1, f2 = _font(52), _font(29)
     meas = ImageDraw.Draw(Image.new("RGBA", (8, 8)))
+    max_w = config.OUT_W - 112   # badge sits at x=56; keep a mirrored right margin
     w = int(max(meas.textlength(text, font=f1), meas.textlength(sub, font=f2))) + 88
+    while w > max_w and len(sub) > 6:
+        sub = sub[: max(6, len(sub) - 8)].rstrip() + "…"
+        w = int(max(meas.textlength(text, font=f1), meas.textlength(sub, font=f2))) + 88
+    w = min(w, max_w)
     h = 138
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -63,10 +70,21 @@ def _wordmark() -> np.ndarray:
 
 
 def _blend(frame: np.ndarray, overlay: np.ndarray, x: int, y: int):
+    """Alpha-blend overlay at (x, y), cropping whatever falls outside the frame.
+    numpy slicing silently CLIPS the frame region but not the overlay, so an
+    overlay wider than the remaining frame (a long Gemini rally note once made
+    the badge 1056px wide at x=56 on a 1080px frame) crashed the render with a
+    broadcast ValueError. Crop both sides to the intersection instead."""
+    fh, fw = frame.shape[:2]
     h, w = overlay.shape[:2]
-    region = frame[y:y + h, x:x + w].astype(np.float32)
-    a = overlay[:, :, 3:4].astype(np.float32) / 255.0
-    frame[y:y + h, x:x + w] = (region * (1 - a) + overlay[:, :, :3].astype(np.float32) * a).astype(np.uint8)
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(fw, x + w), min(fh, y + h)
+    if x1 <= x0 or y1 <= y0:
+        return
+    ov = overlay[y0 - y:y1 - y, x0 - x:x1 - x]
+    region = frame[y0:y1, x0:x1].astype(np.float32)
+    a = ov[:, :, 3:4].astype(np.float32) / 255.0
+    frame[y0:y1, x0:x1] = (region * (1 - a) + ov[:, :, :3].astype(np.float32) * a).astype(np.uint8)
 
 
 def _nearest_shuttle(annotations: dict | None, t: float) -> dict | None:

@@ -148,6 +148,16 @@ def set_done(job_id: str, result: dict):
                   (json.dumps(result), now, now, now, job_id))
 
 
+def requeue(job_id: str):
+    """Reset a failed job for a retry (TASK-029): back to the queue with a clean
+    slate; the original upload in UPLOADS/{id} is reused."""
+    now = time.time()
+    with _conn() as c:
+        c.execute("UPDATE jobs SET status='queued', stage='queued', message='', "
+                  "error=NULL, result=NULL, started_at=NULL, finished_at=NULL, "
+                  "updated_at=? WHERE id=?", (now, job_id))
+
+
 def set_error(job_id: str, error: str):
     now = time.time()
     with _conn() as c:

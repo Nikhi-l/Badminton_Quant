@@ -729,6 +729,21 @@ def job_status(job_id: str):
     }
 
 
+@app.post("/api/jobs/{job_id}/retry")
+def job_retry(job_id: str):
+    """Re-run a FAILED job from its still-on-disk upload (TASK-029). A pipeline
+    bug (like the render badge crash) shouldn't cost the user a re-upload —
+    or the GPU minutes the vision pass already burned."""
+    job = db.get_job(job_id)
+    if not job or job["status"] != "failed":
+        raise HTTPException(409, "only failed jobs can be retried")
+    if not worker._find_input(job_id):
+        raise HTTPException(409, "the original upload is no longer on the server — upload again")
+    db.requeue(job_id)
+    worker.enqueue(job_id)
+    return {"ok": True, "id": job_id}
+
+
 @app.post("/api/jobs/{job_id}/court")
 async def job_set_court(job_id: str, request: Request):
     """TASK-027: user-drawn court corners for an EXISTING job. Replaces the

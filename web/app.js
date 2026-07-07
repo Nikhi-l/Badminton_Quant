@@ -548,9 +548,23 @@ function renderQueue(jobs) {
         ${st === "failed" && j.error ? `<div class="q-err">${esc(j.error)}</div>` : ""}
       </div>
       ${st === "done" ? `<button class="btn btn-small q-open" data-qid="${esc(j.id)}">🎬 Studio</button>` : ""}
+      ${st === "failed" ? `<button class="btn btn-small btn-ghost q-retry" data-rid="${esc(j.id)}">↻ Retry</button>` : ""}
     </div>`;
   }).join("");
   list.querySelectorAll(".q-open").forEach(b => b.onclick = () => openStudioById(b.dataset.qid));
+  list.querySelectorAll(".q-retry").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    b.textContent = "retrying…";
+    try {
+      await jfetch(`/api/jobs/${b.dataset.rid}/retry`, { method: "POST" });
+      myJobs.add(b.dataset.rid);
+      localStorage.setItem("baddy_jobs", JSON.stringify([...myJobs]));
+      loadQueue();
+    } catch (e) {
+      b.disabled = false;
+      b.textContent = `retry failed`;
+    }
+  });
 }
 
 async function openStudioById(id) {

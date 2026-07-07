@@ -275,7 +275,7 @@ def _frames_from(raw_rally: dict, rally: dict) -> tuple[list[dict], list[dict], 
         boxes = [_box(b) for b in raw_players]
         boxes = [b for b in boxes if b and b["confidence"] >= 0.05]
         if boxes:
-            players.append({"t": t, "boxes": boxes[:2]})
+            players.append({"t": t, "boxes": boxes[:4]})   # doubles = 4 players
         raw_poses = frame.get("poses") or frame.get("pose_tracks") or frame.get("keypoints") or []
         people = _pose_people(raw_poses, boxes)
         if people:
@@ -320,7 +320,7 @@ def _frames_from(raw_rally: dict, rally: dict) -> tuple[list[dict], list[dict], 
         boxes = [_box(b) for b in raw_boxes]
         boxes = [b for b in boxes if b and b["confidence"] >= 0.05]
         if boxes:
-            players.append({"t": t, "boxes": boxes[:2]})
+            players.append({"t": t, "boxes": boxes[:4]})
 
     shuttle.sort(key=lambda x: x["t"])
     players.sort(key=lambda x: x["t"])

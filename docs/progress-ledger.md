@@ -41,6 +41,7 @@ docs commit after each functional slice.
 | 2026-07-07 | Gemini court-corner fallback | Done (Cycle 15) | TASK-023 — structured-output corners on weak CV (<0.5), schema+agreement validation, `court.source` provenance; 5 mocked tests. uservid3: honest not_found (court not fully visible) |
 | 2026-07-07 | 3D rally replay | Done (Cycle 15) | TASK-025 — rally3d.py (camera pose from homography, drag-ballistic multi-start LM, 12Hz `rally_3d`), court.py handedness normalization, Studio "3D replay" layer (canvas 3D, orbit+presets, sim-clock-gated). 6 ground-truth tests; browser-verified on fixture3d |
 | 2026-07-07 | Manual court + racquet chain | Done + rolled out (Cycle 16) | TASK-027 — upload corner picker + Studio draw mode + court recompute endpoint (uservid3: 5 rallies gained 3D from drawn corners); racquet: custom→COCO-tennis-racket (wrist-gated)→candidates, racquet_track + overlay. Image `racquet-20260707` (yolo11s baked) on template `ic265brof1`, endpoint ready 2/unhealthy 0 |
+| 2026-07-08 | Production triage: GPU crash + render crash + doubles + retry | Done (Cycle 17) | TASK-029 — Hough unpack fix (GPU jobs were silently falling back to CPU), badge/_blend render crash fix, 2→4 player caps for doubles, retry endpoint + UI. Worker `doubles-20260708` |
 
 ## Active priorities
 1. ~~Rebuild + redeploy the RunPod worker~~ **DONE 2026-07-01**: image
