@@ -110,13 +110,19 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
     pinfo = media.make_proxy(input_path, proxy)
 
     # Court geometry (TASK-022): boundary corners + homography for court-space
-    # heatmaps and the 3D view. Best-effort — a POV/occluded court just skips it.
+    # heatmaps and the 3D view. User-drawn corners (TASK-027) are authoritative;
+    # otherwise best-effort detection — a POV/occluded court just skips it.
     try:
-        court_info = court.detect_from_video(proxy)
+        if opt.get("court_corners"):
+            court_info = court.manual_result(opt["court_corners"],
+                                             (pinfo.width, pinfo.height))
+            note("proxy", "court: using your drawn corners")
+        else:
+            court_info = court.detect_from_video(proxy)
+            if court_info.get("status") == "ok":
+                note("proxy", f"court boundary detected ({court_info['confidence']:.0%} confidence)")
     except Exception as e:  # noqa: BLE001 - court overlay must never sink a job
         court_info = {"status": "failed", "message": f"{type(e).__name__}: {e}"}
-    if court_info.get("status") == "ok":
-        note("proxy", f"court boundary detected ({court_info['confidence']:.0%} confidence)")
 
     cam_px = validate.camera_motion_probe(proxy, pinfo.duration)
     pov = cam_px > 1.0
@@ -239,7 +245,8 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
                 "status", "camera_mode", "shuttle_quality", "player_quality",
                 "pose_quality", "racquet_quality", "pose_samples", "racquet_samples",
                 "racquet_candidate_quality", "racquet_candidate_samples",
-                "mask_enabled", "shuttle_engine", "tracknet", "shuttle", "players", "poses"
+                "mask_enabled", "shuttle_engine", "tracknet", "shuttle", "players", "poses",
+                "racquets"
             )}
         rendered.append(entry)
 

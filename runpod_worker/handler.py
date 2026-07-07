@@ -24,7 +24,7 @@ import requests
 import runpod
 
 CONTRACT = "baddy.vision.v1"
-WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "bytetrack-20260707")
+WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "racquet-20260707")
 SAMPLE_FPS = float(os.environ.get("BADDY_SAMPLE_FPS", "6"))
 MAX_FRAMES_PER_RALLY = int(os.environ.get("BADDY_MAX_FRAMES_PER_RALLY", "180"))
 YOLO_POSE_MODEL = os.environ.get("YOLO_POSE_MODEL",
@@ -32,6 +32,13 @@ YOLO_POSE_MODEL = os.environ.get("YOLO_POSE_MODEL",
 YOLO_POSE_FALLBACK = os.environ.get("YOLO_POSE_FALLBACK",
                                     os.environ.get("POSE_MODEL_FALLBACK", "yolo11n-pose.pt"))
 RACQUET_MODEL = os.environ.get("RACQUET_MODEL", "")
+# TASK-027: zero-training fallback — standard COCO detect models classify
+# badminton racquets as 'tennis racket' (class 38) with usable recall. A custom
+# fine-tune (TASK-028) plugs in via RACQUET_MODEL without code changes.
+RACQUET_COCO_FALLBACK = os.environ.get("RACQUET_COCO_FALLBACK", "1") == "1"
+RACQUET_COCO_MODEL = os.environ.get("RACQUET_COCO_MODEL", "yolo11s.pt")
+RACQUET_COCO_CONF = float(os.environ.get("RACQUET_COCO_CONF", "0.18"))
+RACQUET_WRIST_GATE = float(os.environ.get("RACQUET_WRIST_GATE", "0.14"))
 YOLO_CONF = float(os.environ.get("YOLO_CONF", "0.25"))
 YOLO_IMGSZ = int(os.environ.get("YOLO_IMGSZ", "640"))
 DEVICE = os.environ.get("YOLO_DEVICE", "0")
@@ -47,6 +54,7 @@ TRACKNET_EVAL_MODE = os.environ.get("TRACKNET_EVAL_MODE", "nonoverlap")
 _pose_model = None
 _pose_model_path = ""
 _racquet_model = None
+_racquet_source = ""    # custom | coco-tennis-racket | "" (pose-guided candidates only)
 _model_error = ""
 _tracknet_error = ""
 _track_error = ""   # ByteTrack unavailable -> plain predict + downstream id heuristic
@@ -81,9 +89,14 @@ def _load_models(pose_model: str | None = None) -> None:
             errors.append(f"{Path(candidate).name}: {type(exc).__name__}: {exc}")
     if not _pose_model and candidates:
         _model_error = "; ".join(errors)
+    global _racquet_source
     try:
         if RACQUET_MODEL and _racquet_model is None:
             _racquet_model = YOLO(RACQUET_MODEL)
+            _racquet_source = "custom"
+        elif _racquet_model is None and RACQUET_COCO_FALLBACK and RACQUET_COCO_MODEL:
+            _racquet_model = YOLO(RACQUET_COCO_MODEL)
+            _racquet_source = "coco-tennis-racket"
     except Exception as exc:  # noqa: BLE001 - fallbacks still produce a valid contract.
         _model_error = f"{type(exc).__name__}: {exc}"
 
@@ -220,11 +233,26 @@ def _detect_pose(frame: np.ndarray, reset_tracker: bool = False) -> tuple[list[d
     return players, poses, _clamp01(pose_quality)
 
 
-def _detect_racquet(frame: np.ndarray) -> tuple[list[dict], float]:
+def _wrists(poses: list[dict]) -> list[tuple[float, float]]:
+    out = []
+    for pose in poses[:2]:
+        for idx in (9, 10):
+            pt = _pose_point(pose, idx)
+            if pt:
+                out.append((pt[0], pt[1]))
+    return out
+
+
+def _detect_racquet(frame: np.ndarray, poses: list[dict] | None = None) -> tuple[list[dict], float]:
+    """Racquet boxes via the configured chain (TASK-027):
+    custom RACQUET_MODEL → COCO 'tennis racket' fallback gated to wrist
+    proximity (kills crowd/floor false positives) → callers fall back to the
+    pose-guided line candidates when this returns nothing."""
     if _racquet_model is None:
         return [], 0.0
     h, w = frame.shape[:2]
-    result = _racquet_model.predict(frame, imgsz=YOLO_IMGSZ, conf=YOLO_CONF,
+    conf_floor = RACQUET_COCO_CONF if _racquet_source == "coco-tennis-racket" else YOLO_CONF
+    result = _racquet_model.predict(frame, imgsz=YOLO_IMGSZ, conf=conf_floor,
                                     device=DEVICE, verbose=False)[0]
     boxes = getattr(result, "boxes", None)
     if boxes is None:
@@ -233,10 +261,20 @@ def _detect_racquet(frame: np.ndarray) -> tuple[list[dict], float]:
     xyxy = boxes.xyxy.cpu().numpy() if boxes.xyxy is not None else []
     confs = boxes.conf.cpu().numpy() if boxes.conf is not None else np.ones(len(xyxy))
     classes = boxes.cls.cpu().numpy() if boxes.cls is not None else np.zeros(len(xyxy))
+    wrists = _wrists(poses or []) if _racquet_source == "coco-tennis-racket" else []
     detections = []
     for box, conf, cls in zip(xyxy, confs, classes):
         label = str(names.get(int(cls), "")).lower()
-        if RACQUET_MODEL and label and "racquet" not in label and "racket" not in label:
+        if _racquet_source == "coco-tennis-racket":
+            if "racket" not in label and "racquet" not in label:
+                continue
+            cx = (box[0] + box[2]) / 2 / max(w, 1)
+            cy = (box[1] + box[3]) / 2 / max(h, 1)
+            # a racquet in play is in someone's hand — require a nearby wrist
+            if wrists and not any(math.hypot(cx - wx, cy - wy) <= RACQUET_WRIST_GATE
+                                  for wx, wy in wrists):
+                continue
+        elif label and "racquet" not in label and "racket" not in label:
             continue
         detections.append(_norm_box(box[0], box[1], box[2], box[3], w, h, conf))
     detections.sort(key=lambda b: b["confidence"], reverse=True)
@@ -494,7 +532,7 @@ def _process_rally(cap, meta: dict, rally: dict, video_path: Path, workdir: Path
                                   if want_pose else ([], [], 0.0))
         if want_pose:
             first_pose_frame = False
-        racquets, racquet_q = _detect_racquet(frame) if want_racquet else ([], 0.0)
+        racquets, racquet_q = _detect_racquet(frame, poses) if want_racquet else ([], 0.0)
         racquet_candidates, candidate_q = ([], 0.0)
         if want_racquet and not racquets:
             racquet_candidates, candidate_q = _detect_racquet_candidates(frame, poses)
@@ -586,7 +624,9 @@ def process(job_input: dict) -> dict:
             "pose_backend": "runpod",
             "pose_device": DEVICE,
             "pose_load_status": "loaded" if _pose_model is not None else "failed",
-            "racquet_model": RACQUET_MODEL if _racquet_model is not None else None,
+            "racquet_model": ((RACQUET_MODEL or RACQUET_COCO_MODEL)
+                              if _racquet_model is not None else None),
+            "racquet_source": _racquet_source if _racquet_model is not None else "",
             "tracknet_repo": TRACKNET_REPO if _tracknet_ready() else None,
             "tracknet_model": TRACKNET_TRACKNET_FILE if _tracknet_ready() else None,
             "fallback": bool(_model_error),

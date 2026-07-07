@@ -5,6 +5,41 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 16: Manual court drawing + configurable racquet chain (TASK-027)
+**Date:** 2026-07-07
+**Goal:** User-drawn court corners (upload + existing jobs, with instant
+heatmap/3D recompute) and a configurable racquet-detection chain.
+**Roadmap alignment:** PRD §16 TASK-027 (user request 2026-07-07).
+**Branch:** `feat/TASK-027-manual-court-racquet` off `c5dc143`.
+**Shipped:**
+- `config.court_corners_option` validation; `court.manual_result`
+  (source="manual", conf 0.98, handedness-normalized); run.process treats drawn
+  corners as authoritative; upload UI grabs a frame CLIENT-SIDE from the picked
+  file and guides 4 corner clicks while chunks upload.
+- `POST /api/jobs/{id}/court`: recomputes court + every rally's `rally_3d`
+  from stored tracks, persists to result.json + DB. Studio Court inspector
+  gains a guided draw mode (landscape + reset framing → pure contain-box
+  inversion of clicks).
+- Racquet chain: router now requests the racquet task with pose; worker
+  `RACQUET_MODEL` (custom) → COCO 'tennis racket' fallback (yolo11s baked,
+  conf 0.18, wrist-gated ≤0.14 via pose) → pose-guided line candidates;
+  provenance `model_status.racquet_source`; canonical rallies carry
+  `racquets`; bounded `racquet_track` in the public payload; dashed amber
+  outline overlay in the Studio. WORKER_VERSION `racquet-20260707`.
+**Tests/verification performed:**
+- `./scripts/check.sh` → 65 passed (option validation, manual_result
+  handedness, endpoint recompute on a ballistic seed incl. disk+DB
+  persistence, bad-corner rejection, racquet_track sampler).
+- Browser on REAL footage: uservid3 (court undetectable by CV and declined by
+  Gemini) → Studio draw mode → 4 clicks → "court saved — 5 rallies
+  reconstructed in 3D"; court overlay 98%, heatmaps in court space, 3D replay
+  panel live on real TrackNet tracks. Geometry quality tracks corner accuracy.
+**Docs updated:** this log, ledger, PRD §16 (TASK-027 done, TASK-028 queued),
+task files.
+**Open risks / next steps:** COCO-fallback racquet recall is partial →
+TASK-028 fine-tune; worker image `racquet-20260707` rollout + real-job racquet
+sample pending.
+
 ## Cycle 15: Ship + queued tasks — deploy, ByteTrack ids, Gemini corners, 3D replay (TASK-023/024/025)
 **Date:** 2026-07-07
 **Goal:** Merge + deploy Cycles 13/14 to baddyai.com, then clear the queued task

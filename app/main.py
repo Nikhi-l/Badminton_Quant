@@ -211,6 +211,34 @@ def _compact_vision(v: dict | None) -> dict | None:
     pose_track = _sample_pose_track(poses)
     if pose_track:
         out["pose_track"] = pose_track
+    rtrack = _sample_racquet_track(v.get("racquets"))
+    if rtrack:
+        out["racquet_track"] = rtrack
+    return out
+
+
+def _sample_racquet_track(racquets: list | None, max_frames: int = 120) -> list[dict]:
+    """Bounded measured racquet boxes for Studio overlays (TASK-027). No ids —
+    racquets swap hands and sides; the overlay just outlines what was seen."""
+    if not isinstance(racquets, list) or not racquets:
+        return []
+    step = max(1, math.ceil(len(racquets) / max_frames))
+    out: list[dict] = []
+    for f in racquets[::step]:
+        if not isinstance(f, dict):
+            continue
+        boxes = []
+        for b in (f.get("boxes") or [])[:2]:
+            nb = _compact_bbox(b)
+            if nb:
+                boxes.append(nb)
+        if not boxes:
+            continue
+        try:
+            t = round(float(f.get("t")), 3)
+        except (TypeError, ValueError):
+            t = 0.0
+        out.append({"t": t, "boxes": boxes})
     return out
 
 
@@ -699,6 +727,56 @@ def job_status(job_id: str):
         "filename": job["filename"], "created_at": job["created_at"], **_job_meta(job),
         "result": _public_result(job),
     }
+
+
+@app.post("/api/jobs/{job_id}/court")
+async def job_set_court(job_id: str, request: Request):
+    """TASK-027: user-drawn court corners for an EXISTING job. Replaces the
+    court geometry (source="manual") and recomputes each rally's 3D
+    reconstruction from the stored shuttle tracks — old jobs whose court the
+    detector couldn't see become heatmap- and 3D-capable retroactively."""
+    from .pipeline import court as court_mod
+    from .pipeline import rally3d
+
+    job = db.get_job(job_id)
+    if not job or job["status"] != "done":
+        raise HTTPException(409, "job is not in a finished state")
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "missing court payload")
+    corners = config.court_corners_option(payload.get("corners"))
+    if not corners:
+        raise HTTPException(400, "corners must be four normalized [x, y] pairs "
+                                 "ordered far-left, far-right, near-right, near-left")
+    result_path = config.OUTPUTS / job_id / "result.json"
+    if not result_path.exists():
+        raise HTTPException(409, "job result is not on disk")
+    result = json.loads(result_path.read_text())
+    src = result.get("source") or {}
+    frame_wh = (int(src.get("w") or 1920), int(src.get("h") or 1080))
+    court_info = court_mod.manual_result(corners, frame_wh)
+    result["court"] = court_info
+
+    seen: set[int] = set()
+    rebuilt = 0
+    for coll in (result.get("rallies") or [], result.get("rally_pool") or []):
+        for rr in coll:
+            if not isinstance(rr, dict) or id(rr) in seen:
+                continue
+            seen.add(id(rr))
+            try:
+                r3d = rally3d.reconstruct_rally(rr.get("vision"), court_info, frame_wh)
+            except Exception as e:  # noqa: BLE001
+                r3d = {"status": "failed", "message": f"{type(e).__name__}: {e}"}
+            if r3d.get("status") == "ok":
+                rr["rally_3d"] = r3d
+                rebuilt += 1
+            else:
+                rr.pop("rally_3d", None)
+    result_path.write_text(json.dumps(result))
+    db.set_done(job_id, result)
+    return {"ok": True, "court": court_info, "rallies_3d": rebuilt}
 
 
 @app.post("/api/jobs/{job_id}/remix")

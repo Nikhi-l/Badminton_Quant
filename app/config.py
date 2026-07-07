@@ -89,18 +89,45 @@ def runpod_ready() -> bool:
     return bool(RUNPOD_ENDPOINT_ID and RUNPOD_API_KEY)
 
 
+def court_corners_option(raw) -> list[list[float]] | None:
+    """Validate user-drawn court corners (TASK-027): exactly four [x, y] pairs,
+    normalized 0..1, spanning a plausible quad. None when absent/malformed."""
+    if not isinstance(raw, (list, tuple)) or len(raw) != 4:
+        return None
+    out = []
+    for pt in raw:
+        if not isinstance(pt, (list, tuple)) or len(pt) < 2:
+            return None
+        try:
+            x, y = float(pt[0]), float(pt[1])
+        except (TypeError, ValueError):
+            return None
+        if not (-0.05 <= x <= 1.05 and -0.05 <= y <= 1.05):
+            return None
+        out.append([round(x, 4), round(y, 4)])
+    xs = [p[0] for p in out]
+    ys = [p[1] for p in out]
+    if (max(xs) - min(xs)) < 0.15 or (max(ys) - min(ys)) < 0.1:
+        return None   # degenerate quad — misclicks, not a court
+    return out
+
+
 def normalize_options(opts: dict | None) -> dict:
     """Validate/clamp per-job vision options to the supported worker set."""
     opts = opts if isinstance(opts, dict) else {}
     shuttle = str(opts.get("shuttle", VISION_DEFAULT_SHUTTLE)).lower()
     pose = str(opts.get("pose", VISION_DEFAULT_POSE)).lower()
-    return {
+    out = {
         "shuttle": shuttle if shuttle in SHUTTLE_ENGINES else "off",
         # Canonical public value remains "yolo11" so existing saved jobs and UI
         # state keep working even when the concrete model is YOLO26 or later.
         "pose": "yolo11" if pose_enabled_value(pose) else "off",
         "coach": bool(opts.get("coach", COACH_ENABLED)),
     }
+    corners = court_corners_option(opts.get("court_corners"))
+    if corners:
+        out["court_corners"] = corners   # user-drawn court (far-L, far-R, near-R, near-L)
+    return out
 
 
 def pipeline_for_options(opts: dict | None) -> str:

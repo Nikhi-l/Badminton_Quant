@@ -40,6 +40,7 @@ docs commit after each functional slice.
 | 2026-07-07 | Worker ByteTrack identity | Done + rolled out (Cycle 15) | TASK-024 — track_id end-to-end (worker→gpu.py→samplers, ≥90%-coverage gate, shared relabel); image `bytetrack-20260707` on template `ic265brof1`, endpoint ready 2/unhealthy 0. Real-GPU-job id check pending next upload |
 | 2026-07-07 | Gemini court-corner fallback | Done (Cycle 15) | TASK-023 — structured-output corners on weak CV (<0.5), schema+agreement validation, `court.source` provenance; 5 mocked tests. uservid3: honest not_found (court not fully visible) |
 | 2026-07-07 | 3D rally replay | Done (Cycle 15) | TASK-025 — rally3d.py (camera pose from homography, drag-ballistic multi-start LM, 12Hz `rally_3d`), court.py handedness normalization, Studio "3D replay" layer (canvas 3D, orbit+presets, sim-clock-gated). 6 ground-truth tests; browser-verified on fixture3d |
+| 2026-07-07 | Manual court + racquet chain | Done (Cycle 16) | TASK-027 — upload corner picker + Studio draw mode + court recompute endpoint (uservid3: 5 rallies gained 3D from drawn corners); racquet: custom→COCO-tennis-racket (wrist-gated)→candidates, racquet_track + overlay; worker `racquet-20260707` |
 
 ## Active priorities
 1. ~~Rebuild + redeploy the RunPod worker~~ **DONE 2026-07-01**: image
@@ -52,7 +53,8 @@ docs commit after each functional slice.
    old reels show the rebuild hint by design.
 3. ~~Rebuild RunPod worker~~ **DONE (Cycle 15)** — `bytetrack-20260707` carries
    BOTH the pairing fix and ByteTrack ids; endpoint healthy.
-4. **Verify on a real upload**: next GPU job should show
+4. **Verify on a real upload**: next GPU job should show `racquet_source` +
+   measured racquet boxes (image `racquet-20260707`), plus
    `worker_version=bytetrack-20260707`, two stable player ids, `court.source`,
    and (full-court footage) `rally_3d` shots — record here.
 5. **Schools P1**: assign-to-student from a Studio player track, cohorts,

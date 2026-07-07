@@ -36,7 +36,7 @@ ENV TRACKNET_REPO=/opt/TrackNetV3 \
 # resolves bare model names): cold starts skip the ~60MB download, and the build
 # FAILS FAST here if a configured model doesn't exist in this ultralytics version
 # — a bad pose default can never reach a running worker.
-RUN python -c "from ultralytics import YOLO; YOLO('yolo26m-pose.pt'); YOLO('yolo11n-pose.pt')"
+RUN python -c "from ultralytics import YOLO; YOLO('yolo26m-pose.pt'); YOLO('yolo11n-pose.pt'); YOLO('yolo11s.pt')"
 
 COPY handler.py /worker/handler.py
 

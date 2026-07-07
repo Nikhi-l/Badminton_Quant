@@ -47,7 +47,7 @@ def analyze(proxy_path: str | Path, workdir: str | Path, sport: str,
     if shuttle == "tracknetv3":
         tasks = ["shuttle"]
         if pose_on:
-            tasks += ["players", "pose"]
+            tasks += ["players", "pose", "racquet"]   # racquet chain needs wrists (TASK-027)
         log(f"shuttle=TrackNetV3{' +pose' if pose_on else ''} → GPU worker")
         out = gpu.analyze(proxy_path, workdir, sport, rallies, log=log, tasks=tasks)
         out.setdefault("backend", "runpod")
@@ -66,7 +66,7 @@ def analyze(proxy_path: str | Path, workdir: str | Path, sport: str,
     if pose_on and config.pose_prefers_gpu() and config.runpod_ready():
         log(f"pose=YOLO ({config.POSE_MODEL_GPU}) → GPU worker")
         out = gpu.analyze(proxy_path, workdir, sport, rallies, log=log,
-                          tasks=["players", "pose"])
+                          tasks=["players", "pose", "racquet"])
         out.setdefault("backend", "runpod")
         if out.get("status") not in {"disabled", "failed"}:
             out["options"] = opt

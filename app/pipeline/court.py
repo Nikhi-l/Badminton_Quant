@@ -316,6 +316,17 @@ def _result_from_corners(corners: list, source: str, confidence: float,
     }
 
 
+def manual_result(corners: list, frame_wh: tuple[int, int]) -> dict:
+    """Court geometry from USER-DRAWN corners (TASK-027) — ordered far-left,
+    far-right, near-right, near-left, normalized to the source frame. Manual
+    corners are authoritative: highest confidence, provenance "manual", and the
+    same handedness normalization every detector result gets."""
+    result = _result_from_corners(
+        [[round(float(x), 4), round(float(y), 4)] for x, y in corners],
+        "manual", 0.98, 0)
+    return _normalize_handedness(result, frame_wh)
+
+
 def detect_from_video(video_path, samples: int = 3, gemini_fallback: bool = True,
                       log=print) -> dict:
     """Detect the court across a few frames of the (proxy) video and merge.

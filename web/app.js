@@ -3,12 +3,130 @@ const $ = (id) => document.getElementById(id);
 
 /* ---------- per-job vision worker selection ---------- */
 function currentOptions() {
-  return {
+  const opts = {
     shuttle: $("optShuttle").checked ? "tracknetv3" : "off",
     pose: $("optPose").checked ? "yolo11" : "off",
     coach: $("optCoach").checked,
   };
+  if (courtPick.corners.length === 4) opts.court_corners = courtPick.corners;
+  return opts;
 }
+
+/* ---------- TASK-027: mark the court before processing ----------
+A frame is grabbed CLIENT-SIDE from the selected file (no round trip); the user
+clicks the four outer corners in the guided order the backend expects. Corners
+ride along in options at upload-finish; drawing can continue while chunks
+upload — anything short of 4 corners is simply dropped by validation, and the
+Studio's "Draw court" covers jobs submitted without them. */
+const courtPick = {
+  corners: [],           // [[x, y] * 4] normalized to the source frame
+  video: { x: 0, y: 0, w: 1, h: 1 },   // drawn video box within the canvas
+  ready: false,
+};
+const COURT_PICK_ORDER = ["FAR-LEFT", "FAR-RIGHT", "NEAR-RIGHT", "NEAR-LEFT"];
+
+async function courtPickLoad(file) {
+  const wrap = $("voptCourt");
+  if (!wrap) return;
+  courtPick.corners = [];
+  courtPick.ready = false;
+  wrap.hidden = false;
+  courtPickHint();
+  const url = URL.createObjectURL(file);
+  const v = document.createElement("video");
+  v.muted = true;
+  v.playsInline = true;
+  v.preload = "auto";
+  v.src = url;
+  try {
+    await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = rej; setTimeout(rej, 8000); });
+    await new Promise((res) => {
+      v.onseeked = res;
+      v.currentTime = Math.min((v.duration || 4) * 0.25, (v.duration || 4) - 0.1);
+      setTimeout(res, 3000);
+    });
+    const canvas = $("courtPickCanvas");
+    const g = canvas.getContext("2d");
+    const vw = v.videoWidth || 16, vh = v.videoHeight || 9;
+    const scale = Math.min(canvas.width / vw, canvas.height / vh);
+    const w = vw * scale, h = vh * scale;
+    const x = (canvas.width - w) / 2, y = (canvas.height - h) / 2;
+    g.fillStyle = "#0b0d12";
+    g.fillRect(0, 0, canvas.width, canvas.height);
+    g.drawImage(v, x, y, w, h);
+    courtPick.video = { x, y, w, h };
+    courtPick.frame = g.getImageData(0, 0, canvas.width, canvas.height);
+    courtPick.ready = true;
+  } catch {
+    wrap.hidden = true;   // unreadable codec etc. — picker is optional
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function courtPickHint() {
+  const hint = $("courtPickHint"), status = $("courtPickStatus");
+  if (!hint) return;
+  const n = courtPick.corners.length;
+  hint.textContent = n < 4
+    ? `Click the ${COURT_PICK_ORDER[n]} corner (${n + 1}/4) — far = the baseline away from the camera`
+    : "Court marked ✓ — it will be used for heatmaps & 3D replay";
+  hint.classList.toggle("done", n === 4);
+  if (status) status.textContent = n === 4 ? "included with this upload" : n ? `${n}/4 corners` : "";
+}
+
+function courtPickRedraw() {
+  const canvas = $("courtPickCanvas");
+  if (!canvas || !courtPick.frame) return;
+  const g = canvas.getContext("2d");
+  g.putImageData(courtPick.frame, 0, 0);
+  const vb = courtPick.video;
+  const px = (c) => [vb.x + c[0] * vb.w, vb.y + c[1] * vb.h];
+  if (courtPick.corners.length > 1) {
+    g.strokeStyle = "rgba(183,245,66,.9)";
+    g.lineWidth = 2;
+    g.beginPath();
+    courtPick.corners.forEach((c, i) => {
+      const [x, y] = px(c);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    });
+    if (courtPick.corners.length === 4) g.closePath();
+    g.stroke();
+    if (courtPick.corners.length === 4) {
+      g.fillStyle = "rgba(183,245,66,.08)";
+      g.fill();
+    }
+  }
+  courtPick.corners.forEach((c, i) => {
+    const [x, y] = px(c);
+    g.fillStyle = "#b7f542";
+    g.strokeStyle = "#0a0c08";
+    g.beginPath(); g.arc(x, y, 5, 0, Math.PI * 2); g.fill(); g.stroke();
+    g.fillStyle = "#0a0c08";
+    g.font = "700 8px Inter";
+    g.fillText(String(i + 1), x - 2.5, y + 3);
+  });
+}
+
+(function initCourtPick() {
+  const canvas = $("courtPickCanvas");
+  if (!canvas) return;
+  canvas.addEventListener("click", (e) => {
+    if (!courtPick.ready || courtPick.corners.length >= 4) return;
+    const r = canvas.getBoundingClientRect();
+    const cx = (e.clientX - r.left) * (canvas.width / r.width);
+    const cy = (e.clientY - r.top) * (canvas.height / r.height);
+    const vb = courtPick.video;
+    const nx = (cx - vb.x) / vb.w, ny = (cy - vb.y) / vb.h;
+    if (nx < -0.02 || nx > 1.02 || ny < -0.02 || ny > 1.02) return;   // letterbox click
+    courtPick.corners.push([Math.min(1, Math.max(0, +nx.toFixed(4))),
+                            Math.min(1, Math.max(0, +ny.toFixed(4)))]);
+    courtPickRedraw();
+    courtPickHint();
+  });
+  const reset = $("courtPickReset");
+  if (reset) reset.onclick = () => { courtPick.corners = []; courtPickRedraw(); courtPickHint(); };
+})();
 
 function poseOptionEnabled(opts) {
   const pose = String((opts || {}).pose || "off").toLowerCase();
@@ -82,12 +200,21 @@ function openFilePicker() {
 }
 $("browse").onclick = (e) => { e.stopPropagation(); openFilePicker(); };
 drop.onclick = (e) => { if (e.target === drop || e.target.closest(".drop-idle")) openFilePicker(); };
-fileInput.onchange = () => { pickerBusy = false; if (fileInput.files.length) startUpload([...fileInput.files]); };
+fileInput.onchange = () => {
+  pickerBusy = false;
+  if (fileInput.files.length) {
+    courtPickLoad(fileInput.files[0]);   // draw corners while the upload runs
+    startUpload([...fileInput.files]);
+  }
+};
 ["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", e => {
   const fs = [...e.dataTransfer.files];
-  if (fs.length) startUpload(fs);
+  if (fs.length) {
+    courtPickLoad(fs[0]);
+    startUpload(fs);
+  }
 });
 
 async function jfetch(url, opts = {}) {
@@ -1395,14 +1522,17 @@ function renderInspector() {
           <div class="metric"><b>${fmtPct(c.confidence)}</b><span>confidence</span></div>
           <div class="metric"><b>${c.frames_used || 1}</b><span>frames agreed</span></div>
         </div>
-        <div class="control-hint muted">Boundary + corners detected on the source frame; the homography maps play onto a ${(c.court_size_m || [6.1, 13.4])[0]}×${(c.court_size_m || [6.1, 13.4])[1]}m court plane for heatmaps and the 3D view.</div>`
-        : `<div class="control-hint muted">No court boundary detected in this video (POV or occluded footage skips it). Detection runs automatically on new jobs.</div>`}
+        <div class="control-hint muted">Boundary + corners ${c.source === "manual" ? "drawn by you" : "detected on the source frame"}; the homography maps play onto a ${(c.court_size_m || [6.1, 13.4])[0]}×${(c.court_size_m || [6.1, 13.4])[1]}m court plane for heatmaps and the 3D view.</div>`
+        : `<div class="control-hint muted">No court boundary detected in this video (POV or occluded footage skips it). Draw it yourself below — heatmaps and 3D replay recompute instantly.</div>`}
+      <button class="btn btn-small" id="courtDrawBtn">${courtDraw.active ? "Cancel drawing" : (c ? "Redraw court corners" : "✏️ Draw court corners")}</button>
+      ${courtDraw.active ? `<div class="control-hint muted">Click the four OUTER corners on the video in order: far-left, far-right, near-right, near-left.</div>` : ""}
       </div>`;
     if (c) {
       $("courtEnabled").onchange = (e) => { co.enabled = e.target.checked; stateChanged(); };
       $("courtOpacity").oninput = (e) => { co.opacity = Number(e.target.value) / 100; stateChanged(false); };
       $("courtNet").onchange = (e) => { co.showNet = e.target.checked; stateChanged(false); };
     }
+    $("courtDrawBtn").onclick = () => (courtDraw.active ? endCourtDraw(true) : startCourtDraw());
   } else if (studio.selectedLayer === "replay3d") {
     const r3o = state.overlays.replay3d;
     const has = typeof replay3D !== "undefined" && replay3D.anyRally3d();
@@ -2019,6 +2149,15 @@ function updateOverlayPreview() {
     }
     const pose = currentPose(ctx);
     if (pose) parts.push(renderPoseOverlay(pose, po, ctx));
+    for (const rb of currentRacquets(ctx)) {
+      const tl = trackPointToScreen(Number(rb.x) - Number(rb.w) / 2, Number(rb.y) - Number(rb.h) / 2, ctx, false);
+      const br = trackPointToScreen(Number(rb.x) + Number(rb.w) / 2, Number(rb.y) + Number(rb.h) / 2, ctx, false);
+      if (!tl || !br) continue;
+      const left = Math.min(tl.left, br.left), top = Math.min(tl.top, br.top);
+      const w = Math.abs(br.left - tl.left), hh = Math.abs(br.top - tl.top);
+      if (left > 104 || top > 104 || left + w < -4 || top + hh < -4) continue;
+      parts.push(`<div class="racquet-box" style="left:${left}%;top:${top}%;width:${w}%;height:${hh}%;opacity:${po.opacity}"><span class="racquet-tag">racquet</span></div>`);
+    }
   }
   overlayAlignmentHint(ctx, sh.enabled || po.enabled);
   wrap.innerHTML = parts.join("");
@@ -2037,6 +2176,23 @@ function renderPlayerBox(b, po, isTarget, ctx) {
   return `<div class="player-box p${Number(b.id) % 4}${isTarget ? " target" : ""}" data-pid="${b.id}" ` +
     `style="left:${left}%;top:${top}%;width:${w}%;height:${h}%;opacity:${po.opacity}">` +
     `<span class="player-tag">P${Number(b.id) + 1}</span></div>`;
+}
+
+// Measured racquet boxes at the playhead (TASK-027), or [].
+function currentRacquets(ctx = trackContext()) {
+  if (!ctx) return [];
+  const pick = (vision, t) => {
+    const fr = nearestTrackPoint((vision || {}).racquet_track || [], t, 0.6);
+    return fr ? (fr.boxes || []) : [];
+  };
+  if (ctx.seg) return pick(ctx.seg.vision, ctx.sourceT);
+  if (ctx.kind === "source") {
+    for (const seg of ctx.segs) {
+      const boxes = pick(seg.vision, ctx.sourceT);
+      if (boxes.length) return boxes;
+    }
+  }
+  return [];
 }
 
 // Real pose keypoints for the current time, or null.
@@ -2110,6 +2266,106 @@ function renderPoseOverlay(pose, po, ctx) {
   }
   if (!parts.length) return "";
   return `<svg class="pose-figure ${esc(po.style)}" viewBox="0 0 ${fw} ${fh}" preserveAspectRatio="none" style="opacity:${po.opacity};--pose-width:${lw}px">${parts.join("")}</svg>`;
+}
+
+/* ---------- TASK-027: draw the court on an existing job ---------- */
+// Landscape + reset framing makes the stage a pure contain-box of the SOURCE
+// frame, so a click inverts to source-normalized coordinates with no crop math.
+const courtDraw = { active: false, pts: [] };
+
+function startCourtDraw() {
+  courtDraw.active = true;
+  courtDraw.pts = [];
+  setPreviewAspect("landscape");
+  studio.editorState.framing = { fit: "fit", zoom: 1, x: 0, y: 0 };
+  applyFraming();
+  const frame = $("stageFrame");
+  frame.style.cursor = "crosshair";
+  frame.addEventListener("pointerdown", courtDrawClick, true);
+  courtDrawHint();
+  renderInspector();
+}
+
+function endCourtDraw(cancelled = false) {
+  courtDraw.active = false;
+  const frame = $("stageFrame");
+  frame.style.cursor = "";
+  frame.removeEventListener("pointerdown", courtDrawClick, true);
+  const layer = $("courtDrawLayer");
+  if (layer) layer.remove();
+  if (cancelled) $("tpHint").textContent = "";
+  renderInspector();
+}
+
+function courtDrawHint() {
+  const n = courtDraw.pts.length;
+  $("tpHint").textContent = n < 4
+    ? `court: click the ${COURT_PICK_ORDER[n]} corner (${n + 1}/4)`
+    : "court: saving…";
+}
+
+function courtDrawClick(e) {
+  if (!courtDraw.active) return;
+  e.stopPropagation();
+  e.preventDefault();
+  const frame = $("stageFrame"), v = $("stVideo");
+  const r = frame.getBoundingClientRect();
+  const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
+  // invert the contain box (fit, zoom 1, no pan — enforced by startCourtDraw)
+  const fw = frame.clientWidth || 1, fh = frame.clientHeight || 1;
+  const vw = v.videoWidth || 16, vh = v.videoHeight || 9;
+  const frameAspect = fw / fh, videoAspect = vw / vh;
+  let w = fw, h = fh, ox = 0, oy = 0;
+  if (videoAspect > frameAspect) { h = fw / videoAspect; oy = (fh - h) / 2; }
+  else { w = fh * videoAspect; ox = (fw - w) / 2; }
+  const nx = (fx * fw - ox) / w, ny = (fy * fh - oy) / h;
+  if (nx < -0.02 || nx > 1.02 || ny < -0.02 || ny > 1.02) return;
+  courtDraw.pts.push([Math.min(1, Math.max(0, +nx.toFixed(4))),
+                      Math.min(1, Math.max(0, +ny.toFixed(4)))]);
+  courtDrawRender();
+  courtDrawHint();
+  if (courtDraw.pts.length === 4) submitCourtDraw();
+}
+
+function courtDrawRender() {
+  let layer = $("courtDrawLayer");
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.id = "courtDrawLayer";
+    layer.className = "court-draw-layer";
+    $("stageFrame").appendChild(layer);
+  }
+  const ctx = trackContext() || { kind: "source", sourceT: 0, seg: null, segs: [] };
+  layer.innerHTML = courtDraw.pts.map((p, i) => {
+    const s = videoFitPoint(p[0], p[1]);
+    return `<span class="court-draw-dot" style="left:${s.left}%;top:${s.top}%">${i + 1}</span>`;
+  }).join("");
+}
+
+async function submitCourtDraw() {
+  try {
+    const resp = await jfetch(`/api/jobs/${studio.item.id}/court`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ corners: courtDraw.pts }),
+    });
+    // pull the recomputed rallies (court + rally_3d) without resetting the editor
+    const job = await jfetch(`/api/jobs/${studio.item.id}`);
+    if (job && job.result) {
+      studio.item = { ...studio.item, court: job.result.court,
+                      rallies: job.result.rallies, rally_pool: job.result.rally_pool };
+    }
+    studio.editorState.overlays.court.enabled = true;
+    if (typeof replay3D !== "undefined") replay3D.invalidate();
+    endCourtDraw();
+    $("tpHint").textContent = `court saved — heatmaps updated · ${resp.rallies_3d} rall${resp.rallies_3d === 1 ? "y" : "ies"} reconstructed in 3D`;
+    renderLayerList();
+    renderInspector();
+    updateOverlayPreview();
+  } catch (e) {
+    endCourtDraw(true);
+    $("tpHint").textContent = `court not saved: ${e.message}`;
+  }
 }
 
 /* ---------- TASK-022: court overlay + post-game movement heatmaps ---------- */

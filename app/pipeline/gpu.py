@@ -97,6 +97,7 @@ def _model_status(raw: dict) -> dict:
         "racquet": {
             "enabled": bool(racquet_model),
             "model": _basename(racquet_model),
+            "source": str(status.get("racquet_source") or ""),
             "mode": "measured_boxes" if racquet_model else "not_configured",
         },
         "tracknet": {
@@ -413,6 +414,7 @@ def _canonicalize(raw: Any, rallies: list[dict]) -> dict:
             "shuttle": shuttle,
             "players": players,
             "poses": poses,
+            "racquets": racquets,
         })
 
     def avg(key: str) -> float:
