@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from .. import config
-from . import coach, court, gemini, media, rally, render, stitch, track, validate
+from . import coach, court, gemini, media, rally, rally3d, render, stitch, track, validate
 from . import vision as vision_engine
 
 STAGES = ["combine", "probe", "proxy", "rallies", "vision", "tracking", "render",
@@ -221,6 +221,16 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
         entry = {**r, "clip": out.name, "clip_dur": round(dur, 2), "src_start": r["start"],
                  "render_window": [round(render_window[0], 3), round(render_window[1], 3)],
                  "camera_path": cam_path}
+        # 3D rally reconstruction (TASK-025a): presentation-only, never gates the reel.
+        if court_info.get("status") == "ok":
+            try:
+                r3d = rally3d.reconstruct_rally(vision_rally, court_info,
+                                                (info.width, info.height))
+            except Exception as e:  # noqa: BLE001
+                r3d = {"status": "failed", "message": f"{type(e).__name__}: {e}"}
+            if r3d.get("status") == "ok":
+                entry["rally_3d"] = r3d
+                note("tracking", f"rally {i}: 3D reconstruction — {len(r3d['shots'])} shots")
         if trim_range:   # report the window that actually shipped, keep identity via src_start
             entry.update(start=round(trim_range[0], 2), end=round(trim_range[1], 2),
                          dur=round(trim_range[1] - trim_range[0], 2), trimmed=True)

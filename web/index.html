@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=27">
+<link rel="stylesheet" href="/style.css?v=29">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🏸</text></svg>">
 </head>
 <body>
@@ -198,6 +198,16 @@
           <video id="stVideo" playsinline></video>
           <div class="ai-overlays" id="aiOverlays"></div>
         </div>
+        <div class="replay3d" id="replay3d" hidden>
+          <div class="r3d-bar"><b>3D REPLAY</b><span class="muted">drag to orbit · wheel to zoom</span>
+            <span class="r3d-views">
+              <button data-r3d-view="broadcast">Broadcast</button>
+              <button data-r3d-view="side">Side</button>
+              <button data-r3d-view="top">Top</button>
+            </span>
+          </div>
+          <canvas></canvas>
+        </div>
         <div class="canvas-nodes" id="canvasNodes" hidden></div>
         <div class="clip-library" id="clipLibrary" hidden>
           <div class="clip-library-head">Add clips <span class="muted">drag onto the canvas →</span></div>
@@ -258,6 +268,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=27"></script>
+<script src="/app.js?v=29"></script>
+<script src="/replay3d.js?v=29"></script>
 </body>
 </html>

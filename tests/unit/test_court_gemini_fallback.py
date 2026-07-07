@@ -72,8 +72,12 @@ def test_weak_cv_merges_with_gemini(monkeypatch, api_key):
 
     out = court.detect_from_video("ignored.mp4")
     assert out["status"] == "ok" and out["source"] == "cv+gemini"
-    # Merged = midpoint → x lands between the CV corner and the shifted one.
-    assert abs(out["corners"][0][0] - (QUAD[0][0] + shifted[0][0]) / 2) < 0.02
+    # Merged = midpoint of matching CV/Gemini corners. The final handedness
+    # normalization may relabel left<->right, so compare the far-pair x values
+    # as a SET: each must land between its CV corner and its shifted twin.
+    want = sorted([(QUAD[0][0] + shifted[0][0]) / 2, (QUAD[1][0] + shifted[1][0]) / 2])
+    got = sorted([out["corners"][0][0], out["corners"][1][0]])
+    assert all(abs(g - w) < 0.02 for g, w in zip(got, want)), (got, want)
 
 
 def test_malformed_and_invisible_gemini_output_rejected(monkeypatch, api_key):

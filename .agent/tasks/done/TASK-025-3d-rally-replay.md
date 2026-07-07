@@ -1,8 +1,8 @@
 # TASK-025: 3D rally replay layer (toggleable, low-fps)
 
-**Status:** queued
-**Branch:** `feat/TASK-025-3d-rally-replay` (not started)
-**Base SHA:** TBD (after TASK-021/022 merge)
+**Status:** done (a+b+c; real-footage sample pending a full-court video)
+**Branch:** `feat/TASK-025-3d-rally-replay`
+**Base SHA:** `d4d19d5`
 **PRD section:** §16 remediation + `docs/roadmap/RALLY_3D_RECONSTRUCTION.md`
 (full plan; review 2026-07-07: "make the 3d render toggleable, and keep it at
 low fps since simulating at the same fps might not be feasible")
@@ -23,9 +23,9 @@ shuttle trajectory with replay controls. OFF by default; simulation clock at
   wrist-extended racket line at hit times; Phase-2 monocular pose lift on GPU.
 
 ## Acceptance criteria
-- [ ] Fixture reconstruction error bounds (above) → unit/regression test
-- [ ] Toggle on/off leaves the classic preview untouched; sim ≤12 fps
-- [ ] Real rally sanity: net crossings above net height; in-court landings
+- [x] Fixture reconstruction error bounds → tests/unit/test_rally3d.py (camera f within 3%, corner reproj <1px, apex within 10%, speed within 12%, landing within 0.3m, two-shot split, graceful degradation)
+- [x] Toggle on/off leaves the classic preview untouched; sim clock 12 fps (repaint gated on sim bucket/camera/size)
+- [ ] Real rally sanity on production footage (needs a full-court upload; uservid3 court not fully visible — honest not_found)
 
 ## Risks / rollback
 - Monocular 3D is approximate; every rendered quantity carries the fit

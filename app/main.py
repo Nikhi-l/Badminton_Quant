@@ -559,6 +559,8 @@ def _public_rally(rr: dict) -> dict:
     cam = _sample_camera_path(rr.get("camera_path"))
     if cam:
         out["camera_path"] = cam
+    if isinstance(rr.get("rally_3d"), dict) and rr["rally_3d"].get("status") == "ok":
+        out["rally_3d"] = rr["rally_3d"]   # already bounded (REPLAY_FPS samples)
     vision = _compact_vision(rr.get("vision"))
     if vision:
         out["vision"] = vision

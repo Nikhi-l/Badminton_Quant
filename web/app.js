@@ -503,6 +503,7 @@ function defaultEditorState(item) {
       shuttle: { enabled: true, style: "ring", size: 28, opacity: 0.92, trail: true },
       pose: { enabled: poseOptionEnabled(item.options), style: "glow", lineWidth: 3, opacity: 0.82 },
       court: { enabled: !!courtOf(item), opacity: 0.8, showNet: true },
+      replay3d: { enabled: false },   // TASK-025: low-fps 3D replay, off by default
     },
     audio: { bed: "current-stitch", editable: false },
   };
@@ -535,6 +536,7 @@ function mergeEditorState(base, saved) {
       })(),
       pose: { ...base.overlays.pose, ...((saved.overlays || {}).pose || {}) },
       court: { ...base.overlays.court, ...((saved.overlays || {}).court || {}) },
+      replay3d: { ...base.overlays.replay3d, ...((saved.overlays || {}).replay3d || {}) },
     },
     composition: {
       nodes: Array.isArray((saved.composition || {}).nodes) ? saved.composition.nodes : base.composition.nodes,
@@ -1194,6 +1196,19 @@ function studioTick() {
   studio.raf = requestAnimationFrame(studioTick);
 }
 
+// TASK-025: 3D replay panel visibility + render. Called from the rAF tick via
+// updateOverlayPreview so explicit repaints (seeks, occluded windows) stay in
+// sync; render() itself is gated to the low-fps sim clock (repaints only when
+// the sim bucket / camera / size changes).
+function syncReplay3d(ctx) {
+  const r3o = studio.editorState && studio.editorState.overlays.replay3d;
+  const show = !!(r3o && r3o.enabled && studio.mode !== "compose"
+                  && typeof replay3D !== "undefined" && replay3D.anyRally3d());
+  const panel = $("replay3d");
+  if (panel && panel.hidden !== !show) panel.hidden = !show;
+  if (show) replay3D.render(ctx || trackContext());
+}
+
 function trackedRallies() {
   return reelSegments().filter(s => ((s.vision || {}).shuttle_track || []).length);
 }
@@ -1220,6 +1235,7 @@ function renderLayerList() {
     { id: "shuttle", ico: "◉", title: "Shuttle FX", sub: `${styleLabel(state.overlays.shuttle.style)} · ${Math.round(state.overlays.shuttle.opacity * 100)}%`, state: state.overlays.shuttle.enabled ? "on" : "off" },
     { id: "pose", ico: "◇", title: "Players & pose", sub: `tracks · ${poseReadyCount()} rallies`, state: state.overlays.pose.enabled ? "on" : "off" },
     { id: "court", ico: "▦", title: "Court", sub: courtOf() ? `detected · ${fmtPct(courtOf().confidence)}` : "not detected", state: courtOf() ? (state.overlays.court.enabled ? "on" : "off") : "n/a" },
+    { id: "replay3d", ico: "▲", title: "3D replay", sub: (typeof replay3D !== "undefined" && replay3D.anyRally3d()) ? `reconstructed · sim ${(reelSegments().find(x => x.r && x.r.rally_3d) || { r: { rally_3d: { fps: 12 } } }).r.rally_3d.fps}fps` : "no reconstruction", state: (typeof replay3D !== "undefined" && replay3D.anyRally3d()) ? (state.overlays.replay3d.enabled ? "on" : "off") : "n/a" },
     { id: "soundtrack", ico: "♪", title: "Soundtrack", sub: "Current stitch bed", state: "fixed" },
   ];
   $("layerList").innerHTML = layers.map(l => `
@@ -1387,6 +1403,24 @@ function renderInspector() {
       $("courtOpacity").oninput = (e) => { co.opacity = Number(e.target.value) / 100; stateChanged(false); };
       $("courtNet").onchange = (e) => { co.showNet = e.target.checked; stateChanged(false); };
     }
+  } else if (studio.selectedLayer === "replay3d") {
+    const r3o = state.overlays.replay3d;
+    const has = typeof replay3D !== "undefined" && replay3D.anyRally3d();
+    const seg = reelSegments().find(x => x.r && x.r.rally_3d && x.r.rally_3d.status === "ok");
+    const r3 = seg && seg.r.rally_3d;
+    panel.innerHTML = `
+      <div class="control-group">
+        <div class="control-title"><span>3D replay</span><label><input type="checkbox" id="r3dEnabled" ${r3o.enabled && has ? "checked" : ""} ${has ? "" : "disabled"}> Show</label></div>
+        ${has ? `
+        <div class="control-hint muted">Monocular reconstruction: camera pose from the detected court, shuttle 3D from a drag-ballistic fit over the TrackNet rays. Simulation runs at ${r3 ? r3.fps : 12}fps (view interpolates); drag the panel to orbit, wheel to zoom.</div>
+        <div class="metric-list">
+          <div class="metric"><b>${reelSegments().filter(x => x.r && x.r.rally_3d && x.r.rally_3d.status === "ok").length}</b><span>rallies reconstructed</span></div>
+          <div class="metric"><b>${r3 ? r3.shots.length : 0}</b><span>shots (first rally)</span></div>
+        </div>
+        ${r3 ? `<div class="kf-list">${r3.shots.slice(0, 8).map(sh => `<div class="kf-item"><span class="kf-t">${fmtT(sh.t0)}</span><span class="kf-tgt">${sh.speed_kmh} km/h · peak ${sh.peak_z}m · ±${sh.residual_px}px</span></div>`).join("")}</div>` : ""}`
+        : `<div class="control-hint muted">No 3D reconstruction on this reel — it needs a detected court and a TrackNet shuttle track, and is computed for new jobs at render time.</div>`}
+      </div>`;
+    if (has) $("r3dEnabled").onchange = (e) => { r3o.enabled = e.target.checked; if (typeof replay3D !== "undefined") replay3D.invalidate(); stateChanged(); };
   } else if (studio.selectedLayer === "soundtrack") {
     panel.innerHTML = `
       <div class="control-group">
@@ -1988,6 +2022,7 @@ function updateOverlayPreview() {
   }
   overlayAlignmentHint(ctx, sh.enabled || po.enabled);
   wrap.innerHTML = parts.join("");
+  syncReplay3d(ctx);
 }
 
 // A tracked player's bounding box, framing-aware. Map both corners through the

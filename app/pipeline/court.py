@@ -282,14 +282,33 @@ def _gemini_corners(frames: list, log=print) -> list | None:
     return corners if _valid_quad([tuple(c) for c in corners]) else None
 
 
+def _normalize_handedness(result: dict, frame_wh: tuple[int, int] | None) -> dict:
+    """TASK-025: a detector-ordered quad can define a LEFT-handed court frame
+    (the image mirrors x for half of all camera placements), which breaks 3D
+    reconstruction and flips nothing visible in 2D. Relabel left<->right so
+    every consumer (heatmaps, marionettes, 3D) shares one right-handed frame
+    with the camera above the ground. Applied ONCE at detect_from_video's
+    exits — never before merging corner sets, which must share a labeling."""
+    if not frame_wh or not isinstance(result, dict) or result.get("status") != "ok":
+        return result
+    from . import rally3d   # lazy: rally3d imports this module
+    if rally3d.is_right_handed(result["homography"], *frame_wh) is False:
+        c = result["corners"]
+        result["corners"] = [c[1], c[0], c[3], c[2]]
+        result["homography"] = solve_homography([tuple(x) for x in result["corners"]],
+                                                COURT_PLANE)
+    return result
+
+
 def _result_from_corners(corners: list, source: str, confidence: float,
                          frames_used: int, lines=None, net=None) -> dict:
+    hgr = solve_homography([tuple(c) for c in corners], COURT_PLANE)
     return {
         "status": "ok",
         "corners": corners,
         "lines": lines or [],
         "net": net,
-        "homography": solve_homography([tuple(c) for c in corners], COURT_PLANE),
+        "homography": hgr,
         "court_size_m": [COURT_WIDTH_M, COURT_LENGTH_M],
         "confidence": round(confidence, 3),
         "frames_used": frames_used,
@@ -315,6 +334,7 @@ def detect_from_video(video_path, samples: int = 3, gemini_fallback: bool = True
     if not frames:
         return {"status": "unavailable", "message": f"cannot read frames from {video_path}"}
 
+    frame_wh = (frames[0].shape[1], frames[0].shape[0])
     found = [d for d in (detect_frame(f) for f in frames) if d]
     cv_result = None
     if found:
@@ -330,19 +350,24 @@ def detect_from_video(video_path, samples: int = 3, gemini_fallback: bool = True
                                          lines=best["lines"], net=best.get("net"))
 
     if cv_result and cv_result["confidence"] >= GEMINI_CONFIDENCE_FLOOR:
-        return cv_result
+        return _normalize_handedness(cv_result, frame_wh)
     if not gemini_fallback:
-        return cv_result or {"status": "not_found", "message": "no court boundary detected"}
+        return _normalize_handedness(cv_result, frame_wh) if cv_result \
+            else {"status": "not_found", "message": "no court boundary detected"}
 
     g_corners = _gemini_corners(frames, log=log)
     if g_corners and cv_result:
         # Median-merge = midpoint of the two corner sets; both observed the court.
         merged = [[round((a[0] + b[0]) / 2, 4), round((a[1] + b[1]) / 2, 4)]
                   for a, b in zip(cv_result["corners"], g_corners)]
-        return _result_from_corners(merged, "cv+gemini",
-                                    max(cv_result["confidence"], 0.65),
-                                    cv_result["frames_used"],
-                                    lines=cv_result["lines"], net=cv_result.get("net"))
+        return _normalize_handedness(
+            _result_from_corners(merged, "cv+gemini",
+                                 max(cv_result["confidence"], 0.65),
+                                 cv_result["frames_used"],
+                                 lines=cv_result["lines"], net=cv_result.get("net")),
+            frame_wh)
     if g_corners:
-        return _result_from_corners(g_corners, "gemini", 0.6, len(frames))
-    return cv_result or {"status": "not_found", "message": "no court boundary detected"}
+        return _normalize_handedness(
+            _result_from_corners(g_corners, "gemini", 0.6, len(frames)), frame_wh)
+    return _normalize_handedness(cv_result, frame_wh) if cv_result \
+        else {"status": "not_found", "message": "no court boundary detected"}
