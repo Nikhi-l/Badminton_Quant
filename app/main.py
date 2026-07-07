@@ -305,6 +305,16 @@ def _stable_ids(frames: list[tuple[float, list[tuple[float, float, float]]]],
             cx, cy, h = dets[di]
             slots[sid] = (cx, cy, h, t)
         raw_ids.append(ids)
+    return _relabel_merged(frames, raw_ids)
+
+
+def _relabel_merged(frames: list[tuple[float, list[tuple[float, float, float]]]],
+                    raw_ids: list[list[int]]) -> list[list[int]]:
+    """Fragment-merge + near-player-first relabel over raw per-frame ids.
+
+    Shared by the heuristic matcher and worker-supplied (ByteTrack) ids, so
+    P1 = the near player regardless of where identity came from.
+    """
     # Track stats: sample count, heights, and lifespan per raw id.
     seen: dict[int, dict] = {}
     for (t, dets), ids in zip(frames, raw_ids):
@@ -341,22 +351,53 @@ def _stable_ids(frames: list[tuple[float, list[tuple[float, float, float]]]],
     return [[remap[group[sid]] for sid in ids] for ids in raw_ids]
 
 
+def _ids_from_worker(worker_ids: list[list[int | None]]) -> list[list[int]] | None:
+    """Densified per-frame ids from the worker's ByteTrack track_ids (TASK-024),
+    or None when coverage is too thin to trust (falls back to the heuristic).
+    Rare id-less detections get isolated one-off ids; the fragment merge folds
+    them back into the right player where the size evidence agrees."""
+    total = have = 0
+    for row in worker_ids:
+        for wid in row:
+            total += 1
+            have += wid is not None
+    if not total or have / total < 0.9:
+        return None
+    dense: dict[int, int] = {}
+    out: list[list[int]] = []
+    orphan = 1000
+    for row in worker_ids:
+        ids = []
+        for wid in row:
+            if wid is None:
+                ids.append(orphan)
+                orphan += 1
+            else:
+                ids.append(dense.setdefault(int(wid), len(dense)))
+        out.append(ids)
+    return out
+
+
 def _sample_player_track(players: list | None, max_frames: int = 120) -> list[dict]:
     """Public, bounded per-frame player boxes with stable track ids for the editor.
 
     Vision stores dense per-frame player detections as boxes only. The editor needs
     normalized box centers + sizes and a consistent id per player so it can draw a
     player overlay and let the camera follow a chosen player (TASK-014/015). Ids
-    come from :func:`_stable_ids` (bounded pool, motion+size-aware matching).
+    prefer the worker's ByteTrack track_ids (TASK-024) and fall back to
+    :func:`_stable_ids` (bounded pool, motion+size-aware matching); both paths
+    share the fragment merge + near-player-first relabel.
     """
     if not isinstance(players, list) or not players:
         return []
     step = max(1, math.ceil(len(players) / max_frames))
     sampled: list[tuple[float, list[dict]]] = []
+    worker_ids: list[list[int | None]] = []
     for f in players[::step]:
         if not isinstance(f, dict):
             continue
         norm_boxes: list[dict] = []
+        wids: list[int | None] = []
         for b in (f.get("boxes") or []):
             try:
                 x1, y1, x2, y2 = float(b["x1"]), float(b["y1"]), float(b["x2"]), float(b["y2"])
@@ -367,6 +408,8 @@ def _sample_player_track(players: list | None, max_frames: int = 120) -> list[di
                 "w": round(max(0.0, x2 - x1), 5), "h": round(max(0.0, y2 - y1), 5),
                 "confidence": round(float(b.get("confidence", 0.0)), 3),
             })
+            tid = b.get("track_id")
+            wids.append(int(tid) if isinstance(tid, (int, float)) else None)
         if not norm_boxes:
             continue
         try:
@@ -374,7 +417,10 @@ def _sample_player_track(players: list | None, max_frames: int = 120) -> list[di
         except (TypeError, ValueError):
             t = 0.0
         sampled.append((t, norm_boxes))
-    ids = _stable_ids([(t, [(b["x"], b["y"], b["h"]) for b in boxes]) for t, boxes in sampled])
+        worker_ids.append(wids)
+    frames = [(t, [(b["x"], b["y"], b["h"]) for b in boxes]) for t, boxes in sampled]
+    raw = _ids_from_worker(worker_ids)
+    ids = _relabel_merged(frames, raw) if raw else _stable_ids(frames)
     out: list[dict] = []
     for (t, boxes), frame_ids in zip(sampled, ids):
         for b, sid in zip(boxes, frame_ids):
@@ -435,11 +481,13 @@ def _sample_pose_track(poses: list | None, max_frames: int = 120) -> list[dict]:
         return []
     step = max(1, math.ceil(len(poses) / max_frames))
     sampled: list[tuple[float, list[dict], list[tuple[float, float, float]]]] = []
+    worker_ids: list[list[int | None]] = []
     for f in poses[::step]:
         if not isinstance(f, dict):
             continue
         people: list[dict] = []
         dets: list[tuple[float, float, float]] = []
+        wids: list[int | None] = []
         for person in (f.get("people") or []):
             if not isinstance(person, dict):
                 continue
@@ -467,6 +515,8 @@ def _sample_pose_track(poses: list | None, max_frames: int = 120) -> list[dict]:
                 item["bbox"] = bbox
             people.append(item)
             dets.append((center[0], center[1], _pose_height(person, keypoints)))
+            tid = person.get("track_id")
+            wids.append(int(tid) if isinstance(tid, (int, float)) else None)
         if not people:
             continue
         try:
@@ -474,7 +524,10 @@ def _sample_pose_track(poses: list | None, max_frames: int = 120) -> list[dict]:
         except (TypeError, ValueError):
             t = 0.0
         sampled.append((t, people, dets))
-    ids = _stable_ids([(t, dets) for t, _, dets in sampled])
+        worker_ids.append(wids)
+    frames = [(t, dets) for t, _, dets in sampled]
+    raw = _ids_from_worker(worker_ids)
+    ids = _relabel_merged(frames, raw) if raw else _stable_ids(frames)
     out: list[dict] = []
     for (t, people, _), frame_ids in zip(sampled, ids):
         for person, sid in zip(people, frame_ids):

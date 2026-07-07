@@ -1,8 +1,8 @@
 # TASK-024: Worker-side player identity via ByteTrack
 
-**Status:** queued
-**Branch:** `feat/TASK-024-worker-bytetrack-ids` (not started)
-**Base SHA:** TBD (branch from main after TASK-021/022 merge)
+**Status:** done (implemented; worker image rollout tracked in ledger)
+**Branch:** `feat/TASK-024-worker-bytetrack-ids`
+**Base SHA:** `7137bcb`
 **PRD section:** §16 remediation (review 2026-07-07: "proper pose data of both
 the players")
 
@@ -29,8 +29,8 @@ and motion-models the gap.
    `worker_version` + two stable ids on a real GPU job.
 
 ## Acceptance criteria
-- [ ] Real GPU job: exactly 2 player ids across every rally of a singles game
-- [ ] Fixture + unit tests still pass (fallback path untouched)
+- [ ] Real GPU job: exactly 2 player ids across every rally of a singles game (pending image rollout)
+- [x] Fixture + unit tests still pass (fallback path untouched) → tests/unit/test_worker_track_ids.py (4 tests)
 
 ## Risks / rollback
 - model.track adds per-frame state; verify worker latency budget holds.

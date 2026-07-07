@@ -24,7 +24,7 @@ import requests
 import runpod
 
 CONTRACT = "baddy.vision.v1"
-WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "pose-pairing-20260707")
+WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "bytetrack-20260707")
 SAMPLE_FPS = float(os.environ.get("BADDY_SAMPLE_FPS", "6"))
 MAX_FRAMES_PER_RALLY = int(os.environ.get("BADDY_MAX_FRAMES_PER_RALLY", "180"))
 YOLO_POSE_MODEL = os.environ.get("YOLO_POSE_MODEL",
@@ -49,6 +49,7 @@ _pose_model_path = ""
 _racquet_model = None
 _model_error = ""
 _tracknet_error = ""
+_track_error = ""   # ByteTrack unavailable -> plain predict + downstream id heuristic
 
 
 def _load_models(pose_model: str | None = None) -> None:
@@ -152,12 +153,32 @@ def _box_area(box: dict) -> float:
     return max(0.0, x2 - x1) * max(0.0, y2 - y1)
 
 
-def _detect_pose(frame: np.ndarray) -> tuple[list[dict], list[dict], float]:
+def _detect_pose(frame: np.ndarray, reset_tracker: bool = False) -> tuple[list[dict], list[dict], float]:
+    """Detect players + poses; identity comes from ultralytics ByteTrack.
+
+    TASK-024: model.track(persist=True) carries a track id across the sampled
+    frames of a rally (the tracker motion-models occlusions the app's serve-time
+    centroid heuristic cannot), emitted as ``track_id`` on each box AND its
+    paired pose. ``reset_tracker=True`` on a rally's first frame starts a fresh
+    id space per rally. Falls back to plain predict when tracking is
+    unavailable (missing lap dependency etc.) — downstream keeps its heuristic.
+    """
+    global _track_error
     if _pose_model is None:
         return [], [], 0.0
     h, w = frame.shape[:2]
-    result = _pose_model.predict(frame, imgsz=YOLO_IMGSZ, conf=YOLO_CONF,
-                                 device=DEVICE, verbose=False)[0]
+    result = None
+    if not _track_error:
+        try:
+            result = _pose_model.track(frame, imgsz=YOLO_IMGSZ, conf=YOLO_CONF,
+                                       device=DEVICE, verbose=False,
+                                       persist=not reset_tracker,
+                                       tracker="bytetrack.yaml")[0]
+        except Exception as exc:  # noqa: BLE001 - tracking is an enhancement
+            _track_error = f"{type(exc).__name__}: {exc}"
+    if result is None:
+        result = _pose_model.predict(frame, imgsz=YOLO_IMGSZ, conf=YOLO_CONF,
+                                     device=DEVICE, verbose=False)[0]
     players: list[dict] = []
     poses: list[dict] = []
     boxes = getattr(result, "boxes", None)
@@ -166,6 +187,7 @@ def _detect_pose(frame: np.ndarray) -> tuple[list[dict], list[dict], float]:
         return players, poses, 0.0
     xyxy = boxes.xyxy.cpu().numpy() if boxes.xyxy is not None else []
     confs = boxes.conf.cpu().numpy() if boxes.conf is not None else np.ones(len(xyxy))
+    ids = boxes.id.cpu().numpy() if getattr(boxes, "id", None) is not None else None
     kxy = keypoints.xy.cpu().numpy() if keypoints is not None and keypoints.xy is not None else []
     kconf = keypoints.conf.cpu().numpy() if keypoints is not None and keypoints.conf is not None else []
     # Keep each box paired with ITS keypoints while sorting — sorting the players
@@ -174,6 +196,8 @@ def _detect_pose(frame: np.ndarray) -> tuple[list[dict], list[dict], float]:
     entries: list[tuple[dict, dict | None]] = []
     for i, box in enumerate(xyxy):
         det = _norm_box(box[0], box[1], box[2], box[3], w, h, confs[i])
+        if ids is not None and i < len(ids):
+            det["track_id"] = int(ids[i])
         pose = None
         if i < len(kxy):
             pts = []
@@ -184,6 +208,8 @@ def _detect_pose(frame: np.ndarray) -> tuple[list[dict], list[dict], float]:
                             "confidence": _clamp01(score, 1.0)})
             pose = {"keypoints": pts,
                     "confidence": float(np.mean([p["confidence"] for p in pts])) if pts else 0.0}
+            if "track_id" in det:
+                pose["track_id"] = det["track_id"]
         entries.append((det, pose))
     entries.sort(key=lambda e: (e[0]["confidence"], _box_area(e[0])), reverse=True)
     entries = entries[:2]
@@ -458,12 +484,16 @@ def _process_rally(cap, meta: dict, rally: dict, video_path: Path, workdir: Path
             tracknet_status = "failed"
     prev_gray = None
     frames = []
+    first_pose_frame = True   # fresh ByteTrack id space per rally
     player_confs, pose_confs, racquet_confs, candidate_confs, shuttle_confs = [], [], [], [], []
     for t in times:
         ok, frame = _seek_frame(cap, t, fps)
         if not ok or frame is None:
             continue
-        players, poses, pose_q = _detect_pose(frame) if want_pose else ([], [], 0.0)
+        players, poses, pose_q = (_detect_pose(frame, reset_tracker=first_pose_frame)
+                                  if want_pose else ([], [], 0.0))
+        if want_pose:
+            first_pose_frame = False
         racquets, racquet_q = _detect_racquet(frame) if want_racquet else ([], 0.0)
         racquet_candidates, candidate_q = ([], 0.0)
         if want_racquet and not racquets:
@@ -562,6 +592,8 @@ def process(job_input: dict) -> dict:
             "fallback": bool(_model_error),
             "error": _model_error,
             "tracknet_error": _tracknet_error,
+            "track_error": _track_error,
+            "player_tracker": "" if _track_error else "bytetrack",
         },
         "elapsed_sec": round(time.time() - started, 3),
         "rallies": results,

@@ -11,3 +11,6 @@ parse>=1.20
 # predict.py exits 1 at import on the GPU worker (matches the local vision deps).
 pycocotools>=2.0
 matplotlib>=3.7
+
+# ultralytics ByteTrack (model.track) linear assignment (TASK-024)
+lap>=0.5.12

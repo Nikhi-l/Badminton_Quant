@@ -147,6 +147,8 @@ def _box(raw: Any) -> dict | None:
             b = _box(raw["box"])
             if b:
                 b["confidence"] = _clamp01(raw.get("confidence", raw.get("conf", b["confidence"])))
+                if isinstance(raw.get("track_id"), (int, float)):   # ByteTrack id (TASK-024)
+                    b["track_id"] = int(raw["track_id"])
             return b
         if {"x1", "y1", "x2", "y2"} <= raw.keys():
             x1, y1, x2, y2 = (_clamp01(raw[k]) for k in ("x1", "y1", "x2", "y2"))
@@ -220,6 +222,8 @@ def _pose_people(raw_poses: Any, boxes: list[dict]) -> list[dict]:
             "confidence": round(conf, 3),
             "keypoints": pts[:17],
         }
+        if isinstance(raw_pose, dict) and isinstance(raw_pose.get("track_id"), (int, float)):
+            person["track_id"] = int(raw_pose["track_id"])   # ByteTrack id (TASK-024)
         if i < len(boxes):
             person["bbox"] = {k: boxes[i][k] for k in ("x1", "y1", "x2", "y2", "confidence")}
         people.append(person)
