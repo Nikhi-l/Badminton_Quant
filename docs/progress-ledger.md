@@ -5,8 +5,8 @@ docs commit after each functional slice.
 
 ## Current branch / mission
 - Main branch: `main` (protected; releasable; live at baddyai.com)
-- Active branch: `fix/TASK-021-studio-review-fixes`
-- Current branch base SHA: `29af265`
+- Active branch: `main` (all Cycle 13-15 branches ff-merged)
+- Current branch base SHA: `29af265` (Cycle 13 stack base)
 - **Deployed 2026-06-24:** the full editor/camera/queue sweep is LIVE on baddyai.com,
   plus a follow-up Studio polish deploy (`227e05a`, v=19 assets): real shuttle
   trail (was a stray green bar) + temporal smoothing (EMA, snap-on-cut) for the
@@ -36,6 +36,10 @@ docs commit after each functional slice.
 | 2026-07-07 | Portrait overlay projection + review bug batch | On branch (Cycle 13) | TASK-021 — renderer exports `camera_path`/`render_window`; Studio inverts the baked crop (portrait pixel-exact ≤0.41% vs ground-truth fixture), xfade-aware reel time, landscape = source time; timeline drag-to-scrub + stacking fix; pixel-space skeletons (blob bug); worker pose/box pairing fix; `_stable_ids` (near player = P1, fragment merge). 42 tests green |
 | 2026-07-07 | Interpolation + court.py + heatmaps | On branch (Cycle 13) | TASK-022 — shuttle/box/pose lerp between ≤10Hz samples; `court.py` corners/lines/net + homography to court-plane meters (`result["court"]`), Court overlay layer, per-player post-game movement heatmaps, ground-truth Studio fixture (`scripts/make_studio_fixture.py`) |
 | 2026-07-07 | Schools platform P0 | On branch (Cycle 14) | TASK-026 — auth pages (create school / join with ST-/CO- codes / sign in), scrypt+cookie sessions, school tenancy on jobs, coach panel (roster, join codes, assign sessions w/ P1/P2 pin), student My Progress (stat cards+sparklines, highlights, rally chips, AI-coach box, court-space movement via homography). 46 tests; browser-verified E2E |
+| 2026-07-07 | Cycles 13/14 deployed to baddyai.com | **LIVE** (Cycle 15) | main `7137bcb` deployed via deploy.sh; health ok; v=27+ assets; auth pages live |
+| 2026-07-07 | Worker ByteTrack identity | Done + rolled out (Cycle 15) | TASK-024 — track_id end-to-end (worker→gpu.py→samplers, ≥90%-coverage gate, shared relabel); image `bytetrack-20260707` on template `ic265brof1`, endpoint ready 2/unhealthy 0. Real-GPU-job id check pending next upload |
+| 2026-07-07 | Gemini court-corner fallback | Done (Cycle 15) | TASK-023 — structured-output corners on weak CV (<0.5), schema+agreement validation, `court.source` provenance; 5 mocked tests. uservid3: honest not_found (court not fully visible) |
+| 2026-07-07 | 3D rally replay | Done (Cycle 15) | TASK-025 — rally3d.py (camera pose from homography, drag-ballistic multi-start LM, 12Hz `rally_3d`), court.py handedness normalization, Studio "3D replay" layer (canvas 3D, orbit+presets, sim-clock-gated). 6 ground-truth tests; browser-verified on fixture3d |
 
 ## Active priorities
 1. ~~Rebuild + redeploy the RunPod worker~~ **DONE 2026-07-01**: image
@@ -43,16 +47,18 @@ docs commit after each functional slice.
    bake step doubles as build-time model verification); template `ic265brof1`
    patched from `tracknet-src-20260621b`; endpoint `radst7uhhhl6q0` health:
    workers ready 2 / unhealthy 0. VM deployed (v=25), health ok.
-2. **Merge + deploy TASK-021/022** (Cycle 13): PR `fix/TASK-021-studio-review-fixes`
-   → main → VM deploy (assets v=27). Note: overlays on portrait reels only align
-   for jobs rendered AFTER this deploy (camera_path export) — old reels show the
-   rebuild hint by design.
-3. **Rebuild RunPod worker** with the pose/box pairing fix
-   (`pose-pairing-20260707`) — same Cloud Build flow as pose-20260626a.
-4. TASK-024 worker-side ByteTrack ids (kills residual P3 fragments on real footage).
-5. TASK-025 3D replay layer (toggleable, low-fps) per
-   `docs/roadmap/RALLY_3D_RECONSTRUCTION.md`; TASK-026 Schools P0 per
-   `docs/roadmap/SCHOOL_PLATFORM_PRD.md`.
+2. ~~Merge + deploy TASK-021/022~~ **DONE (Cycle 15)** — live on baddyai.com.
+   Note: portrait overlays only align on reels rendered after the deploy;
+   old reels show the rebuild hint by design.
+3. ~~Rebuild RunPod worker~~ **DONE (Cycle 15)** — `bytetrack-20260707` carries
+   BOTH the pairing fix and ByteTrack ids; endpoint healthy.
+4. **Verify on a real upload**: next GPU job should show
+   `worker_version=bytetrack-20260707`, two stable player ids, `court.source`,
+   and (full-court footage) `rally_3d` shots — record here.
+5. **Schools P1**: assign-to-student from a Studio player track, cohorts,
+   student dashboard polish (`docs/roadmap/SCHOOL_PLATFORM_PRD.md` §5).
+6. Deploy cadence: bump web asset `?v=` on EVERY same-session JS/CSS edit
+   (browser heuristic-caches versioned URLs).
 - Follow-ups (not blocking): unify render-time player identity (near/far) with the
   editor's per-player ids; persist full `baddy.editor.v1` (overlay styles) into the
   MP4; click-to-set fixed point on the preview; definitive e2e GPU pose-proof job

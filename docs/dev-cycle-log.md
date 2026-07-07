@@ -5,6 +5,55 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 15: Ship + queued tasks — deploy, ByteTrack ids, Gemini corners, 3D replay (TASK-023/024/025)
+**Date:** 2026-07-07
+**Goal:** Merge + deploy Cycles 13/14 to baddyai.com, then clear the queued task
+files: worker-side player identity, Gemini court-corner fallback, and the
+toggleable low-fps 3D rally replay.
+**Roadmap alignment:** PRD §16 TASK-023/024/025; `docs/roadmap/RALLY_3D_RECONSTRUCTION.md`.
+**Branches:** `feat/TASK-024-worker-bytetrack-ids`, `feat/TASK-023-gemini-court-corners`,
+`feat/TASK-025-3d-rally-replay` (each ff-merged to main).
+**Shipped:**
+- **Deploy**: main `7137bcb` live on baddyai.com (assets v=27→v=29 by cycle end);
+  health ok; login page 200; /api/auth/me 401; new Studio JS confirmed served.
+- **TASK-024**: worker `_detect_pose` → `model.track(persist=True, bytetrack)`
+  with per-rally id reset, `track_id` on boxes AND paired poses, predict
+  fallback recorded in `model_status.track_error`; `lap` dep; gpu.py carries
+  track_id; main.py samplers prefer worker ids at ≥90% coverage (shared
+  fragment-merge + near-player-first relabel); ids never leak to the public
+  payload. Image `bytetrack-20260707` (Cloud Build 3m37s) rolled out: template
+  `ic265brof1` patched, endpoint healthy (ready 2 / unhealthy 0).
+- **TASK-023**: `detect_from_video` shares sampled frames with a Gemini
+  structured-output corner query when CV confidence < 0.5; schema-validated
+  (visibility flag, 4 in-frame corners, ≥10% area, ≤0.08 cross-frame spread);
+  provenance `court.source = cv | gemini | cv+gemini` (midpoint merge, done in
+  a shared labeling BEFORE handedness normalization). Honest negative recorded:
+  uservid3's court is not fully visible → Gemini correctly says so → no court.
+- **TASK-025**: `rally3d.py` — camera pose from the homography (plane
+  calibration + right-handed frame normalization now applied in court.py at
+  detection time), drag-ballistic shot fitting (box-projected multi-start LM,
+  recursive fused-shot bisect, mirror-minimum gates), `rally_3d` on each rally
+  at 12Hz; Studio "3D replay" layer (OFF by default): dependency-free canvas
+  3D panel — court/net/trajectory ribbon + km/h label/marionettes/racket
+  lines, orbit + presets, repaint gated to the sim clock.
+**Tests/verification performed:**
+- `./scripts/check.sh` → 66 passed (4 ByteTrack-id tests, 5 Gemini-fallback
+  tests, 6 rally3d ground-truth tests incl. apex ≤10% / speed ≤12% / landing
+  ≤0.3m / focal ≤3%).
+- Browser (fixture3d, a perspective ground-truth job built through the real
+  reconstruction path): panel renders court+net+both marionettes; Side preset
+  shows the shuttle mid-arc above net height with ribbon + "37.2 km/h";
+  inspector lists 3 shots with residuals ≤13.4px; zero console errors.
+- Live smoke after deploy: health ok, v=29 assets, auth endpoints, capabilities.
+**Docs updated:** this log, `docs/progress-ledger.md`, task files 023/024/025 → done.
+**Open risks / next steps:**
+- Real-footage 3D sample still pending a video with the FULL court visible
+  (record job id + shot speeds here when one lands).
+- ByteTrack ids verified in contract/tests; confirm `worker_version=
+  bytetrack-20260707` + 2 stable ids on the next real GPU job.
+- Schools P1 (assign-to-student from a Studio track, cohorts) is the next
+  platform slice.
+
 ## Cycle 14: Schools platform P0 — auth, tenancy, student progress panels (TASK-026)
 **Date:** 2026-07-07
 **Goal:** Start the school-platform pivot: authentication pages, school tenancy on
