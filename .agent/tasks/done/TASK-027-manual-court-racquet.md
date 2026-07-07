@@ -30,8 +30,9 @@ in `model_status.racquet_source`; measured boxes exposed as bounded
 - [x] Racquet chain configurable end-to-end: router requests the racquet task
       with pose; worker source custom|coco-tennis-racket; yolo11s baked;
       `racquet_track` bounded + Studio outline → sampler test
-- [ ] Real GPU job showing measured racquet boxes (pending next upload on the
-      `racquet-20260707` image)
+- [~] Image `racquet-20260707` (yolo11s baked) built + rolled out to template
+      `ic265brof1`; endpoint healthy (ready 2/unhealthy 0). Measured-box sample
+      on a real GPU job pending the next upload.
 
 ## Verification commands
 - `./scripts/check.sh` → 65 passed
