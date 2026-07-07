@@ -502,9 +502,16 @@ function defaultEditorState(item) {
     overlays: {
       shuttle: { enabled: true, style: "ring", size: 28, opacity: 0.92, trail: true },
       pose: { enabled: poseOptionEnabled(item.options), style: "glow", lineWidth: 3, opacity: 0.82 },
+      court: { enabled: !!courtOf(item), opacity: 0.8, showNet: true },
     },
     audio: { bed: "current-stitch", editable: false },
   };
+}
+
+// Detected court geometry (TASK-022), or null when detection didn't run/succeed.
+function courtOf(item = studio.item) {
+  const c = item && item.court;
+  return (c && c.status === "ok" && Array.isArray(c.corners) && c.corners.length === 4) ? c : null;
 }
 
 function mergeEditorState(base, saved) {
@@ -527,6 +534,7 @@ function mergeEditorState(base, saved) {
         return s;
       })(),
       pose: { ...base.overlays.pose, ...((saved.overlays || {}).pose || {}) },
+      court: { ...base.overlays.court, ...((saved.overlays || {}).court || {}) },
     },
     composition: {
       nodes: Array.isArray((saved.composition || {}).nodes) ? saved.composition.nodes : base.composition.nodes,
@@ -614,7 +622,7 @@ function setStudioMode(mode) {
     return;
   }
   $("composeHint").hidden = true;
-  const src = mode === "reel" ? studio.item.video : studio.item.proxy;
+  const src = desiredVideoSrc();
   if (!src) {
     $("tpHint").textContent = "source video isn't available for this reel";
     return;
@@ -625,7 +633,7 @@ function setStudioMode(mode) {
   v.play().catch(() => {});
   buildTimeline();
   const hasAll = studio.item.all_rallies && studio.item.all_rallies.length;
-  $("tpHint").textContent = mode === "reel"
+  $("tpHint").textContent = effectiveMode() === "reel"
     ? "Reel preview"
     : hasAll
       ? "Source rally analysis"
@@ -786,24 +794,57 @@ function initLibraryDrag(btn, clip) {
   });
 }
 
+// Rally clips as reel-time segments. Two subtleties the overlays depend on:
+// (1) the stitch crossfades consecutive clips, so clip k starts k·xfade EARLIER
+//     than the plain running sum — without this, overlay timing drifts by
+//     0.45s per rally boundary;
+// (2) each clip is rendered from start−PAD_BEFORE, so mapping reel time to
+//     source time uses the exported render_window (fallback: the 1.0s pad).
+const PAD_BEFORE_FALLBACK = 1.0;   // config.PAD_BEFORE for results without render_window
 function reelSegments() {
+  const xfade = Number((studio.item.stitch || {}).xfade || 0);
   let acc = 0;
   return (studio.item.rallies || []).map((r, i) => {
     const dur = r.clip_dur || r.dur || 0;
+    const t0 = Math.max(0, acc - i * xfade);
+    const rw = Array.isArray(r.render_window) ? r.render_window : null;
     const seg = {
-      t0: acc,
-      t1: acc + dur,
+      t0,
+      t1: t0 + dur,
       label: `R${i + 1}`,
       sub: `${Math.round(r.dur || dur)}s${r.note ? " · " + r.note : ""}`,
       layer: "reel",
       r,
       idx: i + 1,
-      sourceStart: Number(r.start ?? r.src_start ?? 0),
+      sourceStart: rw ? Number(rw[0])
+        : (r.trimmed ? Number(r.start ?? 0)
+                     : Math.max(0, Number(r.start ?? r.src_start ?? 0) - PAD_BEFORE_FALLBACK)),
+      camPath: Array.isArray(r.camera_path) && r.camera_path.length ? r.camera_path : null,
       vision: r.vision,
     };
-    acc = seg.t1;
+    acc += dur;
     return seg;
   });
+}
+
+// What the <video> element is showing right now. Landscape always plays the
+// uncropped proxy (source frames, source time); Portrait plays the rendered
+// 9:16 reel in Reel mode and the proxy in Source mode.
+function displayedKind() {
+  if (studio.previewAspect === "landscape") return "source";
+  return studio.mode === "reel" ? "reel" : "source";
+}
+
+// The timeline/overlay mode the stage should reflect: Landscape forces the
+// source-rally view (the reel timeline makes no sense against proxy playback).
+function effectiveMode() {
+  if (studio.mode === "compose") return "compose";
+  return studio.previewAspect === "landscape" ? "source" : studio.mode;
+}
+
+function desiredVideoSrc() {
+  if (studio.previewAspect === "landscape") return studio.item.proxy;
+  return studio.mode === "reel" ? studio.item.video : studio.item.proxy;
 }
 
 // Per-track icon + lane height (px). Drives the variable-height lanes.
@@ -838,7 +879,7 @@ function buildTimeline() {
   lane.style.minWidth = `${timelineScale * 100}%`;
   ruler.style.minWidth = `${timelineScale * 100}%`;
   let dur, tracks;
-  if (studio.mode === "reel") {
+  if (effectiveMode() === "reel") {
     dur = item.duration || 1;
     const cuts = reelSegments();
     const shuttleOn = studio.editorState.overlays.shuttle.enabled;
@@ -924,7 +965,7 @@ function buildTimeline() {
 
     // Source mode: draw the actual shuttle track across the WHOLE video timeline
     // (a trajectory strip: a dot per tracked point at its source time + height).
-    if (track.id === "shuttle" && studio.mode === "source") {
+    if (track.id === "shuttle" && effectiveMode() === "source") {
       const pts = allShuttlePoints();
       const step = Math.max(1, Math.ceil(pts.length / 600));
       for (let i = 0; i < pts.length; i += step) {
@@ -940,7 +981,7 @@ function buildTimeline() {
 
     // Source mode: player presence on the Pose lane — a centroid dot per player
     // across the whole timeline, coloured by track id (parity with the shuttle strip).
-    if (track.id === "pose" && studio.mode === "source" && studio.editorState.overlays.pose.enabled) {
+    if (track.id === "pose" && effectiveMode() === "source" && studio.editorState.overlays.pose.enabled) {
       const pts = allPosePoints();
       const step = Math.max(1, Math.ceil(pts.length / 600));
       for (let i = 0; i < pts.length; i += step) {
@@ -955,7 +996,7 @@ function buildTimeline() {
     }
 
     // Camera keyframes (reel-time) as clickable diamonds, coloured by target.
-    if (track.id === "camera" && studio.mode === "reel" && (studio.editorState.camera || {}).enabled) {
+    if (track.id === "camera" && effectiveMode() === "reel" && (studio.editorState.camera || {}).enabled) {
       for (const k of cameraKeyframes()) {
         const m = document.createElement("span");
         m.className = `kf-mark ${esc(k.target || "shuttle")}`;
@@ -1178,6 +1219,7 @@ function renderLayerList() {
     { id: "camera", ico: "◎", title: "Camera", sub: cameraSub(state), state: (state.camera && state.camera.enabled) ? "on" : "auto" },
     { id: "shuttle", ico: "◉", title: "Shuttle FX", sub: `${styleLabel(state.overlays.shuttle.style)} · ${Math.round(state.overlays.shuttle.opacity * 100)}%`, state: state.overlays.shuttle.enabled ? "on" : "off" },
     { id: "pose", ico: "◇", title: "Players & pose", sub: `tracks · ${poseReadyCount()} rallies`, state: state.overlays.pose.enabled ? "on" : "off" },
+    { id: "court", ico: "▦", title: "Court", sub: courtOf() ? `detected · ${fmtPct(courtOf().confidence)}` : "not detected", state: courtOf() ? (state.overlays.court.enabled ? "on" : "off") : "n/a" },
     { id: "soundtrack", ico: "♪", title: "Soundtrack", sub: "Current stitch bed", state: "fixed" },
   ];
   $("layerList").innerHTML = layers.map(l => `
@@ -1248,7 +1290,8 @@ function renderInspector() {
           <div class="control-row"><label>Point X</label><input type="range" id="camPointX" min="0" max="100" value="${Math.round((a.point || { x: 0.5 }).x * 100)}"></div>
           <div class="control-row"><label>Point Y</label><input type="range" id="camPointY" min="0" max="100" value="${Math.round((a.point || { y: 0.45 }).y * 100)}"></div>` : ""}
         <div class="control-row"><label>Zoom</label><input type="range" id="camZoom" min="100" max="280" value="${Math.round((a.zoom || 1.4) * 100)}"></div>
-        <button class="btn btn-small" id="camAddKf">+ Keyframe at playhead</button>
+        <button class="btn btn-small" id="camAddKf" ${effectiveMode() !== "reel" ? "disabled" : ""}>+ Keyframe at playhead</button>
+        ${effectiveMode() !== "reel" ? `<div class="control-hint muted">Keyframes are authored in reel time — switch to Portrait · Reel to add or preview them.</div>` : ""}
       </div>
       <div class="control-group">
         <div class="control-title"><span>Keyframes</span><span>${cam.keyframes.length}</span></div>
@@ -1309,6 +1352,11 @@ function renderInspector() {
         <div class="control-row"><label>Line width</label><input type="range" id="poseWidth" min="2" max="8" value="${po.lineWidth}"></div>
         <div class="control-row"><label>Opacity</label><input type="range" id="poseOpacity" min="25" max="100" value="${Math.round(po.opacity * 100)}"></div>
       </div>
+      <div class="control-group">
+        <div class="control-title"><span>Movement heatmap</span><span>post-game</span></div>
+        <div class="heatmap-grid" id="heatmapGrid"></div>
+        <div class="control-hint muted">${courtOf() ? "Court-plane positions via the detected court homography." : "No court detected — positions shown in camera space."}</div>
+      </div>
       ${qualityMetrics()}`;
     $("poseEnabled").onchange = (e) => { po.enabled = e.target.checked; stateChanged(); };
     $("poseWidth").oninput = (e) => { po.lineWidth = Number(e.target.value); stateChanged(false); };
@@ -1317,6 +1365,28 @@ function renderInspector() {
       po.style = btn.dataset.poseStyle;
       stateChanged();
     });
+    renderHeatmaps($("heatmapGrid"));
+  } else if (studio.selectedLayer === "court") {
+    const co = state.overlays.court;
+    const c = courtOf();
+    panel.innerHTML = `
+      <div class="control-group">
+        <div class="control-title"><span>Court lines</span><label><input type="checkbox" id="courtEnabled" ${co.enabled && c ? "checked" : ""} ${c ? "" : "disabled"}> Visible</label></div>
+        ${c ? `
+        <div class="control-row"><label>Opacity</label><input type="range" id="courtOpacity" min="25" max="100" value="${Math.round(co.opacity * 100)}"></div>
+        <div class="control-row"><label>Net line</label><input type="checkbox" id="courtNet" ${co.showNet ? "checked" : ""}></div>
+        <div class="metric-list">
+          <div class="metric"><b>${fmtPct(c.confidence)}</b><span>confidence</span></div>
+          <div class="metric"><b>${c.frames_used || 1}</b><span>frames agreed</span></div>
+        </div>
+        <div class="control-hint muted">Boundary + corners detected on the source frame; the homography maps play onto a ${(c.court_size_m || [6.1, 13.4])[0]}×${(c.court_size_m || [6.1, 13.4])[1]}m court plane for heatmaps and the 3D view.</div>`
+        : `<div class="control-hint muted">No court boundary detected in this video (POV or occluded footage skips it). Detection runs automatically on new jobs.</div>`}
+      </div>`;
+    if (c) {
+      $("courtEnabled").onchange = (e) => { co.enabled = e.target.checked; stateChanged(); };
+      $("courtOpacity").oninput = (e) => { co.opacity = Number(e.target.value) / 100; stateChanged(false); };
+      $("courtNet").onchange = (e) => { co.showNet = e.target.checked; stateChanged(false); };
+    }
   } else if (studio.selectedLayer === "soundtrack") {
     panel.innerHTML = `
       <div class="control-group">
@@ -1450,6 +1520,9 @@ function resolveTargetCenter(spec) {
 // manual framing. Holds the last good centre on momentary target loss and cross-fades
 // for ~0.4s after a target switch so the camera never teleports.
 function evalCameraFraming() {
+  // Keyframes are authored in reel time; in Landscape the video runs on source
+  // time, so the camera preview would track the wrong moments — skip it there.
+  if (effectiveMode() !== "reel") return null;
   const plan = cameraAt(cameraTime());
   if (!plan) return null;
   let center = resolveTargetCenter(plan);
@@ -1600,48 +1673,221 @@ function nearestTrackPoint(track, t, window = 0.55) {
   return delta <= window ? best : null;
 }
 
-// Player boxes ({id,x,y,w,h,confidence}) tracked at the current time, or []. Maps
-// the playhead to source time the same way as the shuttle, then takes the nearest
-// sampled players_track frame (wider window — player samples are sparser).
-function currentPlayers() {
-  const v = $("stVideo");
-  if (!studio.item || !v.duration) return [];
-  const pick = (vision, t) => {
-    const fr = nearestTrackPoint((vision || {}).players_track || [], t, 1.0);
-    return fr ? (fr.boxes || []) : [];
-  };
-  if (studio.mode === "source") {
-    for (const seg of reelSegments()) {
-      const boxes = pick(seg.vision, v.currentTime);
-      if (boxes.length) return boxes;
-    }
-    return [];
+/* ---------- track interpolation (TASK-022) ----------
+The public tracks are sampled at ≤10Hz; snapping to the nearest sample made
+markers hop up to ±50ms of real motion. These lerp between the bracketing
+samples when the gap is small (a continuous trajectory), and fall back to the
+nearest sample inside `window` across real gaps (detector dropouts). */
+
+function _bracket(track, t) {
+  let lo = 0, hi = track.length - 1;
+  if (t <= Number(track[0].t)) return [0, 0];
+  if (t >= Number(track[hi].t)) return [hi, hi];
+  while (hi - lo > 1) {
+    const m = (lo + hi) >> 1;
+    if (Number(track[m].t) <= t) lo = m; else hi = m;
   }
-  const seg = reelSegments().find(s => v.currentTime >= s.t0 && v.currentTime <= s.t1);
-  if (!seg) return [];
-  return pick(seg.vision, seg.sourceStart + (v.currentTime - seg.t0));
+  return [lo, hi];
 }
 
-function currentShuttlePoint() {
+function interpTrackPoint(track, t, window = 0.55, maxGap = 0.6) {
+  if (!track || !track.length) return null;
+  const [i, j] = _bracket(track, t);
+  const a = track[i], b = track[j];
+  if (i !== j) {
+    const gap = Number(b.t) - Number(a.t);
+    if (gap > 0 && gap <= maxGap) {
+      const k = (t - Number(a.t)) / gap;
+      return {
+        t,
+        x: Number(a.x) + (Number(b.x) - Number(a.x)) * k,
+        y: Number(a.y) + (Number(b.y) - Number(a.y)) * k,
+        confidence: Math.min(Number(a.confidence || 0), Number(b.confidence || 0)),
+      };
+    }
+  }
+  const n = Math.abs(Number(a.t) - t) <= Math.abs(Number(b.t) - t) ? a : b;
+  return Math.abs(Number(n.t) - t) <= window ? n : null;
+}
+
+// Per-id box interpolation between two sampled frames. An id present on only
+// one side holds its position (better than blinking off for 100ms).
+function interpPlayerBoxes(frames, t, window = 1.0, maxGap = 1.2) {
+  if (!frames || !frames.length) return [];
+  const [i, j] = _bracket(frames, t);
+  const A = frames[i], B = frames[j];
+  const nearest = () => {
+    const n = Math.abs(Number(A.t) - t) <= Math.abs(Number(B.t) - t) ? A : B;
+    return Math.abs(Number(n.t) - t) <= window ? (n.boxes || []) : [];
+  };
+  if (i === j || Number(B.t) - Number(A.t) > maxGap) return nearest();
+  const k = (t - Number(A.t)) / (Number(B.t) - Number(A.t));
+  const after = new Map((B.boxes || []).map(b => [b.id, b]));
+  const out = [];
+  for (const a of (A.boxes || [])) {
+    const b = after.get(a.id);
+    if (!b) { out.push(a); continue; }
+    after.delete(a.id);
+    out.push({
+      id: a.id,
+      confidence: Math.min(Number(a.confidence || 0), Number(b.confidence || 0)),
+      x: Number(a.x) + (Number(b.x) - Number(a.x)) * k,
+      y: Number(a.y) + (Number(b.y) - Number(a.y)) * k,
+      w: Number(a.w) + (Number(b.w) - Number(a.w)) * k,
+      h: Number(a.h) + (Number(b.h) - Number(a.h)) * k,
+    });
+  }
+  after.forEach(b => out.push(b));
+  return out;
+}
+
+// Pose interpolation: match people by id, lerp the 17 keypoints index-wise
+// (and the bbox), so skeletons glide between sparse samples.
+function interpPoseFrame(frames, t, window = 1.0, maxGap = 1.2) {
+  if (!frames || !frames.length) return null;
+  const [i, j] = _bracket(frames, t);
+  const A = frames[i], B = frames[j];
+  const nearest = () => {
+    const n = Math.abs(Number(A.t) - t) <= Math.abs(Number(B.t) - t) ? A : B;
+    return Math.abs(Number(n.t) - t) <= window ? n : null;
+  };
+  if (i === j || Number(B.t) - Number(A.t) > maxGap) return nearest();
+  const k = (t - Number(A.t)) / (Number(B.t) - Number(A.t));
+  const after = new Map((B.people || []).map(p => [p.id, p]));
+  const people = [];
+  const lerp = (a, b) => a + (b - a) * k;
+  for (const pa of (A.people || [])) {
+    const pb = after.get(pa.id);
+    if (!pb || !Array.isArray(pa.keypoints) || !Array.isArray(pb.keypoints)) {
+      people.push(pa);
+      if (pb) after.delete(pa.id);
+      continue;
+    }
+    after.delete(pa.id);
+    const kp = pa.keypoints.map((ka, n) => {
+      const kb = pb.keypoints[n];
+      if (!kb) return ka;
+      return {
+        x: lerp(Number(ka.x), Number(kb.x)),
+        y: lerp(Number(ka.y), Number(kb.y)),
+        confidence: Math.min(Number(ka.confidence || 0), Number(kb.confidence || 0)),
+      };
+    });
+    const person = { ...pa, keypoints: kp };
+    if (pa.bbox && pb.bbox) {
+      person.bbox = {
+        x: lerp(Number(pa.bbox.x), Number(pb.bbox.x)),
+        y: lerp(Number(pa.bbox.y), Number(pb.bbox.y)),
+        w: lerp(Number(pa.bbox.w), Number(pb.bbox.w)),
+        h: lerp(Number(pa.bbox.h), Number(pb.bbox.h)),
+        confidence: Math.min(Number(pa.bbox.confidence || 0), Number(pb.bbox.confidence || 0)),
+      };
+    }
+    people.push(person);
+  }
+  after.forEach(p => people.push(p));
+  return { t, people };
+}
+
+/* ---------- TASK-021: displayed-video-aware track mapping ----------
+All tracking coordinates (shuttle/players/pose) are normalized to the SOURCE
+frame. What's on screen differs:
+  · proxy (Landscape, or Source mode)  → source frames; currentTime IS source time.
+  · rendered reel (Portrait + Reel)    → each frame is a moving virtual-camera
+    CROP of the source. Overlays must (a) map reel time → source time through the
+    rally's render_window and (b) project source coords through the exported
+    camera_path crop rect. Without camera_path (legacy reels) the projection is
+    impossible — overlays hide and a hint explains why. */
+
+// The playhead's source time + the rally segment owning it, kind-aware.
+function trackContext() {
   const v = $("stVideo");
-  if (!studio.item || !v.duration) return null;
-  if (studio.mode === "source") {
-    for (const seg of reelSegments()) {
-      const p = nearestTrackPoint(((seg.vision || {}).shuttle_track || []), v.currentTime);
+  if (!studio.item || !v.duration || !studio.editorState) return null;
+  const segs = reelSegments();
+  if (displayedKind() === "source") {
+    const t = v.currentTime;
+    const seg = segs.find(s => t >= s.sourceStart - 0.3
+                            && t <= s.sourceStart + (s.t1 - s.t0) + 0.3) || null;
+    return { kind: "source", sourceT: t, seg, segs };
+  }
+  const seg = segs.find(s => v.currentTime >= s.t0 && v.currentTime <= s.t1);
+  if (!seg) return null;
+  return { kind: "reel", sourceT: seg.sourceStart + (v.currentTime - seg.t0), seg, segs };
+}
+
+// The render crop window (normalized source rect) at source time t, lerped
+// between the exported camera_path samples. Null when the reel predates the
+// camera_path export.
+function cropRectAt(seg, t) {
+  const path = seg && seg.camPath;
+  if (!path || !path.length) return null;
+  let a = path[0], b = path[path.length - 1];
+  if (t <= a.t) b = a;
+  else if (t >= b.t) a = b;
+  else {
+    for (let i = 0; i < path.length - 1; i++) {
+      if (path[i + 1].t >= t) { a = path[i]; b = path[i + 1]; break; }
+    }
+  }
+  const span = b.t - a.t;
+  const k = span > 0 ? (t - a.t) / span : 0;
+  const L = (p, q) => p + (q - p) * k;
+  return { x: L(a.x, b.x), y: L(a.y, b.y), w: L(a.w, b.w), h: L(a.h, b.h) };
+}
+
+const bakedMirror = () => !!((studio.item && studio.item.remix) || {}).mirror;
+
+// Source-normalized point → the DISPLAYED video's own normalized space.
+// Identity on source video; inverts the baked virtual camera on the reel.
+// `clamp` drops points outside the visible crop (markers); boxes pass false so a
+// half-visible player still draws (the stage clips the rest).
+function toDisplayNorm(x, y, ctx, clamp = true) {
+  if (ctx.kind !== "reel") return { x, y };
+  const rect = cropRectAt(ctx.seg, ctx.sourceT);
+  if (!rect || rect.w <= 0 || rect.h <= 0) return null;
+  let nx = (x - rect.x) / rect.w;
+  const ny = (y - rect.y) / rect.h;
+  if (bakedMirror()) nx = 1 - nx;   // reel content is baked mirrored; return FILE coords
+  if (clamp && (nx < -0.12 || nx > 1.12 || ny < -0.12 || ny > 1.12)) return null;
+  return { x: nx, y: ny };
+}
+
+// Track point → screen {left,top} percentages, or null when unmappable.
+function trackPointToScreen(x, y, ctx, clamp = true) {
+  const n = toDisplayNorm(Number(x), Number(y), ctx, clamp);
+  return n ? videoFitPoint(n.x, n.y) : null;
+}
+
+// Player boxes ({id,x,y,w,h,confidence}) tracked at the playhead, or [].
+function currentPlayers(ctx = trackContext()) {
+  if (!ctx) return [];
+  const pick = (vision, t) => interpPlayerBoxes((vision || {}).players_track || [], t);
+  if (ctx.seg) return pick(ctx.seg.vision, ctx.sourceT);
+  if (ctx.kind === "source") {
+    for (const seg of ctx.segs) {
+      const boxes = pick(seg.vision, ctx.sourceT);
+      if (boxes.length) return boxes;
+    }
+  }
+  return [];
+}
+
+function currentShuttlePoint(ctx = trackContext()) {
+  if (!ctx) return null;
+  if (ctx.seg) return interpTrackPoint(((ctx.seg.vision || {}).shuttle_track || []), ctx.sourceT);
+  if (ctx.kind === "source") {
+    for (const seg of ctx.segs) {
+      const p = interpTrackPoint(((seg.vision || {}).shuttle_track || []), ctx.sourceT);
       if (p) return p;
     }
-    return null;
   }
-  const seg = reelSegments().find(s => v.currentTime >= s.t0 && v.currentTime <= s.t1);
-  if (!seg) return null;
-  const sourceT = seg.sourceStart + (v.currentTime - seg.t0);
-  return nearestTrackPoint(((seg.vision || {}).shuttle_track || []), sourceT);
+  return null;
 }
 
 // Player boxes smoothed over time (per id) so the overlay glides instead of snapping
 // between sparse samples. Snaps on a big jump (new detection / rally cut).
-function smoothedPlayerBoxes() {
-  const raw = currentPlayers();
+function smoothedPlayerBoxes(ctx = trackContext()) {
+  const raw = currentPlayers(ctx);
   const live = new Set(raw.map(b => Number(b.id)));
   for (const k of Object.keys(_playerSmooth)) if (!live.has(Number(k))) delete _playerSmooth[k];
   return raw.map(b => {
@@ -1654,31 +1900,31 @@ function smoothedPlayerBoxes() {
 
 // The shuttle's ACTUAL recent trajectory (last `windowSec` of tracked points up to the
 // playhead), mapped to screen %, for a real motion trail instead of a fixed bar.
-function recentShuttleScreenPoints(windowSec = 0.7) {
-  const v = $("stVideo");
-  if (!studio.item || !v.duration) return [];
-  let track = null, sourceT = null;
-  if (studio.mode === "source") {
-    for (const seg of reelSegments()) {
+// Past positions are projected through the CURRENT crop (they are places in space,
+// not time) — points that have scrolled out of the crop just drop off the trail.
+function recentShuttleScreenPoints(ctx, windowSec = 0.7) {
+  if (!ctx) return [];
+  let track = null;
+  if (ctx.seg) track = (ctx.seg.vision || {}).shuttle_track || [];
+  else if (ctx.kind === "source") {
+    for (const seg of ctx.segs) {
       const t = (seg.vision || {}).shuttle_track || [];
-      if (nearestTrackPoint(t, v.currentTime)) { track = t; sourceT = v.currentTime; break; }
+      if (nearestTrackPoint(t, ctx.sourceT)) { track = t; break; }
     }
-  } else {
-    const seg = reelSegments().find(s => v.currentTime >= s.t0 && v.currentTime <= s.t1);
-    if (seg) { track = (seg.vision || {}).shuttle_track || []; sourceT = seg.sourceStart + (v.currentTime - seg.t0); }
   }
-  if (!track || sourceT == null) return [];
+  if (!track) return [];
   return track
-    .filter(p => Number(p.t) <= sourceT + 1e-3 && Number(p.t) >= sourceT - windowSec && Number(p.confidence || 0) >= 0.3)
+    .filter(p => Number(p.t) <= ctx.sourceT + 1e-3 && Number(p.t) >= ctx.sourceT - windowSec && Number(p.confidence || 0) >= 0.3)
     .sort((a, b) => a.t - b.t)
-    .map(p => videoFitPoint(Number(p.x), Number(p.y)));
+    .map(p => trackPointToScreen(p.x, p.y, ctx))
+    .filter(Boolean);
 }
 
 // Comet-style trail: per-segment opacity and width ramp from the oldest point to
 // the newest, so the trail fades out behind the shuttle instead of reading as a
 // flat line. A soft glow dot marks the freshest end.
-function shuttleTrailSvg(sh) {
-  const pts = recentShuttleScreenPoints();
+function shuttleTrailSvg(sh, ctx) {
+  const pts = recentShuttleScreenPoints(ctx);
   if (pts.length < 2) return "";
   const segs = [];
   const n = pts.length - 1;
@@ -1697,65 +1943,79 @@ function shuttleTrailSvg(sh) {
   return `<svg class="shuttle-trail-svg" viewBox="0 0 100 100" preserveAspectRatio="none">${segs.join("")}</svg>`;
 }
 
+// One-time-per-state hint when overlays can't be aligned (legacy reel without
+// an exported camera_path, viewed in Portrait+Reel).
+function overlayAlignmentHint(ctx, anyOverlayOn) {
+  const el = $("tpHint");
+  const need = anyOverlayOn && ctx && ctx.kind === "reel" && ctx.seg && !ctx.seg.camPath;
+  const msg = "overlays need a re-render to align on this reel — Rebuild cuts, or switch to Landscape";
+  if (need && el.textContent !== msg) el.textContent = msg;
+  else if (!need && el.textContent === msg) el.textContent = "";
+}
+
 function updateOverlayPreview() {
   const wrap = $("aiOverlays");
   const state = studio.editorState;
   if (!wrap || !state) return;
   applyFraming();
+  const ctx = trackContext();
   const parts = [];
+  // Court boundary first — it sits UNDER the action overlays.
+  const courtSvg = renderCourtOverlay(ctx);
+  if (courtSvg) parts.push(courtSvg);
   // Shuttle: draw ONLY when the shuttle is actually tracked at the current time —
   // no fixed-default/last-position marker (that was the phantom "circle"). The trail
   // follows the shuttle's real recent path, not a fixed-offset bar.
   const sh = state.overlays.shuttle;
-  const p = sh.enabled ? currentShuttlePoint() : null;
-  if (p) {
-    const pos = videoFitPoint(Number(p.x), Number(p.y));
-    if (sh.trail) parts.push(shuttleTrailSvg(sh));
+  const p = (sh.enabled && ctx) ? currentShuttlePoint(ctx) : null;
+  const pos = p ? trackPointToScreen(p.x, p.y, ctx) : null;
+  if (pos) {
+    if (sh.trail) parts.push(shuttleTrailSvg(sh, ctx));
     parts.push(`<div class="shuttle-mark ${esc(sh.style)}" style="left:${pos.left}%;top:${pos.top}%;width:${sh.size}px;height:${sh.size}px;margin-left:${-sh.size / 2}px;margin-top:${-sh.size / 2}px;--overlay-opacity:${sh.opacity}"></div>`);
   }
   // Players & pose layer: draw the tracked player boxes at the current time (real
-  // data from the YOLO worker), smoothed over time, hidden when none. Pose keypoints
-  // (skeleton) render on top once exposed (currentPose() is null until then).
+  // data from the YOLO worker), smoothed over time, hidden when none, plus the
+  // pose skeleton for every tracked person.
   const po = state.overlays.pose;
-  if (po.enabled) {
+  if (po.enabled && ctx) {
     const target = (state.camera && state.camera.targetPlayer != null) ? state.camera.targetPlayer : null;
-    for (const b of smoothedPlayerBoxes()) {
-      parts.push(renderPlayerBox(b, po, b.id === target));
+    for (const b of smoothedPlayerBoxes(ctx)) {
+      const html = renderPlayerBox(b, po, b.id === target, ctx);
+      if (html) parts.push(html);
     }
-    const pose = currentPose();
-    if (pose) parts.push(renderPoseOverlay(pose, po));
+    const pose = currentPose(ctx);
+    if (pose) parts.push(renderPoseOverlay(pose, po, ctx));
   }
+  overlayAlignmentHint(ctx, sh.enabled || po.enabled);
   wrap.innerHTML = parts.join("");
 }
 
-// A tracked player's bounding box, framing-aware. Map both corners through
-// videoFitPoint so crop/zoom/pan transforms apply correctly.
-function renderPlayerBox(b, po, isTarget) {
-  const tl = videoFitPoint(Number(b.x) - Number(b.w) / 2, Number(b.y) - Number(b.h) / 2);
-  const br = videoFitPoint(Number(b.x) + Number(b.w) / 2, Number(b.y) + Number(b.h) / 2);
+// A tracked player's bounding box, framing-aware. Map both corners through the
+// crop projection + videoFitPoint so camera/zoom/pan transforms apply correctly.
+function renderPlayerBox(b, po, isTarget, ctx) {
+  const tl = trackPointToScreen(Number(b.x) - Number(b.w) / 2, Number(b.y) - Number(b.h) / 2, ctx, false);
+  const br = trackPointToScreen(Number(b.x) + Number(b.w) / 2, Number(b.y) + Number(b.h) / 2, ctx, false);
+  if (!tl || !br) return "";
   const left = Math.min(tl.left, br.left), top = Math.min(tl.top, br.top);
   const w = Math.abs(br.left - tl.left), h = Math.abs(br.top - tl.top);
-  return `<div class="player-box${isTarget ? " target" : ""}" data-pid="${b.id}" ` +
+  if (left > 104 || top > 104 || left + w < -4 || top + h < -4) return "";   // fully outside the crop
+  return `<div class="player-box p${Number(b.id) % 4}${isTarget ? " target" : ""}" data-pid="${b.id}" ` +
     `style="left:${left}%;top:${top}%;width:${w}%;height:${h}%;opacity:${po.opacity}">` +
     `<span class="player-tag">P${Number(b.id) + 1}</span></div>`;
 }
 
-// Real pose keypoints for the current time, or null. Maps reel time to source time
-// the same way shuttle/player tracks do, then takes the nearest sampled pose frame.
-function currentPose() {
-  const v = $("stVideo");
-  if (!studio.item || !v.duration) return null;
-  const pick = (vision, t) => nearestTrackPoint((vision || {}).pose_track || [], t, 1.0);
-  if (studio.mode === "source") {
-    for (const seg of reelSegments()) {
-      const fr = pick(seg.vision, v.currentTime);
+// Real pose keypoints for the current time, or null.
+function currentPose(ctx = trackContext()) {
+  if (!ctx) return null;
+  const pick = (vision, t) => interpPoseFrame((vision || {}).pose_track || [], t);
+  if (ctx.seg) return pick(ctx.seg.vision, ctx.sourceT);
+  if (ctx.kind === "source") {
+    for (const seg of ctx.segs) {
+      const fr = pick(seg.vision, ctx.sourceT);
       if (fr) return fr;
     }
-    return null;
   }
-  const seg = reelSegments().find(s => v.currentTime >= s.t0 && v.currentTime <= s.t1);
-  if (!seg) return null;
-  return pick(seg.vision, seg.sourceStart + (v.currentTime - seg.t0));
+  return null;
 }
 
 const POSE_LIMBS = [
@@ -1763,26 +2023,205 @@ const POSE_LIMBS = [
   [11, 13], [13, 15], [12, 14], [14, 16], [0, 1], [0, 2], [1, 3], [2, 4],
 ];
 
-function renderPoseOverlay(pose, po) {
+// Velocity style: per-person centroid speed (normalized units/s) → color ramp.
+const _poseVel = {};   // person id -> {x, y, t, speed}
+function _poseSpeed(person, keypoints) {
+  const good = keypoints.filter(Boolean);
+  if (!good.length) return 0;
+  const cx = good.reduce((s, p) => s + p.nx, 0) / good.length;
+  const cy = good.reduce((s, p) => s + p.ny, 0) / good.length;
+  const now = performance.now();
+  const prev = _poseVel[person.id];
+  if (!prev) { _poseVel[person.id] = { x: cx, y: cy, t: now, speed: 0 }; return 0; }
+  const dt = (now - prev.t) / 1000;
+  if (dt < 0.04) return prev.speed;          // sub-frame call: keep the smoothed value
+  const inst = Math.min(Math.hypot(cx - prev.x, cy - prev.y) / dt, 2.5);
+  const speed = prev.speed * 0.7 + inst * 0.3;
+  _poseVel[person.id] = { x: cx, y: cy, t: now, speed };
+  return speed;
+}
+const _velColor = (s) => s < 0.12 ? "#7ee0a3" : s < 0.3 ? "#b7f542" : s < 0.6 ? "#ffd166" : "#ff4d6d";
+
+// Skeleton overlay in PIXEL space. The old 0-100 viewBox with
+// preserveAspectRatio="none" stretched joint circles into huge blobs on a wide
+// stage (r=2.8 meant 2.8% OF FRAME WIDTH). Pixel coordinates keep joints round
+// and line widths true at any aspect.
+function renderPoseOverlay(pose, po, ctx) {
+  const frame = $("stageFrame");
+  const fw = frame.clientWidth || 1, fh = frame.clientHeight || 1;
   const people = (pose.people || []).filter(p => Array.isArray(p.keypoints));
   if (!people.length) return "";
+  const lw = Number(po.lineWidth) || 3;
+  const jr = Math.max(2.2, lw * 0.9 + 0.8);
   const parts = [];
   for (const person of people) {
+    const pid = Number(person.id || 0) % 4;
     const pts = person.keypoints.map(k => {
       if (Number(k.confidence || 0) < 0.12) return null;
-      return videoFitPoint(Number(k.x), Number(k.y));
+      const s = trackPointToScreen(k.x, k.y, ctx);
+      return s ? { x: s.left / 100 * fw, y: s.top / 100 * fh, nx: Number(k.x), ny: Number(k.y) } : null;
     });
+    const vel = po.style === "velocity" ? _poseSpeed(person, pts) : 0;
+    const velStyle = po.style === "velocity" ? ` style="stroke:${_velColor(vel)}"` : "";
+    const velFill = po.style === "velocity" ? ` style="fill:${_velColor(vel)}"` : "";
     for (const [a, b] of POSE_LIMBS) {
       if (!pts[a] || !pts[b]) continue;
-      parts.push(`<line class="pose-limb p${Number(person.id || 0) % 4}" x1="${pts[a].left.toFixed(2)}" y1="${pts[a].top.toFixed(2)}" x2="${pts[b].left.toFixed(2)}" y2="${pts[b].top.toFixed(2)}"></line>`);
+      parts.push(`<line class="pose-limb p${pid}"${velStyle} x1="${pts[a].x.toFixed(1)}" y1="${pts[a].y.toFixed(1)}" x2="${pts[b].x.toFixed(1)}" y2="${pts[b].y.toFixed(1)}"></line>`);
     }
-    pts.forEach((p, i) => {
-      if (!p) return;
-      parts.push(`<circle class="pose-joint p${Number(person.id || 0) % 4}" data-kp="${i}" cx="${p.left.toFixed(2)}" cy="${p.top.toFixed(2)}" r="2.8"></circle>`);
+    pts.forEach((pt, i) => {
+      if (!pt || i in { 1: 1, 2: 1, 3: 1, 4: 1 }) return;   // eyes/ears clutter at small scale
+      parts.push(`<circle class="pose-joint p${pid}"${velFill} data-kp="${i}" cx="${pt.x.toFixed(1)}" cy="${pt.y.toFixed(1)}" r="${(i === 0 ? jr * 1.7 : jr).toFixed(1)}"></circle>`);
     });
   }
   if (!parts.length) return "";
-  return `<svg class="pose-figure ${esc(po.style)}" viewBox="0 0 100 100" preserveAspectRatio="none" style="opacity:${po.opacity};--pose-width:${po.lineWidth}px">${parts.join("")}</svg>`;
+  return `<svg class="pose-figure ${esc(po.style)}" viewBox="0 0 ${fw} ${fh}" preserveAspectRatio="none" style="opacity:${po.opacity};--pose-width:${lw}px">${parts.join("")}</svg>`;
+}
+
+/* ---------- TASK-022: court overlay + post-game movement heatmaps ---------- */
+function courtProject(h, x, y) {
+  const w = h[6] * x + h[7] * y + h[8];
+  if (Math.abs(w) < 1e-9) return null;
+  return { u: (h[0] * x + h[1] * y + h[2]) / w, v: (h[3] * x + h[4] * y + h[5]) / w };
+}
+
+// The detected court boundary drawn through the SAME projection as the tracks,
+// so it stays glued to the floor in every view (landscape, portrait, reel crop).
+function renderCourtOverlay(ctx) {
+  const state = studio.editorState;
+  const co = state.overlays.court;
+  const c = courtOf();
+  if (!co || !co.enabled || !c || !ctx) return "";
+  const frame = $("stageFrame");
+  const fw = frame.clientWidth || 1, fh = frame.clientHeight || 1;
+  const px = (p) => {
+    const s = trackPointToScreen(p[0], p[1], ctx, false);
+    return s ? { x: s.left / 100 * fw, y: s.top / 100 * fh } : null;
+  };
+  const corners = c.corners.map(px);
+  if (!corners.every(Boolean)) return "";
+  const pts = corners.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const parts = [`<polygon class="court-edge" points="${pts}"></polygon>`];
+  if (co.showNet && Array.isArray(c.net)) {
+    const a = px([c.net[0], c.net[1]]), b = px([c.net[2], c.net[3]]);
+    if (a && b) parts.push(`<line class="court-net" x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"></line>`);
+  }
+  corners.forEach(p => parts.push(`<circle class="court-corner" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4"></circle>`));
+  return `<svg class="court-overlay" viewBox="0 0 ${fw} ${fh}" preserveAspectRatio="none" style="opacity:${co.opacity}">${parts.join("")}</svg>`;
+}
+
+// Foot positions (box bottom-center) for one player id across ALL rallies —
+// the post-game aggregate the heatmaps ask for.
+function playerFootPoints(pid) {
+  const pts = [];
+  for (const seg of reelSegments()) {
+    for (const f of ((seg.vision || {}).players_track || [])) {
+      for (const b of (f.boxes || [])) {
+        if (Number(b.id) !== pid) continue;
+        pts.push({ x: Number(b.x), y: Number(b.y) + Number(b.h) / 2 });
+      }
+    }
+  }
+  return pts;
+}
+
+function trackedPlayerIds() {
+  const ids = new Set();
+  for (const seg of reelSegments())
+    for (const f of ((seg.vision || {}).players_track || []))
+      for (const b of (f.boxes || [])) ids.add(Number(b.id));
+  return [...ids].sort((a, b) => a - b).slice(0, 4);
+}
+
+function _heatColor(t) {
+  return `hsla(${Math.round(100 - 85 * t)}, 92%, ${Math.round(46 + 12 * t)}%, ${(0.22 + 0.68 * t).toFixed(2)})`;
+}
+
+// Standard court markings on the schematic (meters): net, short service lines
+// (1.98m off the net), doubles long service (0.76m off each baseline), center
+// lines, singles side lines (0.46m in).
+function _drawCourtSchematic(g, X, Y) {
+  const Wm = 6.1, Lm = 13.4;
+  g.strokeStyle = "rgba(255,255,255,.55)"; g.lineWidth = 1.2;
+  g.strokeRect(X(0), Y(0), X(Wm) - X(0), Y(Lm) - Y(0));
+  g.lineWidth = 0.8; g.strokeStyle = "rgba(255,255,255,.25)";
+  const hline = (m) => { g.beginPath(); g.moveTo(X(0), Y(m)); g.lineTo(X(Wm), Y(m)); g.stroke(); };
+  const vline = (m, m0, m1) => { g.beginPath(); g.moveTo(X(m), Y(m0)); g.lineTo(X(m), Y(m1)); g.stroke(); };
+  hline(6.7 - 1.98); hline(6.7 + 1.98); hline(0.76); hline(Lm - 0.76);
+  vline(0.46, 0, Lm); vline(Wm - 0.46, 0, Lm);
+  vline(Wm / 2, 0, 6.7 - 1.98); vline(Wm / 2, 6.7 + 1.98, Lm);
+  g.strokeStyle = "rgba(70,227,255,.75)"; g.lineWidth = 1.4;
+  hline(6.7);
+}
+
+function drawPlayerHeatmap(canvas, pid) {
+  const c = courtOf();
+  const H = c && c.homography;
+  const pts = playerFootPoints(pid);
+  const gx = H ? 18 : 30, gy = H ? 38 : 17;
+  const grid = new Float32Array(gx * gy);
+  const splat = (u, v) => {   // 3x3 soft splat into grid coords
+    const cx = u * (gx - 1), cy = v * (gy - 1);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const ix = Math.round(cx) + dx, iy = Math.round(cy) + dy;
+      if (ix < 0 || iy < 0 || ix >= gx || iy >= gy) continue;
+      const d2 = (ix - cx) ** 2 + (iy - cy) ** 2;
+      grid[iy * gx + ix] += Math.exp(-d2 / 1.2);
+    }
+  };
+  let used = 0;
+  for (const p of pts) {
+    if (H) {
+      const m = courtProject(H, p.x, p.y);
+      if (!m || m.u < -1.2 || m.u > 7.3 || m.v < -1.5 || m.v > 14.9) continue;
+      splat(Math.min(1, Math.max(0, m.u / 6.1)), Math.min(1, Math.max(0, m.v / 13.4)));
+    } else {
+      splat(Math.min(1, Math.max(0, p.x)), Math.min(1, Math.max(0, p.y)));
+    }
+    used++;
+  }
+  const pad = 8;
+  canvas.width = H ? 120 : 200;
+  canvas.height = H ? 236 : 120;
+  const g = canvas.getContext("2d");
+  g.fillStyle = "#0d1015";
+  g.fillRect(0, 0, canvas.width, canvas.height);
+  const X = (m) => pad + m / 6.1 * (canvas.width - 2 * pad);
+  const Y = (m) => pad + m / 13.4 * (canvas.height - 2 * pad);
+  const mx = Math.max(1e-6, Math.max(...grid));
+  const cw = (canvas.width - 2 * pad) / gx, ch = (canvas.height - 2 * pad) / gy;
+  for (let iy = 0; iy < gy; iy++) for (let ix = 0; ix < gx; ix++) {
+    const t = grid[iy * gx + ix] / mx;
+    if (t < 0.04) continue;
+    g.fillStyle = _heatColor(Math.min(1, t));
+    g.beginPath();
+    g.arc(pad + (ix + 0.5) * cw, pad + (iy + 0.5) * ch, Math.max(cw, ch) * 0.85, 0, Math.PI * 2);
+    g.fill();
+  }
+  if (H) _drawCourtSchematic(g, X, Y);
+  else { g.strokeStyle = "rgba(255,255,255,.35)"; g.strokeRect(pad, pad, canvas.width - 2 * pad, canvas.height - 2 * pad); }
+  return used;
+}
+
+function renderHeatmaps(container) {
+  if (!container) return;
+  const ids = trackedPlayerIds();
+  if (!ids.length) {
+    container.innerHTML = `<div class="muted" style="font-size:11px;grid-column:1/-1">No player tracks on this reel yet.</div>`;
+    return;
+  }
+  container.innerHTML = "";
+  for (const pid of ids) {
+    const cell = document.createElement("div");
+    cell.className = "heatmap-cell";
+    const canvas = document.createElement("canvas");
+    const n = drawPlayerHeatmap(canvas, pid);
+    const label = document.createElement("span");
+    label.className = `heatmap-label hp${pid % 4}`;
+    label.textContent = `P${pid + 1} · ${n} pts`;
+    cell.appendChild(canvas);
+    cell.appendChild(label);
+    container.appendChild(cell);
+  }
 }
 
 /* ---------- studio edit mode: pick / reorder / mirror / rebuild ---------- */
@@ -1974,10 +2413,9 @@ function setPreviewAspect(aspect) {
   const landscape = aspect === "landscape";
   // Landscape = the ORIGINAL footage. The reel (item.video) is a 9:16 portrait crop, so
   // showing IT in a landscape frame just pillarboxes it. The proxy is the un-cropped
-  // source, so Landscape always plays the proxy; Portrait restores the current mode's
-  // video. Swap the source if needed, preserving playback position.
-  const wantSrc = landscape ? studio.item.proxy
-    : (studio.mode === "reel" ? studio.item.video : studio.item.proxy);
+  // source, so Landscape always plays the proxy (and the timeline/overlays switch to
+  // SOURCE time — see effectiveMode). Swap the source if needed, keeping position.
+  const wantSrc = desiredVideoSrc();
   const fileOf = (u) => (u || "").split("?")[0].split("/").pop();
   const applyAR = () => {
     const realAR = (v.videoWidth && v.videoHeight) ? `${v.videoWidth}/${v.videoHeight}` : (landscape ? "16/9" : "9/16");
@@ -1997,7 +2435,8 @@ function setPreviewAspect(aspect) {
   }
   frame.classList.toggle("landscape", landscape);
   $("aspectToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.aspect === aspect));
-  $("tpHint").textContent = landscape ? "landscape · original frame" : "";
+  $("tpHint").textContent = landscape ? "landscape · original frame · source time" : "";
+  if (studio.mode !== "compose") buildTimeline();   // lanes follow the effective mode
   updateOverlayPreview();
 }
 $("aspectToggle").querySelectorAll("button").forEach(b => {
@@ -2036,12 +2475,52 @@ $("modeReel").onclick = () => setStudioMode("reel");
 $("modeSource").onclick = () => setStudioMode("source");
 $("modeCompose").onclick = () => setStudioMode("compose");
 $("tpPlay").onclick = () => { const v = $("stVideo"); v.paused ? v.play().catch(() => {}) : v.pause(); };
-$("tl").onclick = (e) => {
-  const r = $("tl").getBoundingClientRect();
-  const v = $("stVideo");
-  const d = v.duration || studio.dur;
-  if (d) v.currentTime = (e.clientX - r.left) / r.width * d;
-};
+
+// Timeline scrubbing (TASK-021). The old handler was a plain click on #tl that
+// divided by the WHOLE timeline rect — the 154px label column skewed every seek
+// right, and there was no drag at all (dragging fell through to whatever was
+// under the pointer). This scrubs on press+drag against the LANE rect, which is
+// zoom- and scroll-correct, and captures the pointer so a fast drag can't be
+// stolen by the canvas.
+(function initTimelineScrub() {
+  const board = $("tlBoard"), lane = $("tlLane");
+  let scrubbing = false, moved = false, startX = 0, suppressClick = false;
+  const seekTo = (clientX) => {
+    const r = lane.getBoundingClientRect();   // the (possibly zoomed+scrolled) lane
+    const v = $("stVideo");
+    const d = v.duration || studio.dur;
+    if (!d || r.width <= 0) return;
+    const frac = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+    v.currentTime = frac * d;
+    updateOverlayPreview();
+  };
+  board.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    scrubbing = true; moved = false; startX = e.clientX;
+    // Pressing empty lane/ruler seeks immediately; pressing a segment stays a
+    // click (jump to rally start) unless the pointer actually drags.
+    if (!e.target.closest(".seg") && !e.target.closest(".kf-mark")) { seekTo(e.clientX); moved = true; }
+    board.setPointerCapture(e.pointerId);
+  });
+  board.addEventListener("pointermove", (e) => {
+    if (!scrubbing) return;
+    if (!moved && Math.abs(e.clientX - startX) < 4) return;
+    if (!moved) suppressClick = true;   // a drag that started on a segment
+    moved = true;
+    seekTo(e.clientX);
+  });
+  const end = (e) => {
+    if (!scrubbing) return;
+    scrubbing = false;
+    try { board.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+  };
+  board.addEventListener("pointerup", end);
+  board.addEventListener("pointercancel", end);
+  // After a drag that began on a segment, swallow the segment's click-to-seek.
+  board.addEventListener("click", (e) => {
+    if (suppressClick) { suppressClick = false; e.stopPropagation(); e.preventDefault(); }
+  }, true);
+})();
 
 /* ---------- share ---------- */
 function shareHtml(id) {

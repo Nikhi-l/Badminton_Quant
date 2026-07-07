@@ -10,11 +10,11 @@ def test_studio_pose_overlay_uses_pose_track_not_null_stub():
     assert 'function currentPose() {\n  return null;' not in js
     assert "pose_track" in js
     assert "const POSE_LIMBS" in js
-    assert "renderPoseOverlay(pose, po)" in js
+    assert "renderPoseOverlay(pose, po, ctx)" in js
 
 
 def test_source_pose_lane_respects_pose_toggle():
     js = APP_JS.read_text()
 
-    assert 'track.id === "pose" && studio.mode === "source" && studio.editorState.overlays.pose.enabled' in js
+    assert 'track.id === "pose" && effectiveMode() === "source" && studio.editorState.overlays.pose.enabled' in js
     assert 'count: studio.editorState.overlays.pose.enabled ? poseReadyCount() : 0' in js
