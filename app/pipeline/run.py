@@ -166,8 +166,9 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
         note("render", f"rally {i}/{len(picked)}: virtual camera render")
         out = clips_dir / f"clip_{i:02d}.mp4"
         label = (f"RALLY {i}", f"{r['dur']:.0f}s · {r['note'] or 'match play'}")
-        dur = render.render_rally(input_path, info, t0, t1, path, out, *label,
-                                  annotations=vision_rally)
+        dur, cam_path = render.render_rally(input_path, info, t0, t1, path, out, *label,
+                                            annotations=vision_rally)
+        render_window = (t0, t1)
 
         note("validate", f"rally {i}/{len(picked)}: checking frames")
         v = validate.validate_clip(out, motion_limit, pov, lenient_framing=shuttle_cam)
@@ -183,17 +184,19 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
                 trim_shuttle_cam = path is not None
                 if path is None:
                     path = track.track(proxy, nt0, nt1, force_gentle=pov)
-                dur = render.render_rally(input_path, info, nt0, nt1, path, out, *label,
-                                          annotations=vision_rally)
+                dur, cam_path = render.render_rally(input_path, info, nt0, nt1, path, out, *label,
+                                                    annotations=vision_rally)
+                render_window = (nt0, nt1)
                 v = validate.validate_clip(out, motion_limit, pov, lenient_framing=trim_shuttle_cam)
                 attempt = {"rally": i, "pass": "trimmed", "ok": v["ok"]}
                 if v["ok"]:
                     trim_range = (nt0, nt1)
         if not v["ok"]:
             note("validate", f"rally {i}: failed ({_why(v)}) — re-rendering with safe camera")
-            dur = render.render_rally(input_path, info, t0, t1,
-                                      track.safe_path(proxy, t0, t1), out, *label,
-                                      annotations=vision_rally)
+            dur, cam_path = render.render_rally(input_path, info, t0, t1,
+                                                track.safe_path(proxy, t0, t1), out, *label,
+                                                annotations=vision_rally)
+            render_window = (t0, t1)
             v = validate.validate_clip(out, motion_limit, pov)
             attempt = {"rally": i, "pass": "safe", "ok": v["ok"]}
             if not v["ok"]:
@@ -203,7 +206,12 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
                 continue
         validation.append(attempt)
         clips.append(out)
-        entry = {**r, "clip": out.name, "clip_dur": round(dur, 2), "src_start": r["start"]}
+        # render_window + camera_path let the Studio invert the virtual camera:
+        # map the reel playhead to source time and source-normalized tracks onto
+        # the cropped reel frame (portrait overlay alignment).
+        entry = {**r, "clip": out.name, "clip_dur": round(dur, 2), "src_start": r["start"],
+                 "render_window": [round(render_window[0], 3), round(render_window[1], 3)],
+                 "camera_path": cam_path}
         if trim_range:   # report the window that actually shipped, keep identity via src_start
             entry.update(start=round(trim_range[0], 2), end=round(trim_range[1], 2),
                          dur=round(trim_range[1] - trim_range[0], 2), trimmed=True)
@@ -259,6 +267,7 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
         "n_rallies_used": len(rendered),
         "rallies": rendered,
         "validation": {"clips": validation, "reel": reel_check},
+        "stitch": {"xfade": stitch.XFADE},
         "source": {"w": info.width, "h": info.height, "fps": round(info.fps, 2),
                    "duration": round(info.duration, 2)},
         "n_clips": len(paths),
@@ -304,7 +313,10 @@ def remix(input_path, workdir: str | Path, order: list[int], mirror: bool = Fals
     bad = [i for i in order if not 1 <= i <= len(rallies)]
     if bad or not order:
         raise RuntimeError(f"remix indices out of range: {bad or 'empty selection'}")
-    chosen = [rallies[i - 1] for i in order]
+    # Copies, not references: a camera/mirror re-render below updates the copy's
+    # camera_path to match the new footage without corrupting the canonical pool
+    # (whose clip files on disk keep their original camera).
+    chosen = [dict(rallies[i - 1]) for i in order]
 
     info = media.probe(src)
     apply_cam = bool(camera and camera.get("enabled") and camera.get("keyframes"))
@@ -327,9 +339,10 @@ def remix(input_path, workdir: str | Path, order: list[int], mirror: bool = Fals
                         if _can_use_vision_camera(pov, r.get("vision")) else None) \
                     or track.track(proxy, t0, t1, force_gentle=pov)
             clip = workdir / "clips" / f"cam_{r['clip']}"
-            render.render_rally(src, info, t0, t1, path, clip,
-                                f"RALLY {slot}", f"{r['dur']:.0f}s · {r['note'] or 'match play'}",
-                                mirror=mirror, annotations=r.get("vision"))
+            _, cam_path = render.render_rally(src, info, t0, t1, path, clip,
+                                              f"RALLY {slot}", f"{r['dur']:.0f}s · {r['note'] or 'match play'}",
+                                              mirror=mirror, annotations=r.get("vision"))
+            r.update(render_window=[round(t0, 3), round(t1, 3)], camera_path=cam_path)
         elif mirror:
             note("render", f"rally {slot}/{len(chosen)}: mirrored re-render")
             path = (track.from_vision(proxy, t0, t1, r.get("vision"))
@@ -337,9 +350,10 @@ def remix(input_path, workdir: str | Path, order: list[int], mirror: bool = Fals
             if path is None:
                 path = track.track(proxy, t0, t1, force_gentle=pov)
             clip = workdir / "clips" / f"mirror_{r['clip']}"
-            render.render_rally(src, info, t0, t1, path, clip,
-                                f"RALLY {slot}", f"{r['dur']:.0f}s · {r['note'] or 'match play'}",
-                                mirror=True, annotations=r.get("vision"))
+            _, cam_path = render.render_rally(src, info, t0, t1, path, clip,
+                                              f"RALLY {slot}", f"{r['dur']:.0f}s · {r['note'] or 'match play'}",
+                                              mirror=True, annotations=r.get("vision"))
+            r.update(render_window=[round(t0, 3), round(t1, 3)], camera_path=cam_path)
         clips.append(clip)
         reel_t0 += clip_dur
 
@@ -351,6 +365,7 @@ def remix(input_path, workdir: str | Path, order: list[int], mirror: bool = Fals
     result["duration"] = stitched["duration"]
     result["rallies"] = chosen
     result["n_rallies_used"] = len(chosen)
+    result.setdefault("stitch", {"xfade": stitch.XFADE})
     result["remix"] = {"order": order, "mirror": mirror}
     if apply_cam:
         result["remix"]["camera"] = camera

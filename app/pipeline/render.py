@@ -111,16 +111,38 @@ def _punch(t_in: float) -> float:
     return 1.0 + max(0.0, config.RENDER_ZOOM_PUNCH) * math.exp(-max(t_in, 0.0) / 0.35)
 
 
-def render_rally(src: str | Path, info: media.VideoInfo, t0: float, t1: float,
-                 focus: FocusPath, out_path: str | Path, label: str, sub: str,
-                 mirror: bool = False, annotations: dict | None = None) -> float:
-    """Render one rally clip. Returns the clip duration in seconds."""
-    W, H = info.width, info.height
+# camera_path export rate: one sample every N output frames (30fps → 10Hz). The
+# path is smooth, so the Studio lerps between samples losslessly for overlay use.
+CAM_SAMPLE_EVERY = 3
+
+
+def crop_rect(fx: float, fy: float, z: float, W: int, H: int) -> tuple[int, int, int, int]:
+    """The exact source-pixel crop rect (x0, y0, x1, y1) for one output frame.
+
+    Shared by the render loop and the exported ``camera_path`` so the Studio can
+    invert the virtual camera — i.e. map source-normalized tracking coordinates
+    onto the rendered (cropped) reel. ``z`` is the final zoom after push/punch.
+    """
     A = config.OUT_W / config.OUT_H
     if W / H > A:
         cw_max, ch_max = H * A, float(H)
     else:
         cw_max, ch_max = float(W), W / A
+    cw, ch = cw_max / z, ch_max / z
+    cx = min(max(fx * W, cw / 2), W - cw / 2)
+    cy = min(max(fy * H, ch / 2), H - ch / 2)
+    x0, y0 = int(round(cx - cw / 2)), int(round(cy - ch / 2))
+    x1, y1 = min(x0 + int(cw), W), min(y0 + int(ch), H)
+    return max(0, x0), max(0, y0), x1, y1
+
+
+def render_rally(src: str | Path, info: media.VideoInfo, t0: float, t1: float,
+                 focus: FocusPath, out_path: str | Path, label: str, sub: str,
+                 mirror: bool = False, annotations: dict | None = None) -> tuple[float, list[dict]]:
+    """Render one rally clip. Returns (duration_sec, camera_path) where
+    camera_path is the sampled crop window actually used, normalized to the
+    source frame: [{t, x, y, w, h}] with t in source seconds."""
+    W, H = info.width, info.height
 
     badge = _badge(label, sub)
     mark = _wordmark()
@@ -128,17 +150,17 @@ def render_rally(src: str | Path, info: media.VideoInfo, t0: float, t1: float,
     dur = t1 - t0
     writer = media.FrameWriter(out_path, config.OUT_W, config.OUT_H, fps, src, t0, t1)
     n_written = 0
+    cam_path: list[dict] = []
     try:
         for i, frame in media.iter_frames(src, t0, t1, fps=fps):
             t = t0 + i / fps
             fx, fy, z = focus.at(t)
             z = min(z * _push((t - t0) / max(dur, 0.001)) * _punch(t - t0), 1.55)
-            cw, ch = cw_max / z, ch_max / z
-            cx = min(max(fx * W, cw / 2), W - cw / 2)
-            cy = min(max(fy * H, ch / 2), H - ch / 2)
-            x0, y0 = int(round(cx - cw / 2)), int(round(cy - ch / 2))
-            x1, y1 = min(x0 + int(cw), W), min(y0 + int(ch), H)
-            x0, y0 = max(0, x0), max(0, y0)
+            x0, y0, x1, y1 = crop_rect(fx, fy, z, W, H)
+            if i % CAM_SAMPLE_EVERY == 0:
+                cam_path.append({"t": round(t, 3),
+                                 "x": round(x0 / W, 4), "y": round(y0 / H, 4),
+                                 "w": round((x1 - x0) / W, 4), "h": round((y1 - y0) / H, 4)})
             crop = frame[y0:y1, x0:x1]
             img = Image.fromarray(crop).resize((config.OUT_W, config.OUT_H), Image.BILINEAR)
             shuttle = _nearest_shuttle(annotations, t)
@@ -156,4 +178,4 @@ def render_rally(src: str | Path, info: media.VideoInfo, t0: float, t1: float,
             n_written += 1
     finally:
         writer.close()
-    return n_written / fps
+    return n_written / fps, cam_path

@@ -24,7 +24,7 @@ import requests
 import runpod
 
 CONTRACT = "baddy.vision.v1"
-WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "pose-model-config-20260626")
+WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "pose-pairing-20260707")
 SAMPLE_FPS = float(os.environ.get("BADDY_SAMPLE_FPS", "6"))
 MAX_FRAMES_PER_RALLY = int(os.environ.get("BADDY_MAX_FRAMES_PER_RALLY", "180"))
 YOLO_POSE_MODEL = os.environ.get("YOLO_POSE_MODEL",
@@ -168,9 +168,13 @@ def _detect_pose(frame: np.ndarray) -> tuple[list[dict], list[dict], float]:
     confs = boxes.conf.cpu().numpy() if boxes.conf is not None else np.ones(len(xyxy))
     kxy = keypoints.xy.cpu().numpy() if keypoints is not None and keypoints.xy is not None else []
     kconf = keypoints.conf.cpu().numpy() if keypoints is not None and keypoints.conf is not None else []
+    # Keep each box paired with ITS keypoints while sorting — sorting the players
+    # list alone desynced poses[i] from players[i], so the app attached player A's
+    # bbox to player B's skeleton (and truncation could drop the wrong pose).
+    entries: list[tuple[dict, dict | None]] = []
     for i, box in enumerate(xyxy):
         det = _norm_box(box[0], box[1], box[2], box[3], w, h, confs[i])
-        players.append(det)
+        pose = None
         if i < len(kxy):
             pts = []
             for j, pt in enumerate(kxy[i]):
@@ -178,11 +182,16 @@ def _detect_pose(frame: np.ndarray) -> tuple[list[dict], list[dict], float]:
                 pts.append({"x": _clamp01(pt[0] / max(w, 1)),
                             "y": _clamp01(pt[1] / max(h, 1)),
                             "confidence": _clamp01(score, 1.0)})
-            poses.append({"keypoints": pts, "confidence": float(np.mean([p["confidence"] for p in pts])) if pts else 0.0})
-    players.sort(key=lambda b: (b["confidence"], _box_area(b)), reverse=True)
-    poses = poses[: len(players)]
-    pose_quality = float(np.mean([p["confidence"] for p in poses[:2]])) if poses else 0.0
-    return players[:2], poses[:2], _clamp01(pose_quality)
+            pose = {"keypoints": pts,
+                    "confidence": float(np.mean([p["confidence"] for p in pts])) if pts else 0.0}
+        entries.append((det, pose))
+    entries.sort(key=lambda e: (e[0]["confidence"], _box_area(e[0])), reverse=True)
+    entries = entries[:2]
+    players = [e[0] for e in entries]
+    # Placeholder keeps poses index-aligned with players when keypoints are missing.
+    poses = [e[1] or {"keypoints": [], "confidence": 0.0} for e in entries]
+    pose_quality = float(np.mean([p["confidence"] for p in poses])) if poses else 0.0
+    return players, poses, _clamp01(pose_quality)
 
 
 def _detect_racquet(frame: np.ndarray) -> tuple[list[dict], float]:

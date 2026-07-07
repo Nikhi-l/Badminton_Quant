@@ -240,58 +240,116 @@ def _sample_shuttle_track(points: list | None, max_points: int = 180) -> list[di
     return out
 
 
+def _stable_ids(frames: list[tuple[float, list[tuple[float, float, float]]]],
+                max_ids: int = 4, base_gate: float = 0.22) -> list[list[int]]:
+    """Stable small ids for sampled detections. frames: [(t, [(cx, cy, h), ...])].
+
+    Greedy min-cost matching against remembered slots. Cost mixes centroid
+    distance with box-height difference — the near and far player differ strongly
+    in apparent height, which keeps identity when only one of them is detected.
+    The match gate widens with the time gap between samples (fast rallies cover
+    real court between sparse samples), and the id pool is bounded: a re-entering
+    track reuses the stalest slot instead of minting ever-higher ids — the id
+    churn that made the Studio look like "only P1 is ever tracked".
+    Ids are finally relabeled so id 0 is the most-persistent (then nearest/tallest)
+    track: P1 means the near player on every rally.
+    """
+    slots: dict[int, tuple[float, float, float, float]] = {}  # id -> (cx, cy, h, t_last)
+    raw_ids: list[list[int]] = []
+    for t, dets in frames:
+        ids = [-1] * len(dets)
+        cands = []
+        for di, (cx, cy, h) in enumerate(dets):
+            for sid, (px, py, ph, pt) in slots.items():
+                dt = max(0.0, t - pt)
+                gate = min(0.6, base_gate + 0.28 * max(0.0, dt - 0.25))
+                cost = math.hypot(cx - px, cy - py) + 0.5 * abs(h - ph)
+                if cost <= gate:
+                    cands.append((cost, di, sid))
+        cands.sort()
+        used_d: set[int] = set()
+        used_s: set[int] = set()
+        for cost, di, sid in cands:
+            if di in used_d or sid in used_s:
+                continue
+            ids[di] = sid
+            used_d.add(di)
+            used_s.add(sid)
+        for di in range(len(dets)):
+            if ids[di] != -1:
+                continue
+            cx, cy, h = dets[di]
+            # A same-sized unmatched slot IS this player re-detected after fast
+            # motion or a detector dropout — apparent height separates near from
+            # far court in a fixed camera, and players don't teleport. Reusing it
+            # beats minting a new id every time a lunge outruns the gate.
+            sized = [s for s in slots if s not in used_s and abs(slots[s][2] - h) < 0.12]
+            free = [i for i in range(max_ids) if i not in slots and i not in used_s]
+            if sized:
+                sid = min(sized, key=lambda s: math.hypot(cx - slots[s][0], cy - slots[s][1]))
+            elif free:
+                sid = free[0]
+            else:
+                stale = [s for s in slots if s not in used_s]
+                sid = (min(stale, key=lambda s: slots[s][3]) if stale
+                       else max(slots) + 1)  # >max_ids simultaneous dets: overflow safely
+            ids[di] = sid
+            used_s.add(sid)
+        for di, sid in enumerate(ids):
+            cx, cy, h = dets[di]
+            slots[sid] = (cx, cy, h, t)
+        raw_ids.append(ids)
+    # Relabel: persistence first, then taller (nearer) first → near player = P1.
+    seen: dict[int, tuple[int, list[float]]] = {}
+    for (_, dets), ids in zip(frames, raw_ids):
+        for (_, _, h), sid in zip(dets, ids):
+            n, hs = seen.setdefault(sid, (0, []))
+            hs.append(h)
+            seen[sid] = (n + 1, hs)
+    order = sorted(seen, key=lambda s: (-seen[s][0], -sorted(seen[s][1])[len(seen[s][1]) // 2], s))
+    remap = {sid: i for i, sid in enumerate(order)}
+    return [[remap[sid] for sid in ids] for ids in raw_ids]
+
+
 def _sample_player_track(players: list | None, max_frames: int = 120) -> list[dict]:
     """Public, bounded per-frame player boxes with stable track ids for the editor.
 
     Vision stores dense per-frame player detections as boxes only. The editor needs
     normalized box centers + sizes and a consistent id per player so it can draw a
-    player overlay and let the camera follow a chosen player (TASK-014/015). Ids are
-    assigned greedily by nearest-centroid continuity across sampled frames.
+    player overlay and let the camera follow a chosen player (TASK-014/015). Ids
+    come from :func:`_stable_ids` (bounded pool, motion+size-aware matching).
     """
     if not isinstance(players, list) or not players:
         return []
     step = max(1, math.ceil(len(players) / max_frames))
-    frames = [f for f in players[::step] if isinstance(f, dict)]
-    out: list[dict] = []
-    prev: list[tuple[int, float, float]] = []  # (id, cx, cy) from the last emitted frame
-    next_id = 0
-    gate = 0.22  # max normalized centroid move to keep the same id between samples
-    for f in frames:
-        cur: list[tuple[int, float, float]] = []
-        used_prev: set[int] = set()
+    sampled: list[tuple[float, list[dict]]] = []
+    for f in players[::step]:
+        if not isinstance(f, dict):
+            continue
         norm_boxes: list[dict] = []
         for b in (f.get("boxes") or []):
             try:
                 x1, y1, x2, y2 = float(b["x1"]), float(b["y1"]), float(b["x2"]), float(b["y2"])
             except (KeyError, TypeError, ValueError):
                 continue
-            cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-            best_id, best_i, best_d = None, None, gate
-            for i, (pid, px, py) in enumerate(prev):
-                if i in used_prev:
-                    continue
-                d = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
-                if d < best_d:
-                    best_id, best_i, best_d = pid, i, d
-            if best_id is None:
-                best_id = next_id
-                next_id += 1
-            else:
-                used_prev.add(best_i)
-            cur.append((best_id, cx, cy))
             norm_boxes.append({
-                "id": best_id,
-                "x": round(cx, 5), "y": round(cy, 5),
+                "x": round((x1 + x2) / 2.0, 5), "y": round((y1 + y2) / 2.0, 5),
                 "w": round(max(0.0, x2 - x1), 5), "h": round(max(0.0, y2 - y1), 5),
                 "confidence": round(float(b.get("confidence", 0.0)), 3),
             })
-        if norm_boxes:
-            try:
-                t = round(float(f.get("t")), 3)
-            except (TypeError, ValueError):
-                t = 0.0
-            out.append({"t": t, "boxes": norm_boxes})
-        prev = cur
+        if not norm_boxes:
+            continue
+        try:
+            t = round(float(f.get("t")), 3)
+        except (TypeError, ValueError):
+            t = 0.0
+        sampled.append((t, norm_boxes))
+    ids = _stable_ids([(t, [(b["x"], b["y"], b["h"]) for b in boxes]) for t, boxes in sampled])
+    out: list[dict] = []
+    for (t, boxes), frame_ids in zip(sampled, ids):
+        for b, sid in zip(boxes, frame_ids):
+            b["id"] = sid
+        out.append({"t": t, "boxes": boxes})
     return out
 
 
@@ -327,45 +385,37 @@ def _pose_center(person: dict) -> tuple[float, float] | None:
     return sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
 
 
+def _pose_height(person: dict, keypoints: list[dict]) -> float:
+    bbox = _compact_bbox(person.get("bbox"))
+    if bbox and bbox["h"] > 0:
+        return bbox["h"]
+    ys = [kp["y"] for kp in keypoints if kp["confidence"] >= 0.05]
+    return (max(ys) - min(ys)) if len(ys) >= 2 else 0.25
+
+
 def _sample_pose_track(poses: list | None, max_frames: int = 120) -> list[dict]:
     """Public, bounded COCO-17 pose track for Studio skeleton overlays.
 
     Canonical vision stores per-frame people with normalized keypoints. This keeps
     the full job payload useful without letting gallery/list responses inherit the
-    dense raw arrays. Person ids are assigned by nearest-centroid continuity across
-    sampled frames, matching the player-box track convention.
+    dense raw arrays. Person ids come from :func:`_stable_ids`, the same bounded
+    motion+size-aware tracker as the player boxes, so skeleton and box colors agree.
     """
     if not isinstance(poses, list) or not poses:
         return []
     step = max(1, math.ceil(len(poses) / max_frames))
-    frames = [f for f in poses[::step] if isinstance(f, dict)]
-    out: list[dict] = []
-    prev: list[tuple[int, float, float]] = []
-    next_id = 0
-    gate = 0.24
-    for f in frames:
-        people = []
-        cur: list[tuple[int, float, float]] = []
-        used_prev: set[int] = set()
+    sampled: list[tuple[float, list[dict], list[tuple[float, float, float]]]] = []
+    for f in poses[::step]:
+        if not isinstance(f, dict):
+            continue
+        people: list[dict] = []
+        dets: list[tuple[float, float, float]] = []
         for person in (f.get("people") or []):
             if not isinstance(person, dict):
                 continue
             center = _pose_center(person)
             if center is None:
                 continue
-            cx, cy = center
-            best_id, best_i, best_d = None, None, gate
-            for i, (pid, px, py) in enumerate(prev):
-                if i in used_prev:
-                    continue
-                d = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
-                if d < best_d:
-                    best_id, best_i, best_d = pid, i, d
-            if best_id is None:
-                best_id = next_id
-                next_id += 1
-            else:
-                used_prev.add(best_i)
             keypoints = []
             for kp in (person.get("keypoints") or [])[:17]:
                 try:
@@ -379,7 +429,6 @@ def _sample_pose_track(poses: list | None, max_frames: int = 120) -> list[dict]:
             if not keypoints:
                 continue
             item = {
-                "id": best_id,
                 "confidence": round(float(person.get("confidence", 0.0)), 3),
                 "keypoints": keypoints,
             }
@@ -387,20 +436,46 @@ def _sample_pose_track(poses: list | None, max_frames: int = 120) -> list[dict]:
             if bbox:
                 item["bbox"] = bbox
             people.append(item)
-            cur.append((best_id, cx, cy))
-        if people:
-            try:
-                t = round(float(f.get("t")), 3)
-            except (TypeError, ValueError):
-                t = 0.0
-            out.append({"t": t, "people": people})
-        prev = cur
+            dets.append((center[0], center[1], _pose_height(person, keypoints)))
+        if not people:
+            continue
+        try:
+            t = round(float(f.get("t")), 3)
+        except (TypeError, ValueError):
+            t = 0.0
+        sampled.append((t, people, dets))
+    ids = _stable_ids([(t, dets) for t, _, dets in sampled])
+    out: list[dict] = []
+    for (t, people, _), frame_ids in zip(sampled, ids):
+        for person, sid in zip(people, frame_ids):
+            person["id"] = sid
+        out.append({"t": t, "people": people})
+    return out
+
+
+def _sample_camera_path(path: list | None, max_points: int = 240) -> list[dict]:
+    """Bounded render crop-window samples ({t,x,y,w,h} normalized to the source
+    frame) so the Studio can project source-space tracks onto the cropped reel."""
+    if not isinstance(path, list) or not path:
+        return []
+    step = max(1, math.ceil(len(path) / max_points))
+    out = []
+    for p in path[::step]:
+        try:
+            out.append({"t": round(float(p["t"]), 3),
+                        "x": round(float(p["x"]), 4), "y": round(float(p["y"]), 4),
+                        "w": round(float(p["w"]), 4), "h": round(float(p["h"]), 4)})
+        except (KeyError, TypeError, ValueError):
+            continue
     return out
 
 
 def _public_rally(rr: dict) -> dict:
     out = {k: rr.get(k) for k in ("start", "end", "dur", "clip_dur", "src_start",
-                                  "intensity", "note", "trimmed")}
+                                  "intensity", "note", "trimmed", "render_window")}
+    cam = _sample_camera_path(rr.get("camera_path"))
+    if cam:
+        out["camera_path"] = cam
     vision = _compact_vision(rr.get("vision"))
     if vision:
         out["vision"] = vision
@@ -437,6 +512,7 @@ def _public_result(job: dict, light: bool = False) -> dict | None:
     }
     if light:
         return out
+    out["stitch"] = r.get("stitch")
     out["rallies"] = [_public_rally(rr) for rr in r.get("rallies", [])]
     out["all_rallies"] = r.get("all_rallies", [])
     out["rally_pool"] = ([_public_rally(rr) for rr in r.get("rally_pool", [])]

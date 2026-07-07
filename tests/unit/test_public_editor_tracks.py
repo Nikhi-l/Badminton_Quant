@@ -87,6 +87,34 @@ def test_public_rally_exposes_player_track_with_stable_ids():
     assert len(bottom_ids) == 1 and len(top_ids) == 1 and bottom_ids != top_ids
 
 
+def test_player_ids_survive_fast_motion_and_dropouts():
+    """TASK-021 regression: a fast lunge between sparse samples must not mint a new
+    id (the old 0.22 gate churned P1→P3→P5…), and frames where the far player is
+    missed must not steal the near player's identity."""
+    frames = []
+    for i in range(240):
+        near_x = 0.25 if (i // 40) % 2 == 0 else 0.62   # jumps 0.37 across a sample gap
+        near = _box(near_x, 0.72, w=0.16, h=0.34)
+        boxes = [near]
+        if i % 3 != 0:   # far player intermittently missed by the detector
+            boxes.append(_box(0.5, 0.30, w=0.06, h=0.13))
+        frames.append({"t": i / 30, "boxes": boxes})
+
+    out = _public_rally({
+        "start": 0.0, "end": 8.0, "dur": 8.0,
+        "vision": {"status": "ok", "player_quality": 0.7, "players": frames},
+    })
+
+    ptrack = out["vision"]["players_track"]
+    ids = {b["id"] for f in ptrack for b in f["boxes"]}
+    assert ids == {0, 1}, f"id churn: {sorted(ids)}"
+    # Identity never swaps: the tall near-court player is one id on every frame,
+    # and relabeling makes that id 0 (P1 = near player, every rally).
+    near_ids = {b["id"] for f in ptrack for b in f["boxes"] if b["h"] > 0.2}
+    far_ids = {b["id"] for f in ptrack for b in f["boxes"] if b["h"] <= 0.2}
+    assert near_ids == {0} and far_ids == {1}
+
+
 def _pose_person(cx, cy, conf=0.85):
     keypoints = []
     for i in range(17):
