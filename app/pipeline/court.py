@@ -171,51 +171,178 @@ def detect_frame(frame_bgr: np.ndarray) -> dict | None:
     }
 
 
-def detect_from_video(video_path, samples: int = 3) -> dict:
+# Below this confidence the classical result is weak enough to ask Gemini for
+# a second opinion on the corners (TASK-023).
+GEMINI_CONFIDENCE_FLOOR = 0.5
+
+_CORNER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "court_visible": {"type": "boolean"},
+        "corners": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": {
+                "type": "object",
+                "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+                "required": ["x", "y"],
+            },
+        },
+    },
+    "required": ["court_visible"],
+}
+
+_CORNER_PROMPT = (
+    "This is one frame of a badminton match video. Find the four corners of the "
+    "OUTER court boundary (the doubles sidelines meeting the baselines — the "
+    "outermost painted rectangle of the court the players are on). Return "
+    "normalized image coordinates (0..1, x rightward, y downward), ordered: "
+    "far-left corner, far-right corner, near-right corner, near-left corner "
+    "(far = the baseline further from the camera). If you cannot confidently "
+    "locate all four corners of one court, set court_visible=false."
+)
+
+
+def _grab_frames(video_path, samples: int) -> list:
+    cv2 = _cv2()
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return []
+    frames = []
+    try:
+        n = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+        picks = [int(n * f) for f in np.linspace(0.25, 0.75, samples)] if n else [0]
+        for idx in picks:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ok, frame = cap.read()
+            if ok:
+                frames.append(frame)
+    finally:
+        cap.release()
+    return frames
+
+
+def _valid_quad(corners: list) -> bool:
+    if len(corners) != 4:
+        return False
+    if not all(-0.15 <= x <= 1.15 and -0.15 <= y <= 1.15 for x, y in corners):
+        return False
+    return _quad_area(corners) >= 0.10   # normalized units: >=10% of the frame
+
+
+def _gemini_corners(frames: list, log=print) -> list | None:
+    """Ask Gemini for the outer court corners on each frame; median-merge.
+
+    Returns [[x, y] * 4] (far-left, far-right, near-right, near-left) or None
+    when the key is missing, the model can't see a court, or its output fails
+    validation. Token usage lands in the job's gemini_usage automatically.
+    """
+    import base64
+
+    from .. import config
+    from . import gemini
+
+    cv2 = _cv2()
+    if cv2 is None or not config.GEMINI_API_KEY or not frames:
+        return None
+    per_frame = []
+    for frame in frames:
+        ok, jpg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        if not ok:
+            continue
+        parts = [
+            {"text": _CORNER_PROMPT},
+            {"inlineData": {"mimeType": "image/jpeg",
+                            "data": base64.b64encode(jpg.tobytes()).decode()}},
+        ]
+        try:
+            data = gemini.parse_json(gemini.generate(
+                config.COACH_MODEL, parts, json_schema=_CORNER_SCHEMA,
+                temperature=0.0, max_tokens=1024))
+        except Exception as e:  # noqa: BLE001 - fallback must never sink a job
+            log(f"court: Gemini corner call failed ({type(e).__name__}: {e})")
+            continue
+        if not isinstance(data, dict) or not data.get("court_visible"):
+            continue
+        try:
+            corners = [(float(c["x"]), float(c["y"])) for c in data.get("corners") or []]
+        except (KeyError, TypeError, ValueError):
+            continue
+        if _valid_quad(corners):
+            per_frame.append(corners)
+    if not per_frame:
+        return None
+    med = np.median(np.asarray(per_frame, dtype=np.float64), axis=0)
+    spread = float(np.mean(np.std(np.asarray(per_frame), axis=0))) if len(per_frame) > 1 else 0.0
+    if spread > 0.08:   # frames disagree — camera cut or hallucination
+        log(f"court: Gemini corners disagree across frames (spread {spread:.3f}) — rejected")
+        return None
+    corners = [[round(float(x), 4), round(float(y), 4)] for x, y in med]
+    return corners if _valid_quad([tuple(c) for c in corners]) else None
+
+
+def _result_from_corners(corners: list, source: str, confidence: float,
+                         frames_used: int, lines=None, net=None) -> dict:
+    return {
+        "status": "ok",
+        "corners": corners,
+        "lines": lines or [],
+        "net": net,
+        "homography": solve_homography([tuple(c) for c in corners], COURT_PLANE),
+        "court_size_m": [COURT_WIDTH_M, COURT_LENGTH_M],
+        "confidence": round(confidence, 3),
+        "frames_used": frames_used,
+        "source": source,
+    }
+
+
+def detect_from_video(video_path, samples: int = 3, gemini_fallback: bool = True,
+                      log=print) -> dict:
     """Detect the court across a few frames of the (proxy) video and merge.
 
     The camera is effectively static for court footage, so the per-frame corner
-    spread doubles as a confidence signal. Returns a canonical dict that is
+    spread doubles as a confidence signal. When the classical result is missing
+    or weak (< GEMINI_CONFIDENCE_FLOOR), Gemini is asked for the four corners on
+    the same frames (TASK-023) and the results are merged; ``source`` records
+    provenance ("cv" | "gemini" | "cv+gemini"). Returns the canonical dict
     stored on the job result as ``result["court"]``.
     """
     cv2 = _cv2()
     if cv2 is None:
         return {"status": "unavailable", "message": "opencv not installed"}
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        return {"status": "unavailable", "message": f"cannot open {video_path}"}
-    try:
-        n = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
-        picks = [int(n * f) for f in np.linspace(0.25, 0.75, samples)] if n else [0]
-        found = []
-        for idx in picks:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-            ok, frame = cap.read()
-            if not ok:
-                continue
-            det = detect_frame(frame)
-            if det:
-                found.append(det)
-    finally:
-        cap.release()
-    if not found:
-        return {"status": "not_found", "message": "no court boundary detected"}
+    frames = _grab_frames(video_path, samples)
+    if not frames:
+        return {"status": "unavailable", "message": f"cannot read frames from {video_path}"}
 
-    corners = np.median(np.asarray([d["corners"] for d in found], dtype=np.float64),
-                        axis=0)
-    spread = float(np.mean(np.std(np.asarray([d["corners"] for d in found]), axis=0))) \
-        if len(found) > 1 else 0.0
-    corner_list = [[round(float(x), 4), round(float(y), 4)] for x, y in corners]
-    best = max(found, key=lambda d: d["score"])
-    confidence = round(min(1.0, (len(found) / samples) * best["score"]
-                           * max(0.2, 1.0 - spread * 12)), 3)
-    return {
-        "status": "ok",
-        "corners": corner_list,
-        "lines": best["lines"],
-        "net": best.get("net"),
-        "homography": solve_homography([tuple(c) for c in corner_list], COURT_PLANE),
-        "court_size_m": [COURT_WIDTH_M, COURT_LENGTH_M],
-        "confidence": confidence,
-        "frames_used": len(found),
-    }
+    found = [d for d in (detect_frame(f) for f in frames) if d]
+    cv_result = None
+    if found:
+        corners = np.median(np.asarray([d["corners"] for d in found], dtype=np.float64),
+                            axis=0)
+        spread = float(np.mean(np.std(np.asarray([d["corners"] for d in found]), axis=0))) \
+            if len(found) > 1 else 0.0
+        corner_list = [[round(float(x), 4), round(float(y), 4)] for x, y in corners]
+        best = max(found, key=lambda d: d["score"])
+        confidence = round(min(1.0, (len(found) / samples) * best["score"]
+                               * max(0.2, 1.0 - spread * 12)), 3)
+        cv_result = _result_from_corners(corner_list, "cv", confidence, len(found),
+                                         lines=best["lines"], net=best.get("net"))
+
+    if cv_result and cv_result["confidence"] >= GEMINI_CONFIDENCE_FLOOR:
+        return cv_result
+    if not gemini_fallback:
+        return cv_result or {"status": "not_found", "message": "no court boundary detected"}
+
+    g_corners = _gemini_corners(frames, log=log)
+    if g_corners and cv_result:
+        # Median-merge = midpoint of the two corner sets; both observed the court.
+        merged = [[round((a[0] + b[0]) / 2, 4), round((a[1] + b[1]) / 2, 4)]
+                  for a, b in zip(cv_result["corners"], g_corners)]
+        return _result_from_corners(merged, "cv+gemini",
+                                    max(cv_result["confidence"], 0.65),
+                                    cv_result["frames_used"],
+                                    lines=cv_result["lines"], net=cv_result.get("net"))
+    if g_corners:
+        return _result_from_corners(g_corners, "gemini", 0.6, len(frames))
+    return cv_result or {"status": "not_found", "message": "no court boundary detected"}

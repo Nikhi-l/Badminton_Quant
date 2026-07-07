@@ -1,8 +1,8 @@
 # TASK-023: Gemini court-corner refinement fallback
 
-**Status:** queued
-**Branch:** `feat/TASK-023-gemini-court-corners` (not started)
-**Base SHA:** TBD (after TASK-021/022 merge)
+**Status:** done
+**Branch:** `feat/TASK-023-gemini-court-corners`
+**Base SHA:** `d1860af`
 **PRD section:** §16 remediation (review 2026-07-07: "use Gemini to spot the
 four edges of the court")
 
@@ -15,10 +15,11 @@ median-merge with any classical result; store provenance
 usage accounting.
 
 ## Acceptance criteria
-- [ ] Mocked-Gemini unit test: low-confidence CV result gets replaced/merged;
-      malformed Gemini output is rejected (schema-validated) and CV kept
+- [x] Mocked-Gemini unit tests (5): strong CV skips Gemini; noise video rescued
+      (source=gemini); weak CV merges midpoint (source=cv+gemini); malformed/
+      invisible/off-frame/tiny-quad outputs rejected; no API key = CV-only
 - [ ] One real occluded-court video gets corners + homography where CV alone
-      failed (record job id + confidence here)
+      failed (record job id + confidence here — needs a real upload post-deploy)
 
 ## Risks / rollback
 - Cost: 3 image calls per job only on the low-confidence path; usage recorded
