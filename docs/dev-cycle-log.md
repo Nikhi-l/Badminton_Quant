@@ -5,6 +5,43 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 14: Schools platform P0 — auth, tenancy, student progress panels (TASK-026)
+**Date:** 2026-07-07
+**Goal:** Start the school-platform pivot: authentication pages, school tenancy on
+jobs, coach/admin panel, and the student profile (progress, highlights, rallies,
+AI-coach details) — P0 of `docs/roadmap/SCHOOL_PLATFORM_PRD.md`.
+**Roadmap alignment:** SCHOOL_PLATFORM_PRD §5 P0 (+ profile slice pulled forward
+from P1/P2 since the pipeline data already supports it) · PRD §16 TASK-026.
+**Branch:** `feat/TASK-026-schools-p0` (stacked on `fix/TASK-021-studio-review-fixes`).
+**Files changed:** `app/{db,auth,main}.py`, `web/{login.html,app.html,platform.js,platform.css,index.html}`,
+`tests/unit/test_schools_auth.py`, `requirements-dev.txt` (httpx for TestClient).
+**Schema/API/interface changes:** additive tables users/schools/memberships/
+auth_sessions/job_students; jobs +`school_id`/`uploaded_by` (guarded ALTERs);
+new endpoints: auth register-school/join/login/logout/me, school/overview,
+jobs/{id}/assign (+DELETE), students/{id}/profile. Session cookie
+`baddy_session` (HttpOnly, SameSite=Lax, scrypt hashes, 14-day TTL); join codes
+ST-/CO- (coach code visible to admins only). Signed-in uploads own their jobs;
+anonymous flow byte-identical (regression-pinned).
+**Tests/verification performed:**
+- `./scripts/check.sh` → 46 passed (register/join/roles, tenancy scoping —
+  cross-school assign 404s, student→overview 403, student→other-profile 403 —
+  profile aggregation incl. court-space movement via the TASK-022 homography,
+  anonymous-flow regression, migration idempotency).
+- Browser walkthrough on localhost: created "Sunrise Academy" through the login
+  page; student joined by ST- code; admin Overview showed join codes (copy
+  buttons), roster, sessions with assignee chips + P1/P2 assign controls;
+  student login rendered My Progress — stat cards with sparklines (2 sessions,
+  7 rallies, 8s longest, 15m court distance), session videos, per-rally note
+  chips, AI-coach box, "tracked as P1".
+**Docs updated:** this log, `docs/progress-ledger.md`, PRD §16 row, TASK-026
+filed to done (P0 scope; P1–P4 remain in the platform PRD).
+**Open risks / next steps:**
+- P1 next: Studio "assign to student" on a player track; student dashboard
+  polish; cohorts. P2: assessments + progress aggregation server-side.
+- Password reset flows + Google SSO deferred (P4); one-school-per-user in P0.
+- Gallery/queue remain global (marketing surface) — school scoping of the
+  public pages lands with the platform cutover decision.
+
 ## Cycle 13: Review fixes — portrait projection, court geometry, heatmaps (TASK-021/022)
 **Date:** 2026-07-07
 **Goal:** Fix the four baddyai.com review defects (portrait overlay shift, timeline

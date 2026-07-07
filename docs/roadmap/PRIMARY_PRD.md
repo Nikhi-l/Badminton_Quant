@@ -122,7 +122,7 @@ Source: user request 2026-06-20 (this session) + harness PDF.
 | P2 | Gemini court-corner refinement fallback when classical detection is low-confidence | Accept | TASK-023 |
 | P1 | Worker-side identity: ultralytics ByteTrack (`model.track(persist=True)`) so player ids come from the tracker, not serve-time heuristics; carry ids through `players`/`poses` payloads | Accept | TASK-024 |
 | P1 | 3D rally replay layer (toggleable, low-fps sim): camera pose from court homography, ballistic shuttle 3D fit, three.js court/net/players/replay — see `docs/roadmap/RALLY_3D_RECONSTRUCTION.md` | Accept | TASK-025 |
-| P1 | Schools platform P0: auth (admin/coach/student), school tenancy on jobs, role dashboards — see `docs/roadmap/SCHOOL_PLATFORM_PRD.md` | Accept | TASK-026 |
+| P1 | Schools platform P0: auth (admin/coach/student), school tenancy on jobs, role dashboards — see `docs/roadmap/SCHOOL_PLATFORM_PRD.md` | Accept | TASK-026 (**P0 done**; P1–P4 in the platform PRD) |
 
 Intake: `docs/reviews/2026-06-21-studio-camera-feedback.md`. **TASK-011/012/013
 (Cycle 9) and TASK-010/014/015 (Cycle 10) are merged to `main`** (statuses +
