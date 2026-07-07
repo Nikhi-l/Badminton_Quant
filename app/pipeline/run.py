@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from .. import config
-from . import coach, gemini, media, rally, render, stitch, track, validate
+from . import coach, court, gemini, media, rally, render, stitch, track, validate
 from . import vision as vision_engine
 
 STAGES = ["combine", "probe", "proxy", "rallies", "vision", "tracking", "render",
@@ -108,6 +108,15 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
     note("proxy", f"downscaling to {config.PROXY_HEIGHT}p analysis proxy")
     proxy = workdir / "proxy.mp4"
     pinfo = media.make_proxy(input_path, proxy)
+
+    # Court geometry (TASK-022): boundary corners + homography for court-space
+    # heatmaps and the 3D view. Best-effort — a POV/occluded court just skips it.
+    try:
+        court_info = court.detect_from_video(proxy)
+    except Exception as e:  # noqa: BLE001 - court overlay must never sink a job
+        court_info = {"status": "failed", "message": f"{type(e).__name__}: {e}"}
+    if court_info.get("status") == "ok":
+        note("proxy", f"court boundary detected ({court_info['confidence']:.0%} confidence)")
 
     cam_px = validate.camera_motion_probe(proxy, pinfo.duration)
     pov = cam_px > 1.0
@@ -268,6 +277,7 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
         "rallies": rendered,
         "validation": {"clips": validation, "reel": reel_check},
         "stitch": {"xfade": stitch.XFADE},
+        "court": court_info,
         "source": {"w": info.width, "h": info.height, "fps": round(info.fps, 2),
                    "duration": round(info.duration, 2)},
         "n_clips": len(paths),

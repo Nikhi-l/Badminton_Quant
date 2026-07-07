@@ -299,16 +299,40 @@ def _stable_ids(frames: list[tuple[float, list[tuple[float, float, float]]]],
             cx, cy, h = dets[di]
             slots[sid] = (cx, cy, h, t)
         raw_ids.append(ids)
-    # Relabel: persistence first, then taller (nearer) first → near player = P1.
-    seen: dict[int, tuple[int, list[float]]] = {}
-    for (_, dets), ids in zip(frames, raw_ids):
+    # Track stats: sample count, heights, and lifespan per raw id.
+    seen: dict[int, dict] = {}
+    for (t, dets), ids in zip(frames, raw_ids):
         for (_, _, h), sid in zip(dets, ids):
-            n, hs = seen.setdefault(sid, (0, []))
-            hs.append(h)
-            seen[sid] = (n + 1, hs)
-    order = sorted(seen, key=lambda s: (-seen[s][0], -sorted(seen[s][1])[len(seen[s][1]) // 2], s))
-    remap = {sid: i for i, sid in enumerate(order)}
-    return [[remap[sid] for sid in ids] for ids in raw_ids]
+            st = seen.setdefault(sid, {"n": 0, "hs": [], "t0": t, "t1": t})
+            st["n"] += 1
+            st["hs"].append(h)
+            st["t0"] = min(st["t0"], t)
+            st["t1"] = max(st["t1"], t)
+    med = {sid: sorted(st["hs"])[len(st["hs"]) // 2] for sid, st in seen.items()}
+
+    # Merge fragments: a track that dies and another that starts later at the
+    # same apparent height are the same player re-acquired (a long occlusion or
+    # a missed stretch splits one player into P1+P3 otherwise).
+    group = {sid: sid for sid in seen}
+    for sid in sorted(seen, key=lambda s: seen[s]["t0"]):
+        for tid in sorted(seen, key=lambda s: seen[s]["t0"]):
+            if group[tid] == group[sid] or tid == sid:
+                continue
+            a, b = seen[sid], seen[tid]
+            overlap = min(a["t1"], b["t1"]) - max(a["t0"], b["t0"])
+            if overlap <= 0.0 and abs(med[sid] - med[tid]) < 0.1:
+                root = group[sid]
+                for k, g in group.items():
+                    if g == group[tid]:
+                        group[k] = root
+    # Relabel groups: persistence first, then taller (nearer) first → P1 = near player.
+    gstat: dict[int, tuple[int, list[float]]] = {}
+    for sid, st in seen.items():
+        n, hs = gstat.setdefault(group[sid], (0, []))
+        gstat[group[sid]] = (n + st["n"], hs + st["hs"])
+    order = sorted(gstat, key=lambda g: (-gstat[g][0], -sorted(gstat[g][1])[len(gstat[g][1]) // 2], g))
+    remap = {g: i for i, g in enumerate(order)}
+    return [[remap[group[sid]] for sid in ids] for ids in raw_ids]
 
 
 def _sample_player_track(players: list | None, max_frames: int = 120) -> list[dict]:
@@ -513,6 +537,7 @@ def _public_result(job: dict, light: bool = False) -> dict | None:
     if light:
         return out
     out["stitch"] = r.get("stitch")
+    out["court"] = r.get("court")
     out["rallies"] = [_public_rally(rr) for rr in r.get("rallies", [])]
     out["all_rallies"] = r.get("all_rallies", [])
     out["rally_pool"] = ([_public_rally(rr) for rr in r.get("rally_pool", [])]
