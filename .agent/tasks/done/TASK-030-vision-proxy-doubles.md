@@ -1,6 +1,6 @@
 # TASK-030: Detect far doubles players (higher-res vision proxy)
 
-**Status:** in verification (deployed; awaiting doubles reprocess)
+**Status:** done + verified (Cycle 17b)
 **Branch:** `feat/TASK-030-vision-proxy-doubles` → merged `77ff9ce`
 **Base SHA:** `9b09c37`
 **PRD section:** §16 remediation (user report 2026-07-08: doubles game, only
