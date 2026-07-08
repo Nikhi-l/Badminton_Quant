@@ -139,8 +139,22 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
         raise RuntimeError("no rallies detected in this video")
     note("rallies", f"{len(all_rallies)} rallies found, using top {len(picked)} by length")
 
+    # Higher-res proxy for the vision pass only (TASK-030) — far doubles players
+    # are undetectable at 480p. Built from the source (never upscaled past it);
+    # falls back to the 480p proxy if it isn't taller or the encode fails.
+    vision_proxy = proxy
+    if config.VISION_PROXY_HEIGHT > config.PROXY_HEIGHT and info.height > config.PROXY_HEIGHT + 40:
+        try:
+            vp = workdir / "vision_proxy.mp4"
+            target_h = min(config.VISION_PROXY_HEIGHT, info.height)
+            note("proxy", f"building {target_h}p vision proxy for player/pose detection")
+            media.make_proxy(input_path, vp, height=target_h)
+            vision_proxy = vp
+        except Exception as e:  # noqa: BLE001 - vision proxy is an enhancement
+            note("proxy", f"vision proxy failed ({type(e).__name__}); using 480p proxy")
+
     note("vision", f"vision: shuttle={opt['shuttle']}, pose={opt['pose']}")
-    vision = vision_engine.analyze(proxy, workdir, sport, picked, opt,
+    vision = vision_engine.analyze(vision_proxy, workdir, sport, picked, opt,
                                    log=lambda m: note("vision", m))
     if vision.get("status") == "disabled":
         note("vision", vision.get("message", "vision workers disabled"))

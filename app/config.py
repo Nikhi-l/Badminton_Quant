@@ -150,6 +150,11 @@ def expected_gen_seconds(pipeline: str | None) -> int | None:
 
 # Analysis runs on a downscaled proxy; final render samples the original file.
 PROXY_HEIGHT = int(os.environ.get("PROXY_HEIGHT", "480"))
+# Vision pass (GPU pose + shuttle) runs on a HIGHER-res proxy than the 480p
+# analysis proxy (TASK-030): at 480p the far players in a wide doubles shot are
+# ~20px tall and below YOLO's detection floor. Gemini/rally/motion stay on the
+# cheap 480p proxy. make_proxy caps to the source height (never upscales).
+VISION_PROXY_HEIGHT = int(os.environ.get("VISION_PROXY_HEIGHT", "1080"))
 PROXY_FPS = 30
 
 # Output reel: vertical story format.

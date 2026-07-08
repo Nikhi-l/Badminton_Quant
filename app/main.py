@@ -16,7 +16,7 @@ from .pipeline import gpu as gpu_pipeline
 from .pipeline.run import STAGES
 
 ALLOWED_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
-MEDIA_WHITELIST = {"reel.mp4", "thumb.jpg", "proxy.mp4"}
+MEDIA_WHITELIST = {"reel.mp4", "thumb.jpg", "proxy.mp4", "vision_proxy.mp4"}
 CHUNK_SIZE = 8 * 1024 * 1024
 MAX_UPLOAD = 3 * 1024 ** 3
 

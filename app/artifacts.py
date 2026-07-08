@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 
 from . import config
 
-GPU_ARTIFACTS = {"proxy.mp4"}
+GPU_ARTIFACTS = {"proxy.mp4", "vision_proxy.mp4"}
 
 
 def _message(job_id: str, name: str, exp: int) -> bytes:

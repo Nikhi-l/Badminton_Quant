@@ -509,7 +509,13 @@ def analyze(proxy_path: str | Path, workdir: str | Path, sport: str,
 
     workdir = Path(workdir)
     job_id = workdir.name
-    proxy_url = artifacts.url_for(job_id, "proxy.mp4")
+    # Use whichever proxy the caller passed (TASK-030: a higher-res vision proxy
+    # when one was built, else the 480p analysis proxy). Both are signed GPU
+    # artifacts served from OUTPUTS/{job_id}/.
+    proxy_name = Path(proxy_path).name
+    if proxy_name not in artifacts.GPU_ARTIFACTS or not (workdir / proxy_name).exists():
+        proxy_name = "proxy.mp4"
+    proxy_url = artifacts.url_for(job_id, proxy_name)
     if not proxy_url:
         return _disabled("PUBLIC_BASE_URL and GPU_ARTIFACT_TOKEN are required for Runpod input")
 
