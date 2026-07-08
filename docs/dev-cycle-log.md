@@ -26,7 +26,21 @@ lists exact verification commands. Newest first.
 **Worker image:** `doubles-20260708` (Cloud Build) → template `ic265brof1`.
 **Tests:** 70 passing (blend clip regression with the exact failing shapes,
 badge cap, 4-player canonical passthrough, retry endpoint guards).
-**Verification:** live retry of the failed HSBC job recorded below.
+**Verification (live, 2026-07-08):**
+- Warm-worker gotcha: patching the template does NOT recycle warm workers — the
+  first retry still hit the old image (same Hough traceback). Bounced workers
+  (workersMax 0→2); after that a direct contract job on `doubles-20260708`
+  COMPLETED in 10.2s over the same footage: yolo26m pose, ByteTrack ids
+  [1,2] (`track_error` empty), `racquet_source=coco-tennis-racket` with
+  measured boxes on 9 frames, the once-fatal candidates path ran on 63 frames.
+- Added `/api/jobs/{id}/retry?reprocess=1` (done-job reprocess through the
+  current pipeline) and reprocessed the crashed HSBC job end-to-end on GPU:
+  `worker_version=doubles-20260708`, pipeline=gpu, gen 395s, TrackNet 0.82,
+  pose_track 90 frames ids [0,1], **racquet_track 35 frames (measured)**,
+  court auto-detected (cv, 0.665), camera_path present, **rally_3d ok with 26
+  shots** (221 km/h smash + 18–38 km/h exchanges) — the review's "no pose /
+  no 3D / crash" symptoms all resolved on the user's own video. Doubles job
+  reprocess queued for the 4-player caps.
 
 ## Cycle 16: Manual court drawing + configurable racquet chain (TASK-027)
 **Date:** 2026-07-07
