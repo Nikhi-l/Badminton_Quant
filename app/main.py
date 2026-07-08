@@ -730,13 +730,21 @@ def job_status(job_id: str):
 
 
 @app.post("/api/jobs/{job_id}/retry")
-def job_retry(job_id: str):
-    """Re-run a FAILED job from its still-on-disk upload (TASK-029). A pipeline
-    bug (like the render badge crash) shouldn't cost the user a re-upload —
-    or the GPU minutes the vision pass already burned."""
+def job_retry(job_id: str, reprocess: int = 0):
+    """Re-run a job from its still-on-disk upload (TASK-029). Failed jobs retry
+    freely — a pipeline bug (like the render badge crash) shouldn't cost the
+    user a re-upload or the GPU minutes already burned. Passing ?reprocess=1
+    also re-runs a DONE job through the current pipeline (e.g. one processed
+    before a worker fix), replacing its result."""
     job = db.get_job(job_id)
-    if not job or job["status"] != "failed":
-        raise HTTPException(409, "only failed jobs can be retried")
+    if not job:
+        raise HTTPException(409, "unknown job")
+    if job["status"] == "failed":
+        pass
+    elif job["status"] == "done" and reprocess:
+        pass
+    else:
+        raise HTTPException(409, "only failed jobs (or done jobs with ?reprocess=1) can be retried")
     if not worker._find_input(job_id):
         raise HTTPException(409, "the original upload is no longer on the server — upload again")
     db.requeue(job_id)

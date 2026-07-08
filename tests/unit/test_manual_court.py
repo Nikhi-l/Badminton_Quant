@@ -145,9 +145,11 @@ def test_retry_requeues_failed_job(client, monkeypatch):
     job = db.get_job("retryme")
     assert job["status"] == "queued" and job["error"] is None
 
-    # done jobs and missing uploads are refused
+    # done jobs are refused without the explicit reprocess flag
     db.set_done("retryme", {"duration": 1})
     assert client.post("/api/jobs/retryme/retry").status_code == 409
+    assert client.post("/api/jobs/retryme/retry?reprocess=1").status_code == 200
+    assert db.get_job("retryme")["status"] == "queued"
     db.create_job("noinput", "gone.mp4", options={})
     db.set_error("noinput", "boom")
     assert client.post("/api/jobs/noinput/retry").status_code == 409
