@@ -123,6 +123,12 @@ Source: user request 2026-06-20 (this session) + harness PDF.
 | P1 | Worker-side identity: ultralytics ByteTrack (`model.track(persist=True)`) so player ids come from the tracker, not serve-time heuristics; carry ids through `players`/`poses` payloads | Accept | TASK-024 |
 | P1 | 3D rally replay layer (toggleable, low-fps sim): camera pose from court homography, ballistic shuttle 3D fit, three.js court/net/players/replay — see `docs/roadmap/RALLY_3D_RECONSTRUCTION.md` | Accept | TASK-025 |
 | P1 | Schools platform P0: auth (admin/coach/student), school tenancy on jobs, role dashboards — see `docs/roadmap/SCHOOL_PLATFORM_PRD.md` | Accept | TASK-026 (**P0 done**; P1–P4 in the platform PRD) |
+| P0 | (audit 2026-07-11, Phase 0) Deterministic tracking/3D bugs: worker tracker persist-capture (ids reborn every frame), threshold misalignment, misleading "82%" shuttle score, public-track decimation below Studio continuity, Studio id-union/stale-hold, raw-vs-filtered track divergence (export/3D), ungated physically-impossible 3D fits | Accept | TASK-034 (**done on branch**; worker rebuild pending) |
+| P1 | (audit Phase 1) `match_type=singles\|doubles\|auto` contract end-to-end: per-court-half player cardinality, doubles-aware quality expectations, roster pinning | Queued | TASK-035 |
+| P1 | (audit Phase 1) Pose on per-player crops (court-aware detect → persistent tracks → high-res crop → top-down pose → kinematic filter) instead of whole-frame; far-player PCK is the gate, not model size | Queued | TASK-036 |
+| P1 | (audit Phase 1) TrackNet config A/B on the labelled bench (overlap vs nonoverlap eval, InpaintNet on/off), then fine-tune vs replace decision by `scripts/bench/run_bench.py` gates | Queued | TASK-037 |
+| P2 | (audit Phase 1) Worker sampling: raise/replace the 180-frame rally cap so long rallies keep true 6 Hz; real TrackNet heatmap confidence + observed\|inpainted\|predicted provenance on shuttle points | Queued | — |
+| P2 | (audit Phase 2) Per-static-segment camera calibration; fuse audio impacts/wrists/rackets/net crossings into hit detection; joint adjacent-shot fitting with contact continuity; measured player roots before 3D pose lifting — see `docs/roadmap/RALLY_3D_RECONSTRUCTION.md` | Queued | — |
 
 Intake: `docs/reviews/2026-06-21-studio-camera-feedback.md`. **TASK-011/012/013
 (Cycle 9) and TASK-010/014/015 (Cycle 10) are merged to `main`** (statuses +

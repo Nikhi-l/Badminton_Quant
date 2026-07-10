@@ -5,6 +5,89 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 19: Phase-0 audit fixes — deterministic tracking/3D bugs (TASK-034)
+**Date:** 2026-07-11
+**Goal:** Implement Phase 0 of the 2026-07-11 codebase audit: the deterministic
+pipeline bugs behind jerky trails, unstable player counts, lagging boxes, and
+impossible 3D — before any model swaps.
+**PRD:** §16 remediation (TASK-034 + Phase-1 queue rows added this cycle).
+**Branch:** `fix/TASK-034-phase0-tracking-audit` (base `bfb2152`, atop TASK-033).
+**Task file:** `.agent/tasks/active/TASK-034-phase0-tracking-audit.md`
+
+**Fixes (each verified against the installed deps / real artifact):**
+- **Worker tracker lifecycle (P0):** ultralytics registers tracking callbacks on
+  the FIRST `model.track()` call, permanently capturing that call's `persist`
+  (verified in 8.4.70 `engine/model.py` + `trackers/track.py`). The old
+  `persist=not reset_tracker` baked in `persist=False` → the tracker was
+  rebuilt every predict, minting fresh ids per frame at "100% id coverage".
+  Now `persist=True` always + explicit `tracker.reset()` per rally (also
+  resets the global id counter). `ultralytics` pinned `==8.4.70`.
+  `new_track_thresh` 0.3→0.18 / `track_high_thresh` 0.25→0.2 to match the
+  deployed `YOLO_CONF=0.12` — post-reset, far players must be able to BIRTH
+  tracks. Worker default version → `phase0-20260711`.
+- **Honest shuttle quality (P0):** worker score was mean(constant 0.82) ×
+  coverage — a teleporting track read "82%" like a clean one. Now coverage ×
+  longest-gap (proportional, ≤0.5 s free) × teleport penalty; components
+  (`coverage`/`longest_gap_sec`/`teleports`) exported on `tracknet`.
+- **Public shuttle-track contract (P0):** uniform 180-point decimation spread
+  long rallies past Studio's 0.35 s dropout cutoff — trail always empty,
+  marker flickering (audit repro: 70 s smooth track → 0.4 s spacing). Now
+  gap-preserving per-segment resampling at 12.5 Hz (worst in-segment spacing
+  0.33 s), real dropouts survive as gaps; player/pose public caps 120→180
+  (= worker `MAX_FRAMES_PER_RALLY`, no second decimation).
+- **Studio interpolation (P0):** `interpPlayerBoxes`/`interpPoseFrame` unioned
+  unmatched ids from both bracket frames (relabel {1,2}→{3,4} drew FOUR
+  boxes) and held vanished ids across 1.2 s. Now: one-sided ids render only
+  ≤0.3 s from their observing frame AND on its side of the bracket midpoint;
+  window/maxGap 1.0/1.2→0.6/0.9; the extra 140 ms wall-clock box EMA removed
+  (lag + fabricated glide); pose render gate 0.12→0.15 (= One-Euro gate).
+- **One canonical shuttle track (P0):** baked-MP4 marker (render.py) and 3D
+  (rally3d.py) now consume the same `filter_shuttle_points` output as
+  camera/Studio. Exposed filter weakness fixed: endpoint windows are
+  one-sided, so the launch step after a hit (the contact point!) read as an
+  outlier vs the forward median — endpoints now judged against linear
+  extrapolation of the two nearest kept neighbours; edge teleports still die.
+- **3D physical gates (P0):** floor (−0.05 m), trajectory bounds (court
+  +2/+3 m), contact height 0.02–3.6 m, net crossing ≥1.0 m, launch ≤55 m/s,
+  residual ≤35 px (was 60), adjacent-shot continuity (≤0.4 s ⇒ hand-off ≤2 m,
+  higher-residual member dropped). Multi-start picks best GATE-PASSING
+  candidate; `rejected{reason:count}` on the payload; new `implausible`
+  status + Studio copy; layer relabelled "3D replay (2.5D)" (billboards, not
+  measured pose).
+- **Phase-0 bench (scaffold):** `scripts/bench/metrics.py` (audit release
+  gates as tested functions) + `run_bench.py` (manifest → gate table, exit 1
+  on failure) + `docs/benchmarks/PHASE0_BENCH.md` (clip-set recipe + label
+  formats). Labelled clips themselves = owner action.
+
+**Tests/verification performed:**
+- `./scripts/check.sh` → compile OK, **124 passed** (was 102; new coverage:
+  tracker lifecycle ×4 incl. pinned-dependency semantics, track quality ×4,
+  shuttle-track contract ×2, filter endpoints ×2, 3D gates/continuity/
+  canonical ×3, bench metrics ×7).
+- `node --check web/app.js` + scratch Node harness running the REAL extracted
+  `interpPlayerBoxes`/`interpPoseFrame`: relabel ≤2 boxes at every t, lerp
+  intact, hold capped, beyond-maxGap honest (no fabricated glide).
+- **uservid3 real-artifact rerun** (gated vs audit's ungated baseline of 20
+  accepted shots with 5 below-floor / 9 out-of-bounds / 8 start-outside):
+  13 accepted / 10 gated (`speed 1, peak 1, continuity 4, floor 1, bounds 2,
+  contact_height 1`), **zero impossible acceptances**, median residual
+  3.0 px, every rally still reconstructs (2–3 shots each).
+- Bench smoke on uservid3 correctly FAILs `d3_below_floor_accepted` on the
+  STORED (old-solver) rally_3d — the runner detects stale artifacts.
+
+**Rollout (pending, not done in this cycle):**
+- Worker image rebuild REQUIRED (handler.py + botsort_baddy.yaml +
+  requirements.txt): suggested `_TAG=phase0-20260711`, then template patch +
+  bounce warm workers (supersedes the pending `trackingv2-20260710` rebuild).
+- VM deploy for app/ + web/ (assets bumped to `app.js?v=36`).
+- Reprocess a reference clip and compare `tracknet.coverage/teleports`,
+  stable ids, and `rally_3d.rejected` against this cycle's numbers.
+
+**Open risks / next steps:** Phase-1 queue rows in PRD §16 (match_type
+contract, crop-based pose, TrackNet overlap/InpaintNet A/B via the bench,
+worker sampling-cap raise, real heatmap confidence + provenance, per-segment
+calibration). Old stored reels keep old-solver `rally_3d` until reprocessed.
+
 ## Cycle 18: Tracking v2 + 3D flow fixes + timeline redesign (TASK-031/032/033)
 **Date:** 2026-07-10
 **Goal:** The three user-reported quality gaps: "player tracking is very shitty",
