@@ -174,6 +174,10 @@ def detect_frame(frame_bgr: np.ndarray) -> dict | None:
 # Below this confidence the classical result is weak enough to ask Gemini for
 # a second opinion on the corners (TASK-023).
 GEMINI_CONFIDENCE_FLOOR = 0.5
+# Below this, a CV-only quad (Gemini declined or unavailable) is returned as
+# status "low_confidence" instead of "ok" — its geometry never drives heatmaps
+# or 3D reconstruction, only the Studio's provisional display (TASK-032).
+ACCEPT_CONFIDENCE_FLOOR = 0.35
 
 _CORNER_SCHEMA = {
     "type": "object",
@@ -289,8 +293,10 @@ def _normalize_handedness(result: dict, frame_wh: tuple[int, int] | None) -> dic
     every consumer (heatmaps, marionettes, 3D) shares one right-handed frame
     with the camera above the ground. Applied ONCE at detect_from_video's
     exits — never before merging corner sets, which must share a labeling."""
-    if not frame_wh or not isinstance(result, dict) or result.get("status") != "ok":
+    if not frame_wh or not isinstance(result, dict) \
+            or result.get("status") not in {"ok", "low_confidence"}:
         return result
+    result["frame_wh"] = [int(frame_wh[0]), int(frame_wh[1])]
     from . import rally3d   # lazy: rally3d imports this module
     if rally3d.is_right_handed(result["homography"], *frame_wh) is False:
         c = result["corners"]
@@ -300,6 +306,23 @@ def _normalize_handedness(result: dict, frame_wh: tuple[int, int] | None) -> dic
     return result
 
 
+def _net_from_homography(hgr: list) -> list | None:
+    """Synthesize the net line by projecting the court-plane midline back to the
+    image (TASK-032). Manual and Gemini courts carry no detected net segment, so
+    the Studio's "Net line" toggle silently did nothing on them."""
+    try:
+        hinv = np.linalg.inv(np.asarray(hgr, np.float64).reshape(3, 3))
+    except (np.linalg.LinAlgError, ValueError):
+        return None
+    pts = []
+    for cx, cy in ((0.0, COURT_LENGTH_M / 2), (COURT_WIDTH_M, COURT_LENGTH_M / 2)):
+        x, y, w = hinv @ np.array([cx, cy, 1.0])
+        if abs(w) < 1e-9:
+            return None
+        pts.extend([round(float(x / w), 4), round(float(y / w), 4)])
+    return pts
+
+
 def _result_from_corners(corners: list, source: str, confidence: float,
                          frames_used: int, lines=None, net=None) -> dict:
     hgr = solve_homography([tuple(c) for c in corners], COURT_PLANE)
@@ -307,7 +330,7 @@ def _result_from_corners(corners: list, source: str, confidence: float,
         "status": "ok",
         "corners": corners,
         "lines": lines or [],
-        "net": net,
+        "net": net or _net_from_homography(hgr),
         "homography": hgr,
         "court_size_m": [COURT_WIDTH_M, COURT_LENGTH_M],
         "confidence": round(confidence, 3),
@@ -346,6 +369,23 @@ def detect_from_video(video_path, samples: int = 3, gemini_fallback: bool = True
         return {"status": "unavailable", "message": f"cannot read frames from {video_path}"}
 
     frame_wh = (frames[0].shape[1], frames[0].shape[0])
+
+    def _accept_weak(cv: dict | None) -> dict:
+        """Final fallback when Gemini declined/was unavailable. A Hough quad of
+        ANY confidence used to come back status "ok" and silently drive
+        heatmaps + 3D with garbage geometry (TASK-032): below the acceptance
+        floor the result keeps its geometry but is marked low_confidence —
+        consumers gate on "ok", the Studio shows it as provisional and offers
+        the corner-draw flow instead."""
+        if not cv:
+            return {"status": "not_found", "message": "no court boundary detected"}
+        if cv["confidence"] < ACCEPT_CONFIDENCE_FLOOR:
+            cv["status"] = "low_confidence"
+            cv["message"] = (f"court boundary is uncertain "
+                             f"({cv['confidence']:.0%} confidence) — draw the corners "
+                             f"to enable heatmaps and 3D replay")
+        return _normalize_handedness(cv, frame_wh)
+
     found = [d for d in (detect_frame(f) for f in frames) if d]
     cv_result = None
     if found:
@@ -363,8 +403,7 @@ def detect_from_video(video_path, samples: int = 3, gemini_fallback: bool = True
     if cv_result and cv_result["confidence"] >= GEMINI_CONFIDENCE_FLOOR:
         return _normalize_handedness(cv_result, frame_wh)
     if not gemini_fallback:
-        return _normalize_handedness(cv_result, frame_wh) if cv_result \
-            else {"status": "not_found", "message": "no court boundary detected"}
+        return _accept_weak(cv_result)
 
     g_corners = _gemini_corners(frames, log=log)
     if g_corners and cv_result:
@@ -380,5 +419,4 @@ def detect_from_video(video_path, samples: int = 3, gemini_fallback: bool = True
     if g_corners:
         return _normalize_handedness(
             _result_from_corners(g_corners, "gemini", 0.6, len(frames)), frame_wh)
-    return _normalize_handedness(cv_result, frame_wh) if cv_result \
-        else {"status": "not_found", "message": "no court boundary detected"}
+    return _accept_weak(cv_result)

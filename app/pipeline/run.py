@@ -114,13 +114,21 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
     # otherwise best-effort detection — a POV/occluded court just skips it.
     try:
         if opt.get("court_corners"):
+            # Corners are normalized; calibrate against SOURCE dims — the same
+            # frame the 3D reconstruction uses (TASK-032 WH unification).
             court_info = court.manual_result(opt["court_corners"],
-                                             (pinfo.width, pinfo.height))
+                                             (info.width, info.height))
             note("proxy", "court: using your drawn corners")
         else:
             court_info = court.detect_from_video(proxy)
             if court_info.get("status") == "ok":
                 note("proxy", f"court boundary detected ({court_info['confidence']:.0%} confidence)")
+            elif court_info.get("status") == "low_confidence":
+                note("proxy", "court boundary uncertain — draw the corners in the "
+                              "Studio (Court layer) to enable heatmaps & 3D replay")
+            else:
+                note("proxy", "no court boundary found — you can draw the corners in "
+                              "the Studio (Court layer) to enable heatmaps & 3D replay")
     except Exception as e:  # noqa: BLE001 - court overlay must never sink a job
         court_info = {"status": "failed", "message": f"{type(e).__name__}: {e}"}
 
@@ -253,6 +261,14 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
             if r3d.get("status") == "ok":
                 entry["rally_3d"] = r3d
                 note("tracking", f"rally {i}: 3D reconstruction — {len(r3d['shots'])} shots")
+            else:
+                # Slim status so the Studio can say WHY there's no 3D for this
+                # rally instead of a bare "no reconstruction" (TASK-032).
+                entry["rally_3d"] = {"status": str(r3d.get("status") or "failed"),
+                                     "message": str(r3d.get("message") or "")[:200]}
+        else:
+            entry["rally_3d"] = {"status": "no_court",
+                                 "message": str(court_info.get("message") or "")[:200]}
         if trim_range:   # report the window that actually shipped, keep identity via src_start
             entry.update(start=round(trim_range[0], 2), end=round(trim_range[1], 2),
                          dur=round(trim_range[1] - trim_range[0], 2), trimmed=True)

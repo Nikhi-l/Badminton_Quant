@@ -609,8 +609,15 @@ def _public_rally(rr: dict) -> dict:
     cam = _sample_camera_path(rr.get("camera_path"))
     if cam:
         out["camera_path"] = cam
-    if isinstance(rr.get("rally_3d"), dict) and rr["rally_3d"].get("status") == "ok":
-        out["rally_3d"] = rr["rally_3d"]   # already bounded (REPLAY_FPS samples)
+    if isinstance(rr.get("rally_3d"), dict):
+        r3 = rr["rally_3d"]
+        if r3.get("status") == "ok":
+            out["rally_3d"] = r3           # already bounded (REPLAY_FPS samples)
+        else:
+            # Slim failure status so the Studio can explain WHY 3D is missing
+            # for this rally and point at the fix (TASK-032).
+            out["rally_3d"] = {"status": str(r3.get("status") or "failed"),
+                               "message": str(r3.get("message") or "")[:200]}
     vision = _compact_vision(rr.get("vision"))
     if vision:
         out["vision"] = vision
@@ -803,25 +810,40 @@ async def job_set_court(job_id: str, request: Request):
     court_info = court_mod.manual_result(corners, frame_wh)
     result["court"] = court_info
 
-    seen: set[int] = set()
-    rebuilt = 0
-    for coll in (result.get("rallies") or [], result.get("rally_pool") or []):
-        for rr in coll:
-            if not isinstance(rr, dict) or id(rr) in seen:
-                continue
-            seen.add(id(rr))
-            try:
-                r3d = rally3d.reconstruct_rally(rr.get("vision"), court_info, frame_wh)
-            except Exception as e:  # noqa: BLE001
-                r3d = {"status": "failed", "message": f"{type(e).__name__}: {e}"}
-            if r3d.get("status") == "ok":
-                rr["rally_3d"] = r3d
-                rebuilt += 1
-            else:
-                rr.pop("rally_3d", None)
+    def _recompute() -> list[dict]:
+        """Multi-second numpy LM fits — runs on a worker thread so the single
+        FastAPI event loop keeps serving job polls during recompute (TASK-032)."""
+        seen: set[int] = set()
+        statuses: list[dict] = []
+        for coll in (result.get("rallies") or [], result.get("rally_pool") or []):
+            for rr in coll:
+                if not isinstance(rr, dict) or id(rr) in seen:
+                    continue
+                seen.add(id(rr))
+                try:
+                    r3d = rally3d.reconstruct_rally(rr.get("vision"), court_info, frame_wh)
+                except Exception as e:  # noqa: BLE001
+                    r3d = {"status": "failed", "message": f"{type(e).__name__}: {e}"}
+                if r3d.get("status") == "ok":
+                    rr["rally_3d"] = r3d
+                else:
+                    # Keep the slim reason on the rally instead of dropping it —
+                    # the Studio explains WHY each rally has no 3D (TASK-032).
+                    rr["rally_3d"] = {"status": str(r3d.get("status") or "failed"),
+                                      "message": str(r3d.get("message") or "")[:200]}
+                statuses.append({"start": rr.get("start"),
+                                 "status": rr["rally_3d"]["status"],
+                                 "shots": len(r3d.get("shots") or [])
+                                 if r3d.get("status") == "ok" else 0})
+        return statuses
+
+    import asyncio
+    statuses = await asyncio.to_thread(_recompute)
+    rebuilt = sum(1 for s in statuses if s["status"] == "ok")
     result_path.write_text(json.dumps(result))
     db.set_done(job_id, result)
-    return {"ok": True, "court": court_info, "rallies_3d": rebuilt}
+    return {"ok": True, "court": court_info, "rallies_3d": rebuilt,
+            "rally_statuses": statuses}
 
 
 @app.post("/api/jobs/{job_id}/remix")

@@ -8,7 +8,7 @@ function currentOptions() {
     pose: $("optPose").checked ? "yolo11" : "off",
     coach: $("optCoach").checked,
   };
-  if (courtPick.corners.length === 4) opts.court_corners = courtPick.corners;
+  if (courtPick.corners.length === 4 && courtPickValid()) opts.court_corners = courtPick.corners;
   return opts;
 }
 
@@ -64,15 +64,27 @@ async function courtPickLoad(file) {
   }
 }
 
+function courtPickValid() {
+  // Mirrors the server's degenerate-quad check (config.court_corners_option):
+  // the backend silently DROPS a quad spanning <15% x / <10% y, so warn here
+  // instead of showing a false "Court marked ✓" (TASK-032).
+  if (courtPick.corners.length !== 4) return false;
+  const xs = courtPick.corners.map(c => c[0]), ys = courtPick.corners.map(c => c[1]);
+  return (Math.max(...xs) - Math.min(...xs)) >= 0.15
+    && (Math.max(...ys) - Math.min(...ys)) >= 0.1;
+}
+
 function courtPickHint() {
   const hint = $("courtPickHint"), status = $("courtPickStatus");
   if (!hint) return;
   const n = courtPick.corners.length;
+  const ok = n === 4 && courtPickValid();
   hint.textContent = n < 4
     ? `Click the ${COURT_PICK_ORDER[n]} corner (${n + 1}/4) — far = the baseline away from the camera`
-    : "Court marked ✓ — it will be used for heatmaps & 3D replay";
-  hint.classList.toggle("done", n === 4);
-  if (status) status.textContent = n === 4 ? "included with this upload" : n ? `${n}/4 corners` : "";
+    : (ok ? "Court marked ✓ — it will be used for heatmaps & 3D replay"
+          : "Those corners span too little of the frame to be a court — press Clear and try again");
+  hint.classList.toggle("done", ok);
+  if (status) status.textContent = ok ? "included with this upload" : n ? `${n}/4 corners` : "";
 }
 
 function courtPickRedraw() {
@@ -654,6 +666,12 @@ function defaultEditorState(item) {
 function courtOf(item = studio.item) {
   const c = item && item.court;
   return (c && c.status === "ok" && Array.isArray(c.corners) && c.corners.length === 4) ? c : null;
+}
+
+// Raw court result including provisional/low-confidence states (TASK-032): the
+// Studio explains WHY the court is unusable and points at the corner-draw fix.
+function courtRawOf(item = studio.item) {
+  return (item && item.court) || null;
 }
 
 function mergeEditorState(base, saved) {
@@ -1363,6 +1381,36 @@ function poseReadyCount() {
   }).length;
 }
 
+function courtSub() {
+  const c = courtOf();
+  if (c) return c.source === "manual" ? "drawn by you" : `detected · ${fmtPct(c.confidence)}`;
+  const raw = courtRawOf();
+  if (raw && raw.status === "low_confidence") return "uncertain — redraw corners";
+  return "not detected — draw corners";
+}
+
+// Human explanation for a reel with no 3D reconstruction, from the per-rally
+// slim rally_3d statuses the backend now always ships (TASK-032).
+function r3dWhyNot() {
+  if (!courtOf()) {
+    return "3D needs court geometry, and this video has none the pipeline trusts. "
+      + "Draw the four court corners and every rally with a TrackNet shuttle track "
+      + "reconstructs instantly.";
+  }
+  const statuses = (studio.item.rallies || []).map(r => (r.rally_3d || {}).status).filter(Boolean);
+  const n = (s) => statuses.filter(x => x === s).length;
+  if (n("no_track")) {
+    return `The court is set, but ${n("no_track")} rall${n("no_track") === 1 ? "y has" : "ies have"} no TrackNet shuttle track — `
+      + "select Shuttle = TrackNetV3 when uploading (or reprocess this job) to get 3D.";
+  }
+  if (n("no_fit") || n("bad_camera")) {
+    return "The court is set but no ballistic fit matched the shuttle track — usually a "
+      + "very short rally or imprecise corners. Redrawing the corners often fixes it.";
+  }
+  return "No 3D reconstruction on this reel — it needs a detected court and a TrackNet "
+    + "shuttle track, and is computed for new jobs at render time.";
+}
+
 function renderLayerList() {
   const state = studio.editorState;
   const pool = studio.item.rally_pool || studio.item.rallies || [];
@@ -1375,8 +1423,8 @@ function renderLayerList() {
     { id: "camera", ico: "◎", title: "Camera", sub: cameraSub(state), state: (state.camera && state.camera.enabled) ? "on" : "auto" },
     { id: "shuttle", ico: "◉", title: "Shuttle FX", sub: `${styleLabel(state.overlays.shuttle.style)} · ${Math.round(state.overlays.shuttle.opacity * 100)}%`, state: state.overlays.shuttle.enabled ? "on" : "off" },
     { id: "pose", ico: "◇", title: "Players & pose", sub: `tracks · ${poseReadyCount()} rallies`, state: state.overlays.pose.enabled ? "on" : "off" },
-    { id: "court", ico: "▦", title: "Court", sub: courtOf() ? `detected · ${fmtPct(courtOf().confidence)}` : "not detected", state: courtOf() ? (state.overlays.court.enabled ? "on" : "off") : "n/a" },
-    { id: "replay3d", ico: "▲", title: "3D replay", sub: (typeof replay3D !== "undefined" && replay3D.anyRally3d()) ? `reconstructed · sim ${(reelSegments().find(x => x.r && x.r.rally_3d) || { r: { rally_3d: { fps: 12 } } }).r.rally_3d.fps}fps` : "no reconstruction", state: (typeof replay3D !== "undefined" && replay3D.anyRally3d()) ? (state.overlays.replay3d.enabled ? "on" : "off") : "n/a" },
+    { id: "court", ico: "▦", title: "Court", sub: courtSub(), state: courtOf() ? (state.overlays.court.enabled ? "on" : "off") : (courtRawOf() && courtRawOf().status === "low_confidence" ? "fix" : "n/a") },
+    { id: "replay3d", ico: "▲", title: "3D replay", sub: (typeof replay3D !== "undefined" && replay3D.anyRally3d()) ? `reconstructed · sim ${(reelSegments().find(x => x.r && x.r.rally_3d && x.r.rally_3d.status === "ok") || { r: { rally_3d: { fps: 12 } } }).r.rally_3d.fps}fps` : (courtOf() ? "no reconstruction" : "needs court — draw corners"), state: (typeof replay3D !== "undefined" && replay3D.anyRally3d()) ? (state.overlays.replay3d.enabled ? "on" : "off") : "n/a" },
     { id: "soundtrack", ico: "♪", title: "Soundtrack", sub: "Current stitch bed", state: "fixed" },
   ];
   $("layerList").innerHTML = layers.map(l => `
@@ -1537,7 +1585,9 @@ function renderInspector() {
           <div class="metric"><b>${c.frames_used || 1}</b><span>frames agreed</span></div>
         </div>
         <div class="control-hint muted">Boundary + corners ${c.source === "manual" ? "drawn by you" : "detected on the source frame"}; the homography maps play onto a ${(c.court_size_m || [6.1, 13.4])[0]}×${(c.court_size_m || [6.1, 13.4])[1]}m court plane for heatmaps and the 3D view.</div>`
-        : `<div class="control-hint muted">No court boundary detected in this video (POV or occluded footage skips it). Draw it yourself below — heatmaps and 3D replay recompute instantly.</div>`}
+        : `<div class="control-hint muted">${(courtRawOf() && courtRawOf().status === "low_confidence")
+            ? `The detector found a court-like shape but isn't confident (${fmtPct(courtRawOf().confidence)}). Rather than risk warped heatmaps and 3D, it's ignored — draw the four corners below and everything recomputes instantly.`
+            : "No court boundary detected in this video (POV or occluded footage skips it). Draw it yourself below — heatmaps and 3D replay recompute instantly."}</div>`}
       <button class="btn btn-small" id="courtDrawBtn">${courtDraw.active ? "Cancel drawing" : (c ? "Redraw court corners" : "✏️ Draw court corners")}</button>
       ${courtDraw.active ? `<div class="control-hint muted">Click the four OUTER corners on the video in order: far-left, far-right, near-right, near-left.</div>` : ""}
       </div>`;
@@ -1562,9 +1612,12 @@ function renderInspector() {
           <div class="metric"><b>${r3 ? r3.shots.length : 0}</b><span>shots (first rally)</span></div>
         </div>
         ${r3 ? `<div class="kf-list">${r3.shots.slice(0, 8).map(sh => `<div class="kf-item"><span class="kf-t">${fmtT(sh.t0)}</span><span class="kf-tgt">${sh.speed_kmh} km/h · peak ${sh.peak_z}m · ±${sh.residual_px}px</span></div>`).join("")}</div>` : ""}`
-        : `<div class="control-hint muted">No 3D reconstruction on this reel — it needs a detected court and a TrackNet shuttle track, and is computed for new jobs at render time.</div>`}
+        : `<div class="control-hint muted">${r3dWhyNot()}</div>
+        ${courtOf() ? "" : `<button class="btn btn-small" id="r3dDrawCourtBtn">✏️ Draw court corners</button>`}`}
       </div>`;
     if (has) $("r3dEnabled").onchange = (e) => { r3o.enabled = e.target.checked; if (typeof replay3D !== "undefined") replay3D.invalidate(); stateChanged(); };
+    const drawBtn = $("r3dDrawCourtBtn");
+    if (drawBtn) drawBtn.onclick = () => { selectLayer("court"); startCourtDraw(); };
   } else if (studio.selectedLayer === "soundtrack") {
     panel.innerHTML = `
       <div class="control-group">
@@ -2293,6 +2346,8 @@ function startCourtDraw() {
   setPreviewAspect("landscape");
   studio.editorState.framing = { fit: "fit", zoom: 1, x: 0, y: 0 };
   applyFraming();
+  const v = $("stVideo");
+  if (v && !v.paused) v.pause();   // corners on a moving frame = misclicks (TASK-032)
   const frame = $("stageFrame");
   frame.style.cursor = "crosshair";
   frame.addEventListener("pointerdown", courtDrawClick, true);
@@ -2372,7 +2427,15 @@ async function submitCourtDraw() {
     studio.editorState.overlays.court.enabled = true;
     if (typeof replay3D !== "undefined") replay3D.invalidate();
     endCourtDraw();
-    $("tpHint").textContent = `court saved — heatmaps updated · ${resp.rallies_3d} rall${resp.rallies_3d === 1 ? "y" : "ies"} reconstructed in 3D`;
+    // Per-rally outcome instead of a bare count: "0 reconstructed" with no why
+    // was the top confusion in this flow (TASK-032).
+    const st = resp.rally_statuses || [];
+    const noTrack = st.filter(s => s.status === "no_track").length;
+    const noFit = st.filter(s => s.status === "no_fit" || s.status === "bad_camera").length;
+    let msg = `court saved — heatmaps updated · ${resp.rallies_3d}/${st.length || "?"} rall${resp.rallies_3d === 1 ? "y" : "ies"} reconstructed in 3D`;
+    if (!resp.rallies_3d && noTrack) msg += ` · ${noTrack} without a TrackNet shuttle track (enable Shuttle=TrackNetV3 at upload)`;
+    else if (!resp.rallies_3d && noFit) msg += " · no ballistic fit — corners may be imprecise, try redrawing";
+    $("tpHint").textContent = msg;
     renderLayerList();
     renderInspector();
     updateOverlayPreview();

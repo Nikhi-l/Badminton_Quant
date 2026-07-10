@@ -75,6 +75,12 @@ const replay3D = (() => {
     return (reelSegments() || []).some(s => s.r && s.r.rally_3d && s.r.rally_3d.status === "ok");
   }
 
+  // Legacy results (pre-handedness-normalization courts) store shuttle samples
+  // in an x-mirrored court frame (rally_3d.mirrored_frame); marionettes project
+  // through the stored homography, so un-mirror the shuttle here or the two
+  // render on opposite sides of the court (TASK-032).
+  const sampleX = (r3, x) => (r3 && r3.mirrored_frame ? CW - x : x);
+
   function shuttleAt(r3, t) {
     for (const shot of r3.shots) {
       if (t < shot.t0 - 0.05 || t > shot.t1 + 0.05) continue;
@@ -85,7 +91,7 @@ const replay3D = (() => {
       const a = s[i], b = s[Math.min(i + 1, s.length - 1)];
       const k = b.t > a.t ? Math.min(1, Math.max(0, (t - a.t) / (b.t - a.t))) : 0;
       const L = (u, v) => u + (v - u) * k;
-      return { p: [L(a.x, b.x), L(a.y, b.y), L(a.z, b.z)], shot };
+      return { p: [sampleX(r3, L(a.x, b.x)), L(a.y, b.y), L(a.z, b.z)], shot };
     }
     return null;
   }
@@ -157,17 +163,20 @@ const replay3D = (() => {
   }
 
   function drawShuttle(b, r3, t) {
-    // trajectory ribbon: full current shot faint + recent trail bright
+    // trajectory ribbon: full current shot faint + recent trail bright.
+    // (A duplicated break used to fire on every future sample regardless of
+    // isCur, so the documented current-shot preview never drew — TASK-032.)
     const cur = shuttleAt(r3, t);
     for (const shot of r3.shots) {
       const s = shot.samples || [];
       const isCur = cur && cur.shot === shot;
       for (let i = 0; i + 1 < s.length; i++) {
-        if (s[i + 1].t > t && !isCur) break;
-        if (s[i + 1].t > t) break;
+        const future = s[i + 1].t > t;
+        if (future && !isCur) break;
         const age = t - s[i + 1].t;
-        const o = isCur ? Math.max(0.08, 0.7 - age * 0.5) : 0.07;
-        line(b, [s[i].x, s[i].y, s[i].z], [s[i + 1].x, s[i + 1].y, s[i + 1].z],
+        const o = !isCur ? 0.07 : (future ? 0.12 : Math.max(0.12, 0.7 - age * 0.5));
+        line(b, [sampleX(r3, s[i].x), s[i].y, s[i].z],
+             [sampleX(r3, s[i + 1].x), s[i + 1].y, s[i + 1].z],
              `rgba(183,245,66,${o.toFixed(3)})`, isCur ? 2 : 1);
       }
     }
@@ -208,16 +217,23 @@ const replay3D = (() => {
     if (!canvas) init(panel);
     const r3 = rally3dFor(ctx);
     const fps = (r3 && r3.fps) || 12;
-    const bucket = ctx ? Math.round(ctx.sourceT * fps) : -1;   // low-fps sim clock
+    // Resize BEFORE the repaint memo — the old order computed the key from the
+    // stale canvas dims and early-returned, leaving a stretched canvas after a
+    // panel resize while paused (TASK-032).
+    const rect = panel.getBoundingClientRect();
+    if (canvas.width !== Math.round(rect.width) || canvas.height !== Math.max(120, Math.round(rect.height - 30))) {
+      canvas.width = Math.round(rect.width);
+      canvas.height = Math.max(120, Math.round(rect.height - 30));
+    }
+    // Physics stays on the low-fps sim clock (review requirement), but the
+    // canvas repaints on a 30 Hz bucket so marionettes and the shuttle dot
+    // interpolate smoothly between sim samples instead of stepping (TASK-032;
+    // the visual lerp RALLY_3D_RECONSTRUCTION.md always specified).
+    const bucket = ctx ? Math.round(ctx.sourceT * 30) : -1;
     const key = `${bucket}|${orbit.az.toFixed(3)}|${orbit.el.toFixed(3)}|${orbit.dist.toFixed(2)}|${canvas.width}x${canvas.height}|${r3 ? 1 : 0}`;
     if (key === lastKey) return;
     lastKey = key;
 
-    const rect = panel.getBoundingClientRect();
-    if (canvas.width !== Math.round(rect.width) || canvas.height !== Math.round(rect.height - 30)) {
-      canvas.width = Math.round(rect.width);
-      canvas.height = Math.max(120, Math.round(rect.height - 30));
-    }
     g.clearRect(0, 0, canvas.width, canvas.height);
     const b = camBasis();
     drawCourt(b);
@@ -231,8 +247,23 @@ const replay3D = (() => {
       drawPlayers(b, marionettes(ctx, b));
       g.fillStyle = "rgba(174,181,198,.8)";
       g.font = "600 10px Inter, sans-serif";
-      g.fillText("no 3D reconstruction for this rally", 10, canvas.height - 8);
+      g.fillText(noReconMessage(ctx), 10, canvas.height - 8);
     }
+  }
+
+  // WHY there's no 3D for this rally — the backend now ships a slim status on
+  // every rally (TASK-032) instead of silently omitting rally_3d.
+  const R3D_REASONS = {
+    no_court: "no court geometry — draw the corners in the Court layer",
+    no_track: "no TrackNet shuttle track for this rally",
+    bad_camera: "camera pose could not be recovered from the court",
+    no_fit: "no ballistic fit matched the shuttle track",
+    failed: "reconstruction failed",
+  };
+  function noReconMessage(ctx) {
+    const r3 = ctx && ctx.seg && ctx.seg.r && ctx.seg.r.rally_3d;
+    const why = r3 && R3D_REASONS[r3.status];
+    return why ? `no 3D for this rally: ${why}` : "no 3D reconstruction for this rally";
   }
 
   /* ---------- setup + interaction ---------- */
