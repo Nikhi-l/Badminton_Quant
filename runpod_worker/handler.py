@@ -24,11 +24,11 @@ import requests
 import runpod
 
 CONTRACT = "baddy.vision.v1"
-WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "doubles-20260708")
+WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "trackingv2-20260710")
 SAMPLE_FPS = float(os.environ.get("BADDY_SAMPLE_FPS", "6"))
 MAX_FRAMES_PER_RALLY = int(os.environ.get("BADDY_MAX_FRAMES_PER_RALLY", "180"))
 YOLO_POSE_MODEL = os.environ.get("YOLO_POSE_MODEL",
-                                 os.environ.get("POSE_MODEL_GPU", "yolo26m-pose.pt"))
+                                 os.environ.get("POSE_MODEL_GPU", "yolo26l-pose.pt"))
 YOLO_POSE_FALLBACK = os.environ.get("YOLO_POSE_FALLBACK",
                                     os.environ.get("POSE_MODEL_FALLBACK", "yolo11n-pose.pt"))
 RACQUET_MODEL = os.environ.get("RACQUET_MODEL", "")
@@ -42,6 +42,17 @@ RACQUET_WRIST_GATE = float(os.environ.get("RACQUET_WRIST_GATE", "0.14"))
 YOLO_CONF = float(os.environ.get("YOLO_CONF", "0.25"))
 YOLO_IMGSZ = int(os.environ.get("YOLO_IMGSZ", "640"))
 DEVICE = os.environ.get("YOLO_DEVICE", "0")
+# TASK-031: BoT-SORT + native-feature ReID tuned for 6 Hz seeked frames (see
+# botsort_baddy.yaml). Falls back to stock bytetrack.yaml if the tuned file is
+# missing from the image (older template pointing at a newer handler, or vice
+# versa never breaks tracking outright).
+_TRACKER_DEFAULT = str(Path(__file__).parent / "botsort_baddy.yaml")
+TRACKER_CONFIG = os.environ.get("BADDY_TRACKER_CONFIG", _TRACKER_DEFAULT)
+if not Path(TRACKER_CONFIG).exists():
+    TRACKER_CONFIG = "bytetrack.yaml"
+# Max players kept per frame: doubles = 4.
+MAX_PLAYERS = int(os.environ.get("BADDY_MAX_PLAYERS", "4"))
+MAX_RACQUETS = int(os.environ.get("BADDY_MAX_RACQUETS", "4"))
 TRACKNET_REPO = os.environ.get("TRACKNET_REPO", "")
 TRACKNET_TRACKNET_FILE = os.environ.get("TRACKNET_TRACKNET_FILE", "")
 TRACKNET_INPAINTNET_FILE = os.environ.get("TRACKNET_INPAINTNET_FILE", "")
@@ -166,19 +177,75 @@ def _box_area(box: dict) -> float:
     return max(0.0, x2 - x1) * max(0.0, y2 - y1)
 
 
-def _detect_pose(frame: np.ndarray, reset_tracker: bool = False) -> tuple[list[dict], list[dict], float]:
-    """Detect players + poses; identity comes from ultralytics ByteTrack.
+def _court_polygon(corners: Any) -> np.ndarray | None:
+    """Expanded court quad for gating person detections (TASK-031).
 
-    TASK-024: model.track(persist=True) carries a track id across the sampled
-    frames of a rally (the tracker motion-models occlusions the app's serve-time
-    centroid heuristic cannot), emitted as ``track_id`` on each box AND its
-    paired pose. ``reset_tracker=True`` on a rally's first frame starts a fresh
-    id space per rally. Falls back to plain predict when tracking is
+    ``corners`` is the app's normalized [far-L, far-R, near-R, near-L] quad.
+    Players lunge outside the painted lines, so the polygon is scaled ~22%
+    outward from its centroid before use. Returns an (4,2) float array or None.
+    """
+    if not isinstance(corners, (list, tuple)) or len(corners) != 4:
+        return None
+    try:
+        quad = np.array([[float(p[0]), float(p[1])] for p in corners], np.float64)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if not np.isfinite(quad).all():
+        return None
+    center = quad.mean(axis=0)
+    return center + (quad - center) * 1.22
+
+
+def _inside_polygon(x: float, y: float, poly: np.ndarray) -> bool:
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        if (y1 > y) != (y2 > y):
+            t = (y - y1) / (y2 - y1)
+            if x < x1 + t * (x2 - x1):
+                inside = not inside
+    return inside
+
+
+def _court_gate(entries: list, poly: np.ndarray | None) -> list:
+    """Keep detections whose foot point stands in the expanded court polygon.
+
+    Spectators and line judges routinely out-rank the far players in the
+    top-4-by-confidence cut; when court geometry is known, gate on it BEFORE
+    the cap. Fail-safe: an over-tight or mis-drawn quad that would reject every
+    detection falls back to the ungated list rather than blanking the frame.
+    """
+    if poly is None or not entries:
+        return entries
+    gated = []
+    for det, pose in entries:
+        x1, y1, x2, y2 = det["box"]
+        if _inside_polygon((x1 + x2) / 2, y2, poly):
+            gated.append((det, pose))
+    return gated or entries
+
+
+def _detect_pose(frame: np.ndarray, reset_tracker: bool = False,
+                 court_poly: np.ndarray | None = None) -> tuple[list[dict], list[dict], float]:
+    """Detect players + poses; identity comes from the ultralytics tracker.
+
+    TASK-024/031: model.track(persist=True) carries a track id across the
+    sampled frames of a rally (the tracker motion-models occlusions the app's
+    serve-time centroid heuristic cannot), emitted as ``track_id`` on each box
+    AND its paired pose. The tracker is BoT-SORT with native-feature ReID tuned
+    for the 6 Hz sample stream (botsort_baddy.yaml). ``reset_tracker=True`` on a
+    rally's first frame starts a fresh id space per rally AND clears a previous
+    rally's tracker failure so one transient exception doesn't silently degrade
+    every following rally. Falls back to plain predict when tracking is
     unavailable (missing lap dependency etc.) — downstream keeps its heuristic.
     """
     global _track_error
     if _pose_model is None:
         return [], [], 0.0
+    if reset_tracker and _track_error:
+        _track_error = ""
     h, w = frame.shape[:2]
     result = None
     if not _track_error:
@@ -186,7 +253,7 @@ def _detect_pose(frame: np.ndarray, reset_tracker: bool = False) -> tuple[list[d
             result = _pose_model.track(frame, imgsz=YOLO_IMGSZ, conf=YOLO_CONF,
                                        device=DEVICE, verbose=False,
                                        persist=not reset_tracker,
-                                       tracker="bytetrack.yaml")[0]
+                                       tracker=TRACKER_CONFIG)[0]
         except Exception as exc:  # noqa: BLE001 - tracking is an enhancement
             _track_error = f"{type(exc).__name__}: {exc}"
     if result is None:
@@ -224,8 +291,9 @@ def _detect_pose(frame: np.ndarray, reset_tracker: bool = False) -> tuple[list[d
             if "track_id" in det:
                 pose["track_id"] = det["track_id"]
         entries.append((det, pose))
+    entries = _court_gate(entries, court_poly)
     entries.sort(key=lambda e: (e[0]["confidence"], _box_area(e[0])), reverse=True)
-    entries = entries[:4]   # doubles = up to 4 players
+    entries = entries[:MAX_PLAYERS]   # doubles = up to 4 players
     players = [e[0] for e in entries]
     # Placeholder keeps poses index-aligned with players when keypoints are missing.
     poses = [e[1] or {"keypoints": [], "confidence": 0.0} for e in entries]
@@ -278,8 +346,9 @@ def _detect_racquet(frame: np.ndarray, poses: list[dict] | None = None) -> tuple
             continue
         detections.append(_norm_box(box[0], box[1], box[2], box[3], w, h, conf))
     detections.sort(key=lambda b: b["confidence"], reverse=True)
-    quality = float(np.mean([d["confidence"] for d in detections[:2]])) if detections else 0.0
-    return detections[:2], _clamp01(quality)
+    kept = detections[:MAX_RACQUETS]   # doubles = up to 4 racquets (TASK-031)
+    quality = float(np.mean([d["confidence"] for d in kept])) if kept else 0.0
+    return kept, _clamp01(quality)
 
 
 def _pose_point(pose: dict, idx: int) -> tuple[float, float, float] | None:
@@ -361,7 +430,7 @@ def _detect_racquet_candidates(frame: np.ndarray, poses: list[dict]) -> tuple[li
                for d in deduped):
             continue
         deduped.append(cand)
-        if len(deduped) >= 2:
+        if len(deduped) >= MAX_RACQUETS:
             break
     quality = float(np.mean([d["confidence"] for d in deduped])) if deduped else 0.0
     return deduped, _clamp01(quality)
@@ -502,7 +571,7 @@ def _quality(values: list[float], expected: int) -> float:
 
 
 def _process_rally(cap, meta: dict, rally: dict, video_path: Path, workdir: Path,
-                   tasks: set | None = None) -> dict:
+                   tasks: set | None = None, court_poly: np.ndarray | None = None) -> dict:
     tasks = tasks or {"players", "pose", "racquet", "shuttle"}
     want_shuttle = "shuttle" in tasks
     want_pose = bool({"players", "pose"} & tasks)
@@ -531,7 +600,8 @@ def _process_rally(cap, meta: dict, rally: dict, video_path: Path, workdir: Path
         ok, frame = _seek_frame(cap, t, fps)
         if not ok or frame is None:
             continue
-        players, poses, pose_q = (_detect_pose(frame, reset_tracker=first_pose_frame)
+        players, poses, pose_q = (_detect_pose(frame, reset_tracker=first_pose_frame,
+                                               court_poly=court_poly)
                                   if want_pose else ([], [], 0.0))
         if want_pose:
             first_pose_frame = False
@@ -544,10 +614,9 @@ def _process_rally(cap, meta: dict, rally: dict, video_path: Path, workdir: Path
             shuttle, prev_gray = _detect_shuttle(frame, prev_gray, players)
         else:
             shuttle = None
-        if not players:
-            # Low-confidence fallback so the app can still reason about coverage.
-            players = [{"box": [0.18, 0.12, 0.42, 0.95], "confidence": 0.12},
-                       {"box": [0.58, 0.12, 0.82, 0.95], "confidence": 0.12}]
+        # No detections → an honest empty frame. The old hardcoded placeholder
+        # boxes (conf 0.12) passed every downstream gate: the virtual camera
+        # framed empty court and the id tracker minted phantom players (TASK-031).
         row = {"t": round(t, 3), "players": players}
         if poses:
             row["poses"] = poses
@@ -559,7 +628,7 @@ def _process_rally(cap, meta: dict, rally: dict, video_path: Path, workdir: Path
             row["shuttle"] = shuttle
             shuttle_confs.append(shuttle["confidence"])
         frames.append(row)
-        player_confs.extend([p["confidence"] for p in players[:4]])
+        player_confs.extend([p["confidence"] for p in players[:MAX_PLAYERS]])
         pose_confs.append(pose_q)
         racquet_confs.append(racquet_q)
         candidate_confs.append(candidate_q)
@@ -601,6 +670,7 @@ def process(job_input: dict) -> dict:
         raise ValueError("rallies must be a non-empty list")
     requested_pose_model = str(job_input.get("pose_model") or YOLO_POSE_MODEL or "").strip()
     _load_models(requested_pose_model)
+    court_poly = _court_polygon(job_input.get("court_corners"))
     started = time.time()
     with tempfile.TemporaryDirectory(prefix="baddy-vision-") as td:
         video = Path(td) / "proxy.mp4"
@@ -609,7 +679,8 @@ def process(job_input: dict) -> dict:
         cap = cv2.VideoCapture(str(video))
         tasks = set(job_input.get("tasks") or ["players", "pose", "racquet", "shuttle"])
         try:
-            results = [_process_rally(cap, meta, r, video, Path(td), tasks) for r in rallies]
+            results = [_process_rally(cap, meta, r, video, Path(td), tasks,
+                                      court_poly=court_poly) for r in rallies]
         finally:
             cap.release()
     return {
@@ -636,7 +707,8 @@ def process(job_input: dict) -> dict:
             "error": _model_error,
             "tracknet_error": _tracknet_error,
             "track_error": _track_error,
-            "player_tracker": "" if _track_error else "bytetrack",
+            "player_tracker": "" if _track_error else Path(TRACKER_CONFIG).stem,
+            "court_gate": court_poly is not None,
         },
         "elapsed_sec": round(time.time() - started, 3),
         "rallies": results,

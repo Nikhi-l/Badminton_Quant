@@ -62,7 +62,9 @@ POSE_ENGINES = {"off", "yolo11", "pose"}
 VISION_DEFAULT_SHUTTLE = os.environ.get("VISION_DEFAULT_SHUTTLE", "off")
 VISION_DEFAULT_POSE = os.environ.get("VISION_DEFAULT_POSE", "off")
 POSE_BACKEND = os.environ.get("POSE_BACKEND", "gpu").strip().lower()
-POSE_MODEL_GPU = os.environ.get("POSE_MODEL_GPU", "yolo26m-pose.pt")
+# yolo26l beats m by ~1.6 pose mAP with headroom to spare on serverless GPU
+# offline jobs (TASK-031); the worker image bakes both l and m.
+POSE_MODEL_GPU = os.environ.get("POSE_MODEL_GPU", "yolo26l-pose.pt")
 POSE_MODEL_LOCAL = os.environ.get("POSE_MODEL_LOCAL", "yolo26s-pose.pt")
 POSE_MODEL_FALLBACK = os.environ.get("POSE_MODEL_FALLBACK",
                                      str(DATA / "models" / "yolo11n-pose.pt"))

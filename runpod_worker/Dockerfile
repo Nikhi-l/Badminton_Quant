@@ -35,9 +35,12 @@ ENV TRACKNET_REPO=/opt/TrackNetV3 \
 # Pre-bake YOLO pose weights into the image (cwd = /worker, where the handler
 # resolves bare model names): cold starts skip the ~60MB download, and the build
 # FAILS FAST here if a configured model doesn't exist in this ultralytics version
-# — a bad pose default can never reach a running worker.
-RUN python -c "from ultralytics import YOLO; YOLO('yolo26m-pose.pt'); YOLO('yolo11n-pose.pt'); YOLO('yolo11s.pt')"
+# — a bad pose default can never reach a running worker. yolo26l is the TASK-031
+# default; yolo26m stays baked so older app payloads that request it don't
+# trigger a runtime download.
+RUN python -c "from ultralytics import YOLO; YOLO('yolo26l-pose.pt'); YOLO('yolo26m-pose.pt'); YOLO('yolo11n-pose.pt'); YOLO('yolo11s.pt')"
 
+COPY botsort_baddy.yaml /worker/botsort_baddy.yaml
 COPY handler.py /worker/handler.py
 
 CMD ["python", "-u", "/worker/handler.py"]

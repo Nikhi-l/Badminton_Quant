@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from . import artifacts, auth, config, db, worker
 from .pipeline import court as court_geo
 from .pipeline import gpu as gpu_pipeline
+from .pipeline import smooth
 from .pipeline.run import STAGES
 
 ALLOWED_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
@@ -343,20 +344,27 @@ def _relabel_merged(frames: list[tuple[float, list[tuple[float, float, float]]]]
     Shared by the heuristic matcher and worker-supplied (ByteTrack) ids, so
     P1 = the near player regardless of where identity came from.
     """
-    # Track stats: sample count, heights, and lifespan per raw id.
+    # Track stats: sample count, heights, lifespan, and endpoint positions per raw id.
     seen: dict[int, dict] = {}
     for (t, dets), ids in zip(frames, raw_ids):
-        for (_, _, h), sid in zip(dets, ids):
-            st = seen.setdefault(sid, {"n": 0, "hs": [], "t0": t, "t1": t})
+        for (cx, cy, h), sid in zip(dets, ids):
+            st = seen.setdefault(sid, {"n": 0, "hs": [], "t0": t, "t1": t,
+                                       "p0": (cx, cy), "p1": (cx, cy)})
             st["n"] += 1
             st["hs"].append(h)
-            st["t0"] = min(st["t0"], t)
-            st["t1"] = max(st["t1"], t)
+            if t <= st["t0"]:
+                st["t0"], st["p0"] = t, (cx, cy)
+            if t >= st["t1"]:
+                st["t1"], st["p1"] = t, (cx, cy)
     med = {sid: sorted(st["hs"])[len(st["hs"]) // 2] for sid, st in seen.items()}
 
     # Merge fragments: a track that dies and another that starts later at the
-    # same apparent height are the same player re-acquired (a long occlusion or
-    # a missed stretch splits one player into P1+P3 otherwise).
+    # same apparent height AND near where the first ended is the same player
+    # re-acquired (a long occlusion or a missed stretch splits one player into
+    # P1+P3 otherwise). The spatial guard is new in TASK-031: same-side doubles
+    # partners have near-identical apparent heights, so height alone merged two
+    # different people into one id. The allowed jump grows with the time gap
+    # (players move between fragments) but stays capped well under court width.
     group = {sid: sid for sid in seen}
     for sid in sorted(seen, key=lambda s: seen[s]["t0"]):
         for tid in sorted(seen, key=lambda s: seen[s]["t0"]):
@@ -364,11 +372,18 @@ def _relabel_merged(frames: list[tuple[float, list[tuple[float, float, float]]]]
                 continue
             a, b = seen[sid], seen[tid]
             overlap = min(a["t1"], b["t1"]) - max(a["t0"], b["t0"])
-            if overlap <= 0.0 and abs(med[sid] - med[tid]) < 0.1:
-                root = group[sid]
-                for k, g in group.items():
-                    if g == group[tid]:
-                        group[k] = root
+            if overlap > 0.0 or abs(med[sid] - med[tid]) >= 0.1:
+                continue
+            first, second = (a, b) if a["t1"] <= b["t0"] else (b, a)
+            gap = max(0.0, second["t0"] - first["t1"])
+            jump = math.hypot(second["p0"][0] - first["p1"][0],
+                              second["p0"][1] - first["p1"][1])
+            if jump > min(0.45, 0.12 + 0.15 * gap):
+                continue
+            root = group[sid]
+            for k, g in group.items():
+                if g == group[tid]:
+                    group[k] = root
     # Relabel groups: persistence first, then taller (nearer) first → P1 = near player.
     gstat: dict[int, tuple[int, list[float]]] = {}
     for sid, st in seen.items():
@@ -380,16 +395,21 @@ def _relabel_merged(frames: list[tuple[float, list[tuple[float, float, float]]]]
 
 
 def _ids_from_worker(worker_ids: list[list[int | None]]) -> list[list[int]] | None:
-    """Densified per-frame ids from the worker's ByteTrack track_ids (TASK-024),
+    """Densified per-frame ids from the worker's tracker track_ids (TASK-024),
     or None when coverage is too thin to trust (falls back to the heuristic).
     Rare id-less detections get isolated one-off ids; the fragment merge folds
-    them back into the right player where the size evidence agrees."""
+    them back into the right player where the size evidence agrees.
+    TASK-031: the acceptance floor dropped 0.9 → 0.6 — the old cliff threw away
+    ALL tracker ids for a rally whenever one low-coverage stretch (a tracker
+    warmup, a brief occlusion cluster) dipped coverage below 90%, silently
+    reverting to the weaker heuristic; the fragment merge cleans up the orphan
+    ids that motivated the strict cliff."""
     total = have = 0
     for row in worker_ids:
         for wid in row:
             total += 1
             have += wid is not None
-    if not total or have / total < 0.9:
+    if not total or have / total < 0.6:
         return None
     dense: dict[int, int] = {}
     out: list[list[int]] = []
@@ -561,7 +581,9 @@ def _sample_pose_track(poses: list | None, max_frames: int = 120) -> list[dict]:
         for person, sid in zip(people, frame_ids):
             person["id"] = sid
         out.append({"t": t, "people": people})
-    return out
+    # One-Euro smoothing per (person id, keypoint): kills the 6 Hz keypoint
+    # jitter without lagging fast racquet swings (TASK-031).
+    return smooth.smooth_pose_track(out)
 
 
 def _sample_camera_path(path: list | None, max_points: int = 240) -> list[dict]:

@@ -283,20 +283,20 @@ def _frames_from(raw_rally: dict, rally: dict) -> tuple[list[dict], list[dict], 
             poses.append({"t": t, "people": people, "count": len(people), "confidence": conf})
         raw_racquets = frame.get("racquets") or frame.get("rackets") or frame.get("racquet_boxes") or []
         racket_boxes = [_box(b) for b in raw_racquets]
-        racket_boxes = [b for b in racket_boxes if b and b["confidence"] >= 0.05]
-        if racket_boxes:
-            racquets.append({"t": t, "boxes": racket_boxes[:2],
-                             "confidence": round(sum(b["confidence"] for b in racket_boxes[:2])
-                                                 / len(racket_boxes[:2]), 3)})
+        racket_boxes = [b for b in racket_boxes if b and b["confidence"] >= 0.05][:4]
+        if racket_boxes:   # doubles = up to 4 racquets (TASK-031)
+            racquets.append({"t": t, "boxes": racket_boxes,
+                             "confidence": round(sum(b["confidence"] for b in racket_boxes)
+                                                 / len(racket_boxes), 3)})
         raw_candidates = frame.get("racquet_candidates") or frame.get("racket_candidates") or []
         candidate_boxes = [_box(b) for b in raw_candidates]
-        candidate_boxes = [b for b in candidate_boxes if b and b["confidence"] >= 0.05]
+        candidate_boxes = [b for b in candidate_boxes if b and b["confidence"] >= 0.05][:4]
         if candidate_boxes:
             racquet_candidates.append({
                 "t": t,
-                "boxes": candidate_boxes[:2],
-                "confidence": round(sum(b["confidence"] for b in candidate_boxes[:2])
-                                    / len(candidate_boxes[:2]), 3),
+                "boxes": candidate_boxes,
+                "confidence": round(sum(b["confidence"] for b in candidate_boxes)
+                                    / len(candidate_boxes), 3),
                 "source": "pose_guided_line",
             })
 
@@ -502,7 +502,8 @@ def _runpod_request(payload: dict, log=print) -> dict:
 
 
 def analyze(proxy_path: str | Path, workdir: str | Path, sport: str,
-            rallies: list[dict], log=print, tasks: list[str] | None = None) -> dict:
+            rallies: list[dict], log=print, tasks: list[str] | None = None,
+            court_corners: list | None = None) -> dict:
     if not config.RUNPOD_ENDPOINT_ID or not config.RUNPOD_API_KEY:
         return _disabled("RUNPOD_ENDPOINT_ID/RUNPOD_API_KEY not configured")
     tasks = tasks or ["players", "pose", "racquet", "shuttle"]
@@ -540,6 +541,10 @@ def analyze(proxy_path: str | Path, workdir: str | Path, sport: str,
         "pose_model": config.POSE_MODEL_GPU if "pose" in tasks or "players" in tasks else "",
         "return_normalized_coordinates": True,
     }
+    if court_corners:
+        # Normalized quad (far-L, far-R, near-R, near-L): the worker gates person
+        # detections to the court so spectators can't crowd out far players (TASK-031).
+        payload["court_corners"] = court_corners
     try:
         log("submitting proxy and rally windows to Runpod")
         raw = _runpod_request(payload, log=log)

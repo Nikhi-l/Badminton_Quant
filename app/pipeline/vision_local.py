@@ -147,8 +147,39 @@ def _box_area(b: dict) -> float:
     return max(0.0, x2 - x1) * max(0.0, y2 - y1)
 
 
-def _detect_pose(frame, device: str):
-    """YOLO pose: top-2 player boxes + COCO-17 keypoints, normalized."""
+MAX_PLAYERS = int(os.environ.get("VISION_MAX_PLAYERS", "4"))
+
+
+def _court_polygon(corners) -> np.ndarray | None:
+    """Expanded court quad for gating person detections (TASK-031); mirrors the
+    Runpod worker's gate so local and GPU results stay comparable."""
+    if not isinstance(corners, (list, tuple)) or len(corners) != 4:
+        return None
+    try:
+        quad = np.array([[float(p[0]), float(p[1])] for p in corners], np.float64)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if not np.isfinite(quad).all():
+        return None
+    center = quad.mean(axis=0)
+    return center + (quad - center) * 1.22
+
+
+def _inside_polygon(x: float, y: float, poly: np.ndarray) -> bool:
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        if (y1 > y) != (y2 > y):
+            t = (y - y1) / (y2 - y1)
+            if x < x1 + t * (x2 - x1):
+                inside = not inside
+    return inside
+
+
+def _detect_pose(frame, device: str, court_poly: np.ndarray | None = None):
+    """YOLO pose: top-4 player boxes (doubles) + COCO-17 keypoints, normalized."""
     if _pose_model is None:
         return [], [], 0.0
     h, w = frame.shape[:2]
@@ -174,7 +205,15 @@ def _detect_pose(frame, device: str):
             poses.append({"keypoints": pts,
                           "confidence": float(np.mean([p["confidence"] for p in pts])) if pts else 0.0})
     order = sorted(range(len(players)),
-                   key=lambda i: (players[i]["confidence"], _box_area(players[i])), reverse=True)[:2]
+                   key=lambda i: (players[i]["confidence"], _box_area(players[i])), reverse=True)
+    if court_poly is not None:
+        # Foot point must stand on/near the court; fail-safe to ungated when the
+        # gate would blank the frame (mis-drawn quad must not hide real players).
+        gated = [i for i in order
+                 if _inside_polygon((players[i]["box"][0] + players[i]["box"][2]) / 2,
+                                    players[i]["box"][3], court_poly)]
+        order = gated or order
+    order = order[:MAX_PLAYERS]
     players = [players[i] for i in order]
     poses = [poses[i] for i in order if i < len(poses)]
     pose_q = float(np.mean([p["confidence"] for p in poses])) if poses else 0.0
@@ -264,7 +303,8 @@ def _sample_times(start: float, end: float) -> list[float]:
 
 
 def _process_rally(cap, fps: float, duration: float, rally: dict,
-                   proxy_path: Path, workdir: Path, device: str, tasks: set[str], log) -> dict:
+                   proxy_path: Path, workdir: Path, device: str, tasks: set[str], log,
+                   court_poly: np.ndarray | None = None) -> dict:
     import cv2
 
     idx = int(float(rally.get("rally_index", 0) or 0))
@@ -293,15 +333,15 @@ def _process_rally(cap, fps: float, duration: float, rally: dict,
         ok, frame = cap.read()
         if not ok or frame is None:
             continue
-        players, poses, pose_q = _detect_pose(frame, device)
-        if not players:
-            players = [{"box": [0.18, 0.12, 0.42, 0.95], "confidence": 0.12},
-                       {"box": [0.58, 0.12, 0.82, 0.95], "confidence": 0.12}]
+        players, poses, pose_q = _detect_pose(frame, device, court_poly=court_poly)
+        # No detections → an honest empty frame; the old hardcoded placeholder
+        # boxes steered the camera to empty court and inflated player_quality
+        # past the camera's trust gate (TASK-031).
         row = {"t": round(t, 3), "players": players}
         if poses:
             row["poses"] = poses
         frames.append(row)
-        player_confs.extend([p["confidence"] for p in players[:2]])
+        player_confs.extend([p["confidence"] for p in players[:MAX_PLAYERS]])
         pose_confs.append(pose_q)
 
     expected = max(2, len(frames))
@@ -323,14 +363,17 @@ def _process_rally(cap, fps: float, duration: float, rally: dict,
 
 
 def analyze_raw(proxy_path: str | Path, sport: str, rallies: list[dict],
-                tasks: list[str] | None = None, log=print) -> dict:
+                tasks: list[str] | None = None, log=print,
+                court_corners: list | None = None) -> dict:
     """Run on-device vision over the selected rallies; returns raw vision.v1.
 
     tasks subset of {shuttle, pose, players}; only requested workers run.
+    court_corners (normalized quad) gates person detections to the court.
     """
     import cv2
 
     task_set = set(tasks or ["shuttle", "pose"])
+    court_poly = _court_polygon(court_corners)
     proxy_path = Path(proxy_path).resolve()  # clips inherit this dir; keep it absolute
     device = torch_device()
     log(f"on-device vision ({'+'.join(sorted(task_set))}) on {device}")
@@ -355,7 +398,7 @@ def analyze_raw(proxy_path: str | Path, sport: str, rallies: list[dict],
     try:
         for r in indexed:
             results.append(_process_rally(cap, fps, duration, r, proxy_path, workdir,
-                                          device, task_set, log))
+                                          device, task_set, log, court_poly=court_poly))
             done = results[-1]
             log(f"rally {done['rally_index']}: shuttle {done['tracknet']['points']}pts "
                 f"({done['tracknet']['status']}), players {done['player_quality']:.0%}")

@@ -155,7 +155,9 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
 
     note("vision", f"vision: shuttle={opt['shuttle']}, pose={opt['pose']}")
     vision = vision_engine.analyze(vision_proxy, workdir, sport, picked, opt,
-                                   log=lambda m: note("vision", m))
+                                   log=lambda m: note("vision", m),
+                                   court_corners=(court_info.get("corners")
+                                                  if court_info.get("status") == "ok" else None))
     if vision.get("status") == "disabled":
         note("vision", vision.get("message", "vision workers disabled"))
     elif vision.get("status") == "failed":

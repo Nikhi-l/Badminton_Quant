@@ -20,21 +20,25 @@ from .. import config
 from . import gpu
 
 
-def _local(proxy_path, rallies, tasks, log):
+def _local(proxy_path, rallies, tasks, log, court_corners=None):
     """Run the on-device engine for `tasks` and canonicalize, or a disabled dict."""
     from . import vision_local
 
     ok, why = vision_local.available(need_shuttle="shuttle" in tasks)
     if not ok:
         return gpu._disabled(f"on-device vision unavailable: {why}")
-    raw = vision_local.analyze_raw(proxy_path, "", rallies, tasks=tasks, log=log)
+    raw = vision_local.analyze_raw(proxy_path, "", rallies, tasks=tasks, log=log,
+                                   court_corners=court_corners)
     out = gpu._canonicalize(raw, rallies)
     out["backend"] = "local"
     return out
 
 
 def analyze(proxy_path: str | Path, workdir: str | Path, sport: str,
-            rallies: list[dict], options: dict, log=print) -> dict:
+            rallies: list[dict], options: dict, log=print,
+            court_corners: list | None = None) -> dict:
+    """court_corners: normalized court quad (manual or detected) used to gate
+    person detections to the playing area on both backends (TASK-031)."""
     opt = config.normalize_options(options)
     shuttle, pose = opt["shuttle"], opt["pose"]
     pose_on = pose == "yolo11"
@@ -49,16 +53,17 @@ def analyze(proxy_path: str | Path, workdir: str | Path, sport: str,
         if pose_on:
             tasks += ["players", "pose", "racquet"]   # racquet chain needs wrists (TASK-027)
         log(f"shuttle=TrackNetV3{' +pose' if pose_on else ''} → GPU worker")
-        out = gpu.analyze(proxy_path, workdir, sport, rallies, log=log, tasks=tasks)
+        out = gpu.analyze(proxy_path, workdir, sport, rallies, log=log, tasks=tasks,
+                          court_corners=court_corners)
         out.setdefault("backend", "runpod")
         if out.get("status") in {"disabled", "failed"}:
             log(f"GPU shuttle unavailable ({out.get('message', '')[:80]})")
             if config.VISION_ALLOW_CPU_TRACKNET:
                 log("falling back to on-device TrackNetV3 (slow CPU pass)")
-                out = _local(proxy_path, rallies, tasks, log)
+                out = _local(proxy_path, rallies, tasks, log, court_corners)
             elif pose_on:
                 log("running pose on the VM CPU; shuttle camera falls back to motion")
-                out = _local(proxy_path, rallies, ["players", "pose"], log)
+                out = _local(proxy_path, rallies, ["players", "pose"], log, court_corners)
         out["options"] = opt
         return out
 
@@ -66,7 +71,8 @@ def analyze(proxy_path: str | Path, workdir: str | Path, sport: str,
     if pose_on and config.pose_prefers_gpu() and config.runpod_ready():
         log(f"pose=YOLO ({config.POSE_MODEL_GPU}) → GPU worker")
         out = gpu.analyze(proxy_path, workdir, sport, rallies, log=log,
-                          tasks=["players", "pose", "racquet"])
+                          tasks=["players", "pose", "racquet"],
+                          court_corners=court_corners)
         out.setdefault("backend", "runpod")
         if out.get("status") not in {"disabled", "failed"}:
             out["options"] = opt
@@ -74,7 +80,7 @@ def analyze(proxy_path: str | Path, workdir: str | Path, sport: str,
         log(f"GPU pose unavailable ({out.get('message', '')[:80]}); falling back to local pose")
 
     log(f"pose=YOLO ({config.POSE_MODEL_LOCAL}) → on-device local")
-    out = _local(proxy_path, rallies, ["players", "pose"], log)
+    out = _local(proxy_path, rallies, ["players", "pose"], log, court_corners)
     out["options"] = opt
     return out
 

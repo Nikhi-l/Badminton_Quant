@@ -1,0 +1,31 @@
+# BoT-SORT tuned for Baddy's sampling regime (TASK-031).
+#
+# The worker feeds the tracker ~6 Hz SEEKED frames (BADDY_SAMPLE_FPS), not a
+# contiguous 30 fps stream, so every threshold here is chosen for large
+# inter-sample displacement and a static tripod camera:
+#   - gmc_method none: global motion compensation is pure overhead on a tripod
+#     and actively wrong across seeked frames.
+#   - track_buffer 60 samples ≈ 10 s of wall time at 6 Hz — players occlude each
+#     other at the net for long stretches in doubles.
+#   - match_thresh 0.85: consecutive samples overlap less at 6 Hz, so IoU-based
+#     association must be more permissive than the stock 30 fps 0.8.
+#   - with_reid + model auto: reuse the detector's own features for appearance
+#     matching (near-zero cost, ultralytics ≥8.3.114) — motion-only ByteTrack
+#     swaps ids whenever doubles partners overlap.
+#   - proximity_thresh 0.25: let appearance rescue matches down to IoU 0.25 —
+#     Kalman-predicted boxes drift at 6 Hz, strict IoU gating would starve ReID.
+#   - appearance_thresh 0.6: embedding distance ≤0.4 counts as the same player;
+#     stricter values block re-acquisition after occlusion (same-team kit means
+#     appearance separates near/far pairs, not identical-shirt partners).
+tracker_type: botsort
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.3
+track_buffer: 60
+match_thresh: 0.85
+fuse_score: True
+gmc_method: none
+proximity_thresh: 0.25
+appearance_thresh: 0.6
+with_reid: True
+model: auto

@@ -15,6 +15,7 @@ Per rally:
    Result: the shuttle and active player are contained AND the path has bounded
    acceleration — verified by validate.path_smoothness before any rendering.
 """
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -458,54 +459,138 @@ def _nearest(samples: list[dict], t: float, max_gap: float = 0.8) -> dict | None
     return best if abs(float(best.get("t", 0.0)) - t) <= max_gap else None
 
 
-def _two_player_tracks(player_frames: list, times) -> list:
-    """Per-frame [near, far] player [cx, cy, hw, hh] with memory, so a player is
-    held in place when YOLO misses it for a few frames. 'near' = lower in the
-    frame (closer to a back-court camera)."""
-    slots = [None, None]
-    res = []
-    for t in times:
-        pf = _nearest(player_frames, float(t), max_gap=0.6)
+def _group_player_tracks(player_frames: list, min_conf: float = 0.10) -> list[dict]:
+    """Group per-frame boxes into per-player tracks (TASK-031).
+
+    Prefers the worker's tracker ids (ByteTrack/BoT-SORT ``track_id``); boxes
+    without an id are greedily matched to the nearest live track by centroid +
+    apparent-height cost. Returns tracks as dicts of parallel numpy arrays
+    (ts, cx, cy, hw, hh) sorted by time.
+    """
+    tracks: dict = {}          # key -> {"ts": [], "cx": [], ...}
+    live: dict = {}            # key -> (cx, cy, h, t_last) for greedy matching
+    anon = 0
+    for f in (player_frames or []):
+        try:
+            t = float(f.get("t", 0.0))
+        except (TypeError, ValueError):
+            continue
         dets = []
-        for b in (pf or {}).get("boxes", []):
-            if b.get("confidence", 0) < 0.10:
+        for b in f.get("boxes", []):
+            if b.get("confidence", 0) < min_conf:
                 continue
-            dets.append([(float(b["x1"]) + float(b["x2"])) / 2,
-                         (float(b["y1"]) + float(b["y2"])) / 2,
-                         (float(b["x2"]) - float(b["x1"])) / 2,
-                         (float(b["y2"]) - float(b["y1"])) / 2])
-        if dets:
-            if slots[0] is None and slots[1] is None:
-                dets.sort(key=lambda d: d[1])
-                slots[1] = list(dets[0])                              # far = highest
-                slots[0] = list(dets[-1]) if len(dets) > 1 else None  # near = lowest
+            try:
+                cx = (float(b["x1"]) + float(b["x2"])) / 2
+                cy = (float(b["y1"]) + float(b["y2"])) / 2
+                hw = (float(b["x2"]) - float(b["x1"])) / 2
+                hh = (float(b["y2"]) - float(b["y1"])) / 2
+            except (KeyError, TypeError, ValueError):
+                continue
+            tid = b.get("track_id")
+            dets.append((cx, cy, hw, hh, int(tid) if isinstance(tid, (int, float)) else None))
+        matched: set = set()
+        for cx, cy, hw, hh, tid in dets:
+            if tid is not None:
+                key = ("w", tid)
             else:
-                taken = [False] * len(dets)
-                for s in range(2):
-                    if slots[s] is None:
+                # Greedy match to the nearest live track; the gate widens with the
+                # sample gap (players cover real court between sparse samples).
+                best, best_cost = None, None
+                for k, (px, py, ph, pt) in live.items():
+                    if k in matched:
                         continue
-                    best, bd = -1, 0.16 ** 2
-                    for k, d in enumerate(dets):
-                        if taken[k]:
-                            continue
-                        dd = (d[0] - slots[s][0]) ** 2 + (d[1] - slots[s][1]) ** 2
-                        if dd < bd:
-                            bd, best = dd, k
-                    if best >= 0:
-                        taken[best] = True
-                        slots[s] = [0.4 * slots[s][j] + 0.6 * dets[best][j] for j in range(4)]
-                for k, d in enumerate(dets):
-                    if taken[k]:
-                        continue
-                    if slots[0] is None:
-                        slots[0] = list(d)
-                    elif slots[1] is None:
-                        slots[1] = list(d)
-        a, b = slots
-        if a and b and a[1] < b[1]:        # keep near = lower (larger cy)
-            slots = [b, a]
-        res.append((list(slots[0]) if slots[0] else None,
-                    list(slots[1]) if slots[1] else None))
+                    dt = max(0.0, t - pt)
+                    gate = min(0.5, 0.18 + 0.3 * max(0.0, dt - 0.2))
+                    cost = math.hypot(cx - px, cy - py) + 0.5 * abs(2 * hh - ph)
+                    if cost <= gate and (best_cost is None or cost < best_cost):
+                        best, best_cost = k, cost
+                if best is None:
+                    key = ("a", anon)
+                    anon += 1
+                else:
+                    key = best
+            matched.add(key)
+            tr = tracks.setdefault(key, {"ts": [], "cx": [], "cy": [], "hw": [], "hh": []})
+            tr["ts"].append(t)
+            tr["cx"].append(cx)
+            tr["cy"].append(cy)
+            tr["hw"].append(hw)
+            tr["hh"].append(hh)
+            live[key] = (cx, cy, 2 * hh, t)
+    out = []
+    for tr in tracks.values():
+        order = np.argsort(np.asarray(tr["ts"]))
+        out.append({k: np.asarray(tr[k], np.float64)[order] for k in tr})
+    return out
+
+
+def _track_at(tr: dict, t: float, hold: float = 0.35, max_gap: float = 1.0) -> list | None:
+    """Linearly interpolated [cx, cy, hw, hh] of one track at time t, or None
+    when the track has no sample close enough — an expired track constrains
+    nothing (the old slot logic held ghost players for the rest of the rally)."""
+    ts = tr["ts"]
+    j = int(np.searchsorted(ts, t))
+    left = j - 1 if j - 1 >= 0 else None
+    right = j if j < len(ts) else None
+    if left is not None and right is not None and (ts[right] - ts[left]) <= max_gap:
+        span = float(ts[right] - ts[left])
+        w = 0.0 if span <= 1e-6 else (t - ts[left]) / span
+        return [float(tr[k][left] * (1 - w) + tr[k][right] * w) for k in ("cx", "cy", "hw", "hh")]
+    if left is not None and (t - ts[left]) <= hold:
+        return [float(tr[k][left]) for k in ("cx", "cy", "hw", "hh")]
+    if right is not None and (ts[right] - t) <= hold:
+        return [float(tr[k][right]) for k in ("cx", "cy", "hw", "hh")]
+    return None
+
+
+def _two_player_tracks(player_frames: list, times) -> list:
+    """Per-frame [near, far] player [cx, cy, hw, hh] from continuous tracks
+    (TASK-031). 'near' = lower in the frame (closer to a back-court camera).
+
+    Replaces the old 2-slot nearest-sample heuristic, which (a) ignored worker
+    tracker ids and re-derived identity from scratch, (b) stair-stepped between
+    ~6 Hz samples with no interpolation ('the camera is behind the player'),
+    (c) never expired slots — a ghost player constrained pan/zoom for the rest
+    of the rally, and (d) hopped the followed anchor between doubles partners.
+    near/far selection now carries hysteresis: the anchor only changes when a
+    different track is decisively lower/higher in frame, so partners crossing
+    in depth don't teleport the camera.
+    """
+    tracks = _group_player_tracks(player_frames)
+    res = []
+    near_key = far_key = None
+    for t in times:
+        t = float(t)
+        active = []
+        for idx, tr in enumerate(tracks):
+            pos = _track_at(tr, t)
+            if pos is not None:
+                active.append((idx, pos))
+        if not active:
+            near_key = far_key = None
+            res.append((None, None))
+            continue
+        hi = max(active, key=lambda a: a[1][1])   # largest cy = near court
+        cur = {idx: pos for idx, pos in active}
+        if len(active) == 1:
+            near_key, far_key = hi[0], None
+            res.append((list(hi[1]), None))
+            continue
+        # Hysteresis: keep the previous near/far track unless a challenger is
+        # decisively (>0.05 normalized) lower/higher in the frame.
+        if near_key in cur and hi[0] != near_key and (hi[1][1] - cur[near_key][1]) < 0.05:
+            near = (near_key, cur[near_key])
+        else:
+            near = hi
+        far_cands = [(i, p) for i, p in active if i != near[0]]
+        lo = min(far_cands, key=lambda a: a[1][1])
+        if far_key in cur and far_key != near[0] and lo[0] != far_key \
+                and (cur[far_key][1] - lo[1][1]) < 0.05:
+            far = (far_key, cur[far_key])
+        else:
+            far = lo
+        near_key, far_key = near[0], far[0]
+        res.append((list(near[1]), list(far[1])))
     return res
 
 
