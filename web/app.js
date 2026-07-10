@@ -617,7 +617,6 @@ function openStudio(item) {
   studio.selectedLayer = "reel";
   resetCanvas();
   _lastCamCenter = _camSmooth = null;
-  for (const k of Object.keys(_playerSmooth)) delete _playerSmooth[k];
   studio.editorState = loadEditorState(item);
   $("studio").hidden = false;
   $("studioFile").textContent = [item.filename, item.sport].filter(Boolean).join(" · ");
@@ -1731,7 +1730,6 @@ function stateChanged(save = true) {
 /* ---------- TASK-014: configurable virtual camera (targets + keyframes) ---------- */
 let _lastCamCenter = null;
 let _camSmooth = null;      // {x,y,t} temporally-smoothed camera centre
-const _playerSmooth = {};   // id -> {x,y,w,h,t} temporally-smoothed player boxes
 
 // Frame-rate-independent exponential smoother for a normalized point/box. Eases the
 // kept `state` toward `target` with time constant `tau` seconds (bigger = smoother,
@@ -1997,9 +1995,20 @@ function interpTrackPoint(track, t, window = 0.55, maxGap = 0.6) {
   return Math.abs(Number(n.t) - t) <= window ? n : null;
 }
 
-// Per-id box interpolation between two sampled frames. An id present on only
-// one side holds its position (better than blinking off for 100ms).
-function interpPlayerBoxes(frames, t, window = 1.0, maxGap = 1.2) {
+// Per-id box interpolation between two sampled frames. Unmatched ids are held
+// only briefly (TASK-034): when the tracker relabels players across a dropout
+// ({1,2} → {3,4}), unioning BOTH sides drew two players as four boxes at the
+// midpoint, and holding a vanished id across the whole bracket kept a stale
+// box on empty court. A one-sided id now shows only (a) within BOX_HOLD_SEC
+// of the frame that actually observed it AND (b) on that frame's side of the
+// bracket midpoint — a clean handoff, never a union.
+const BOX_HOLD_SEC = 0.3;
+function _holdSides(tA, tB, t) {
+  const dtA = t - tA, dtB = tB - t, half = (tB - tA) / 2;
+  return { a: dtA <= BOX_HOLD_SEC && dtA <= half,
+           b: dtB <= BOX_HOLD_SEC && dtB < half };
+}
+function interpPlayerBoxes(frames, t, window = 0.6, maxGap = 0.9) {
   if (!frames || !frames.length) return [];
   const [i, j] = _bracket(frames, t);
   const A = frames[i], B = frames[j];
@@ -2009,11 +2018,12 @@ function interpPlayerBoxes(frames, t, window = 1.0, maxGap = 1.2) {
   };
   if (i === j || Number(B.t) - Number(A.t) > maxGap) return nearest();
   const k = (t - Number(A.t)) / (Number(B.t) - Number(A.t));
+  const hold = _holdSides(Number(A.t), Number(B.t), t);
   const after = new Map((B.boxes || []).map(b => [b.id, b]));
   const out = [];
   for (const a of (A.boxes || [])) {
     const b = after.get(a.id);
-    if (!b) { out.push(a); continue; }
+    if (!b) { if (hold.a) out.push(a); continue; }
     after.delete(a.id);
     out.push({
       id: a.id,
@@ -2024,13 +2034,16 @@ function interpPlayerBoxes(frames, t, window = 1.0, maxGap = 1.2) {
       h: Number(a.h) + (Number(b.h) - Number(a.h)) * k,
     });
   }
-  after.forEach(b => out.push(b));
+  after.forEach(b => { if (hold.b) out.push(b); });
   return out;
 }
 
 // Pose interpolation: match people by id, lerp the 17 keypoints index-wise
-// (and the bbox), so skeletons glide between sparse samples.
-function interpPoseFrame(frames, t, window = 1.0, maxGap = 1.2) {
+// (and the bbox), so skeletons glide between sparse samples. Same TASK-034
+// hold rule as interpPlayerBoxes: an id observed on only one side of the
+// bracket renders only within BOX_HOLD_SEC of that observation — no union of
+// relabeled ids, no skeleton parked on empty court.
+function interpPoseFrame(frames, t, window = 0.6, maxGap = 0.9) {
   if (!frames || !frames.length) return null;
   const [i, j] = _bracket(frames, t);
   const A = frames[i], B = frames[j];
@@ -2040,17 +2053,21 @@ function interpPoseFrame(frames, t, window = 1.0, maxGap = 1.2) {
   };
   if (i === j || Number(B.t) - Number(A.t) > maxGap) return nearest();
   const k = (t - Number(A.t)) / (Number(B.t) - Number(A.t));
+  const hold = _holdSides(Number(A.t), Number(B.t), t);
   const after = new Map((B.people || []).map(p => [p.id, p]));
   const people = [];
   const lerp = (a, b) => a + (b - a) * k;
   for (const pa of (A.people || [])) {
     const pb = after.get(pa.id);
-    if (!pb || !Array.isArray(pa.keypoints) || !Array.isArray(pb.keypoints)) {
-      people.push(pa);
-      if (pb) after.delete(pa.id);
+    if (!pb) {
+      if (hold.a) people.push(pa);
       continue;
     }
     after.delete(pa.id);
+    if (!Array.isArray(pa.keypoints) || !Array.isArray(pb.keypoints)) {
+      people.push(t - Number(A.t) <= Number(B.t) - t ? pa : pb);
+      continue;
+    }
     const kp = pa.keypoints.map((ka, n) => {
       const kb = pb.keypoints[n];
       if (!kb) return ka;
@@ -2072,7 +2089,7 @@ function interpPoseFrame(frames, t, window = 1.0, maxGap = 1.2) {
     }
     people.push(person);
   }
-  after.forEach(p => people.push(p));
+  after.forEach(p => { if (hold.b) people.push(p); });
   return { t, people };
 }
 
@@ -2175,18 +2192,13 @@ function currentShuttlePoint(ctx = trackContext(), window = 0.55, maxGap = 0.6) 
   return null;
 }
 
-// Player boxes smoothed over time (per id) so the overlay glides instead of snapping
-// between sparse samples. Snaps on a big jump (new detection / rally cut).
+// Player boxes at the playhead. interpPlayerBoxes already yields continuous
+// motion between real samples; the extra wall-clock EMA (~140 ms tau) that
+// used to sit on top added visible lag behind fast lunges and fabricated
+// glide during dropouts — the "box trailing the player" effect (TASK-034).
+// The name stays: call sites don't care how the boxes are produced.
 function smoothedPlayerBoxes(ctx = trackContext()) {
-  const raw = currentPlayers(ctx);
-  const live = new Set(raw.map(b => Number(b.id)));
-  for (const k of Object.keys(_playerSmooth)) if (!live.has(Number(k))) delete _playerSmooth[k];
-  return raw.map(b => {
-    const s = smoothToward(_playerSmooth[b.id], { x: +b.x, y: +b.y, w: +b.w, h: +b.h },
-                           ["x", "y", "w", "h"], 0.14, 0.35);
-    _playerSmooth[b.id] = s;
-    return { ...b, x: s.x, y: s.y, w: s.w, h: s.h };
-  });
+  return currentPlayers(ctx);
 }
 
 // The shuttle's ACTUAL recent trajectory (last `windowSec` of tracked points up to the
@@ -2198,7 +2210,10 @@ function smoothedPlayerBoxes(ctx = trackContext()) {
 // wasn't seen, nothing should be drawn.
 // Past positions are projected through the CURRENT crop (they are places in space,
 // not time) — points that have scrolled out of the crop just drop off the trail.
-const TRAIL_MAX_STEP_SEC = 0.35;   // ~3 missed samples at the ≤10Hz track rate
+// Server contract (app/main.py SHUTTLE_TRACK_HZ/SHUTTLE_GAP_SEC, TASK-034):
+// in-segment public spacing is ≤0.33s, so anything above 0.35s here is a REAL
+// detector dropout — never a decimation artifact.
+const TRAIL_MAX_STEP_SEC = 0.35;
 const TRAIL_MAX_STEP_DIST = 0.22;  // normalized frame units between neighbours
 function recentShuttleScreenPoints(ctx, windowSec = 0.7) {
   if (!ctx) return [];
@@ -2394,7 +2409,9 @@ function renderPoseOverlay(pose, po, ctx) {
   for (const person of people) {
     const pid = Number(person.id || 0) % 4;
     const pts = person.keypoints.map(k => {
-      if (Number(k.confidence || 0) < 0.12) return null;
+      // Matches the One-Euro gate (app/pipeline/smooth.py, 0.15): keypoints
+      // below it bypass the smoother, so rendering them drew raw jitter.
+      if (Number(k.confidence || 0) < 0.15) return null;
       const s = trackPointToScreen(k.x, k.y, ctx);
       return s ? { x: s.left / 100 * fw, y: s.top / 100 * fh, nx: Number(k.x), ny: Number(k.y) } : null;
     });
