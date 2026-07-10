@@ -622,7 +622,13 @@ function openStudio(item) {
   $("studio").hidden = false;
   $("studioFile").textContent = [item.filename, item.sport].filter(Boolean).join(" · ");
   $("studioDownload").href = item.video;
+  // Landscape needs the un-cropped source proxy; grey the toggle out (instead of
+  // a silent no-op) when this reel doesn't have one.
+  const lsBtn = $("aspectToggle").querySelector('[data-aspect="landscape"]');
+  lsBtn.disabled = !item.proxy;
+  lsBtn.title = item.proxy ? "" : "source video isn't available for this reel";
   setPreviewAspect("portrait");
+  armOverlayHistory(`#studio/${encodeURIComponent(item.id || "draft")}`);
   document.body.style.overflow = "hidden";
   initEdit();
   renderCoachbar(item);
@@ -789,8 +795,8 @@ function setStudioMode(mode) {
     return;
   }
   const v = $("stVideo");
-  v.src = src;
   v.onerror = () => { $("tpHint").textContent = "video failed to load — try the other view"; };
+  setStageVideo(src, null);   // no-op reload guard + reel↔source playhead mapping
   v.play().catch(() => {});
   buildTimeline();
   const hasAll = studio.item.all_rallies && studio.item.all_rallies.length;
@@ -2103,12 +2109,16 @@ function currentPlayers(ctx = trackContext()) {
   return [];
 }
 
-function currentShuttlePoint(ctx = trackContext()) {
+// `window`/`maxGap` pass through to interpTrackPoint: the defaults suit a
+// follow-camera target (hold through brief dropouts); the visible overlay passes
+// tighter values so the graphic hides during real dropouts instead of freezing
+// in place or gliding across the gap.
+function currentShuttlePoint(ctx = trackContext(), window = 0.55, maxGap = 0.6) {
   if (!ctx) return null;
-  if (ctx.seg) return interpTrackPoint(((ctx.seg.vision || {}).shuttle_track || []), ctx.sourceT);
+  if (ctx.seg) return interpTrackPoint(((ctx.seg.vision || {}).shuttle_track || []), ctx.sourceT, window, maxGap);
   if (ctx.kind === "source") {
     for (const seg of ctx.segs) {
-      const p = interpTrackPoint(((seg.vision || {}).shuttle_track || []), ctx.sourceT);
+      const p = interpTrackPoint(((seg.vision || {}).shuttle_track || []), ctx.sourceT, window, maxGap);
       if (p) return p;
     }
   }
@@ -2131,8 +2141,15 @@ function smoothedPlayerBoxes(ctx = trackContext()) {
 
 // The shuttle's ACTUAL recent trajectory (last `windowSec` of tracked points up to the
 // playhead), mapped to screen %, for a real motion trail instead of a fixed bar.
+// Only the CONTIGUOUS run of detections ending at the playhead is drawn: walking
+// back from the newest sample, a temporal hole (detector dropout) or a spatial jump
+// (TrackNet re-locking somewhere else) ends the trail. Without this, the two points
+// bracketing a gap got joined by one long straight "laggy" line — where the shuttle
+// wasn't seen, nothing should be drawn.
 // Past positions are projected through the CURRENT crop (they are places in space,
 // not time) — points that have scrolled out of the crop just drop off the trail.
+const TRAIL_MAX_STEP_SEC = 0.35;   // ~3 missed samples at the ≤10Hz track rate
+const TRAIL_MAX_STEP_DIST = 0.22;  // normalized frame units between neighbours
 function recentShuttleScreenPoints(ctx, windowSec = 0.7) {
   if (!ctx) return [];
   let track = null;
@@ -2144,11 +2161,20 @@ function recentShuttleScreenPoints(ctx, windowSec = 0.7) {
     }
   }
   if (!track) return [];
-  return track
+  const pts = track
     .filter(p => Number(p.t) <= ctx.sourceT + 1e-3 && Number(p.t) >= ctx.sourceT - windowSec && Number(p.confidence || 0) >= 0.3)
-    .sort((a, b) => a.t - b.t)
-    .map(p => trackPointToScreen(p.x, p.y, ctx))
-    .filter(Boolean);
+    .sort((a, b) => a.t - b.t);
+  const run = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i], newer = run[0];
+    if (newer) {
+      const dt = Number(newer.t) - Number(p.t);
+      const jump = Math.hypot(Number(newer.x) - Number(p.x), Number(newer.y) - Number(p.y));
+      if (dt > TRAIL_MAX_STEP_SEC || jump > TRAIL_MAX_STEP_DIST) break;
+    }
+    run.unshift(p);
+  }
+  return run.map(p => trackPointToScreen(p.x, p.y, ctx)).filter(Boolean);
 }
 
 // Comet-style trail: per-segment opacity and width ramp from the oldest point to
@@ -2196,9 +2222,11 @@ function updateOverlayPreview() {
   if (courtSvg) parts.push(courtSvg);
   // Shuttle: draw ONLY when the shuttle is actually tracked at the current time —
   // no fixed-default/last-position marker (that was the phantom "circle"). The trail
-  // follows the shuttle's real recent path, not a fixed-offset bar.
+  // follows the shuttle's real recent path, not a fixed-offset bar. Tight
+  // window/maxGap so the graphic disappears during detector dropouts (>0.3s)
+  // instead of freezing or slowly gliding across the gap.
   const sh = state.overlays.shuttle;
-  const p = (sh.enabled && ctx) ? currentShuttlePoint(ctx) : null;
+  const p = (sh.enabled && ctx) ? currentShuttlePoint(ctx, 0.3, 0.35) : null;
   const pos = p ? trackPointToScreen(p.x, p.y, ctx) : null;
   if (pos) {
     if (sh.trail) parts.push(shuttleTrailSvg(sh, ctx));
@@ -2773,34 +2801,87 @@ function canvasZoomAt(clientX, clientY, factor) {
   stage.addEventListener("pointercancel", endPan);
 })();
 
+/* ---------- stage video source management ----------
+The stage <video> flips between two different FILES with two different clocks:
+the rendered reel (concatenated rally windows) and the source proxy (raw source
+time). Swapping must (a) skip the reload when the file is unchanged — a .src
+assignment always restarts the element at 0:00 with a black flash — and
+(b) translate the playhead between the two clocks: carrying a raw currentTime
+across lands on an unrelated frame (usually the source's black lead-in), which
+read as "clicking Landscape does nothing". */
+const _fileOf = (u) => (u || "").split("?")[0].split("/").pop();
+
+// Which FILE the stage video is showing right now (by URL, not by UI state —
+// during a mode/aspect transition the two can disagree). Null before first load.
+function displayedFileKind() {
+  const f = _fileOf($("stVideo").currentSrc);
+  if (!f || !studio.item) return null;
+  return f === _fileOf(studio.item.video) ? "reel" : "source";
+}
+
+// Reel time ↔ source time through the rally cut map.
+function mapTimeForKind(t, fromKind, toKind) {
+  if (fromKind === toKind) return t;
+  const segs = reelSegments();
+  if (!segs.length) return t;
+  if (fromKind === "reel") {
+    const seg = segs.find(s => t >= s.t0 && t <= s.t1)
+      || segs.reduce((a, s) => (s.t0 <= t ? s : a), segs[0]);
+    return seg.sourceStart + Math.max(0, Math.min(t, seg.t1) - seg.t0);
+  }
+  // source → reel: inside a rally window the same moment stays on screen;
+  // between rallies snap to the next cut (or the reel start past the last one).
+  let next = null;
+  for (const s of segs) {
+    const end = s.sourceStart + (s.t1 - s.t0);
+    if (t >= s.sourceStart && t <= end) return s.t0 + (t - s.sourceStart);
+    if (s.sourceStart > t && (!next || s.sourceStart < next.sourceStart)) next = s;
+  }
+  return next ? next.t0 : 0;
+}
+
+// Point the stage video at `src` if it isn't already, carrying the playhead
+// across the clock change and preserving play state. `onReady` runs once the
+// video is usable (immediately when no swap was needed).
+function setStageVideo(src, onReady) {
+  const v = $("stVideo");
+  if (!src || _fileOf(v.currentSrc) === _fileOf(src)) { if (onReady) onReady(); return; }
+  const fromKind = displayedFileKind();
+  const toKind = _fileOf(src) === _fileOf(studio.item && studio.item.video) ? "reel" : "source";
+  const t = fromKind ? mapTimeForKind(v.currentTime || 0, fromKind, toKind) : 0;
+  const playing = fromKind && !v.paused && !v.ended;
+  v.src = src;
+  v.addEventListener("loadedmetadata", () => {
+    try { v.currentTime = Math.max(0, Math.min(t, (v.duration || t) - 0.01)); } catch { /* ignore */ }
+    if (playing) v.play().catch(() => {});
+    if (onReady) onReady();
+  }, { once: true });
+}
+
 // Preview aspect: Portrait (9:16 reel output) vs Landscape (the source video's
 // native aspect — see the full uploaded landscape footage to reframe it).
 function setPreviewAspect(aspect) {
-  studio.previewAspect = aspect;
   const frame = $("stageFrame"), v = $("stVideo");
+  if (aspect === "landscape" && !(studio.item && studio.item.proxy)) {
+    $("tpHint").textContent = "source video isn't available for this reel";
+    return;
+  }
+  studio.previewAspect = aspect;
   const landscape = aspect === "landscape";
   // Landscape = the ORIGINAL footage. The reel (item.video) is a 9:16 portrait crop, so
   // showing IT in a landscape frame just pillarboxes it. The proxy is the un-cropped
   // source, so Landscape always plays the proxy (and the timeline/overlays switch to
-  // SOURCE time — see effectiveMode). Swap the source if needed, keeping position.
-  const wantSrc = desiredVideoSrc();
-  const fileOf = (u) => (u || "").split("?")[0].split("/").pop();
+  // SOURCE time — see effectiveMode). setStageVideo maps the playhead across so the
+  // same moment stays on screen.
   const applyAR = () => {
     const realAR = (v.videoWidth && v.videoHeight) ? `${v.videoWidth}/${v.videoHeight}` : (landscape ? "16/9" : "9/16");
     frame.style.setProperty("--stage-ar", landscape ? realAR : "9/16");
+    $("canvasTag").textContent = landscape
+      ? (v.videoWidth ? `${v.videoWidth} × ${v.videoHeight}` : "source frame")
+      : "1080 × 1920";
     updateOverlayPreview();
   };
-  if (wantSrc && fileOf(v.currentSrc) !== fileOf(wantSrc)) {
-    const t = v.currentTime, playing = !v.paused;
-    v.src = wantSrc;
-    v.addEventListener("loadedmetadata", () => {
-      try { v.currentTime = Math.min(t, (v.duration || t) - 0.01); } catch { /* ignore */ }
-      if (playing) v.play().catch(() => {});
-      applyAR();
-    }, { once: true });
-  } else {
-    applyAR();
-  }
+  setStageVideo(desiredVideoSrc(), applyAR);
   frame.classList.toggle("landscape", landscape);
   $("aspectToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.aspect === aspect));
   $("tpHint").textContent = landscape ? "landscape · original frame · source time" : "";
@@ -2838,7 +2919,32 @@ function closeStudio() {
   document.body.style.overflow = "";
 }
 
-$("studioX").onclick = closeStudio;
+/* ---------- back-button flow (overlays own one history entry) ----------
+Opening the Studio (or the gallery preview modal) pushes ONE history entry, so
+the browser Back button closes the overlay and lands back on the page instead
+of leaving the site. X / Escape / backdrop route through history.back() so the
+entry never leaks; overlay→overlay transitions replace instead of stacking. */
+function armOverlayHistory(hash) {
+  const st = { baddyOverlay: true };
+  try {
+    if (history.state && history.state.baddyOverlay) history.replaceState(st, "", hash);
+    else history.pushState(st, "", hash);
+  } catch { /* history unavailable (sandboxed iframe) — Back just leaves, as before */ }
+}
+window.addEventListener("popstate", () => {
+  if (!$("modal").hidden) closeModal();
+  if (!$("studio").hidden) closeStudio();
+});
+// Close whichever overlay is open — through history when we own the top entry,
+// so the stack ends on the landing page either way.
+function dismissOverlays() {
+  if ($("modal").hidden && $("studio").hidden) return;
+  if (history.state && history.state.baddyOverlay) { history.back(); return; }
+  if (!$("modal").hidden) closeModal();
+  if (!$("studio").hidden) closeStudio();
+}
+
+$("studioX").onclick = dismissOverlays;
 $("modeReel").onclick = () => setStudioMode("reel");
 $("modeSource").onclick = () => setStudioMode("source");
 $("modeCompose").onclick = () => setStudioMode("compose");
@@ -2937,6 +3043,7 @@ function openModal(item) {
     shareHtml(item.id);
   bindShare($("modalMeta"), item);
   document.body.style.overflow = "hidden";
+  armOverlayHistory("#preview");
 }
 const closeModal = () => {
   $("modal").hidden = true;
@@ -2944,17 +3051,29 @@ const closeModal = () => {
   $("modalVideo").src = "";
   document.body.style.overflow = "";
 };
-$("modalX").onclick = closeModal;
-$("modal").onclick = (e) => { if (e.target === $("modal")) closeModal(); };
+$("modalX").onclick = dismissOverlays;
+$("modal").onclick = (e) => { if (e.target === $("modal")) dismissOverlays(); };
+// modal → Studio is an overlay→overlay hop: tear the modal down directly (no
+// history.back) and let openStudio REPLACE the overlay entry.
 $("modalStudio").onclick = () => { const it = modalItem; closeModal(); if (it) openStudioById(it.id); };
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") { closeModal(); closeStudio(); }
+  if (e.key === "Escape") dismissOverlays();
 });
 
 initWorkerOptions();
 loadQueue();
 loadGallery().then(() => {
   const rid = new URLSearchParams(location.search).get("reel");
+  const sid = (location.hash.match(/^#studio\/([\w.%-]+)/) || [])[1];
+  if (location.hash.startsWith("#studio") || location.hash === "#preview") {
+    // Reload landed on an overlay hash: reset to a clean landing entry so the
+    // reopened overlay pushes on top of it and Back returns to the landing page.
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+  if (sid) {
+    openStudioById(decodeURIComponent(sid));
+    return;
+  }
   if (rid) {
     const item = galleryItems.find(i => i.id === rid);
     if (item) {
