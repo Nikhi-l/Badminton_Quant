@@ -17,10 +17,16 @@
 #   - appearance_thresh 0.6: embedding distance ≤0.4 counts as the same player;
 #     stricter values block re-acquisition after occlusion (same-team kit means
 #     appearance separates near/far pairs, not identical-shirt partners).
+#   - new_track_thresh 0.18 / track_high_thresh 0.2: aligned with the DEPLOYED
+#     detector floor (template env YOLO_CONF=0.12, TASK-030). The tracker is
+#     reset at every rally start (TASK-034), so each rally must BIRTH its
+#     tracks; with the old 0.3 birth threshold a far doubles player detected at
+#     0.12–0.25 was visible to YOLO but could never start a track. Detections
+#     in [0.12, 0.18) still associate to live tracks via track_low_thresh.
 tracker_type: botsort
-track_high_thresh: 0.25
+track_high_thresh: 0.2
 track_low_thresh: 0.1
-new_track_thresh: 0.3
+new_track_thresh: 0.18
 track_buffer: 60
 match_thresh: 0.85
 fuse_score: True

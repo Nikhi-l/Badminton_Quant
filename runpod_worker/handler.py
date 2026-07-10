@@ -24,7 +24,7 @@ import requests
 import runpod
 
 CONTRACT = "baddy.vision.v1"
-WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "trackingv2-20260710")
+WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "phase0-20260711")
 SAMPLE_FPS = float(os.environ.get("BADDY_SAMPLE_FPS", "6"))
 MAX_FRAMES_PER_RALLY = int(os.environ.get("BADDY_MAX_FRAMES_PER_RALLY", "180"))
 YOLO_POSE_MODEL = os.environ.get("YOLO_POSE_MODEL",
@@ -227,32 +227,57 @@ def _court_gate(entries: list, poly: np.ndarray | None) -> list:
     return gated or entries
 
 
+def _reset_player_tracker() -> None:
+    """Fresh tracker state (and id space) for a new rally.
+
+    ``model.track(persist=...)`` CANNOT do this: ultralytics registers its
+    tracking callbacks on the first ``.track()`` call only, and the callbacks
+    are ``functools.partial(..., persist=<that first value>)`` — the value is
+    permanent. The old ``persist=not reset_tracker`` pattern therefore baked in
+    ``persist=False`` (rallies start with a reset), which makes the
+    ``on_predict_start`` callback REBUILD the tracker on every subsequent
+    predict: fresh ids each sampled frame while id coverage still reads 100%
+    (TASK-034 P0). Every ``.track()`` call now passes ``persist=True`` and
+    rally boundaries reset the tracker here directly — ``BYTETracker.reset``
+    also resets the global id counter, so each rally starts at id 1.
+    """
+    predictor = getattr(_pose_model, "predictor", None)
+    for tracker in getattr(predictor, "trackers", None) or []:
+        try:
+            tracker.reset()
+        except Exception:  # noqa: BLE001 - a failed reset must not kill the rally
+            pass
+
+
 def _detect_pose(frame: np.ndarray, reset_tracker: bool = False,
                  court_poly: np.ndarray | None = None) -> tuple[list[dict], list[dict], float]:
     """Detect players + poses; identity comes from the ultralytics tracker.
 
-    TASK-024/031: model.track(persist=True) carries a track id across the
-    sampled frames of a rally (the tracker motion-models occlusions the app's
-    serve-time centroid heuristic cannot), emitted as ``track_id`` on each box
-    AND its paired pose. The tracker is BoT-SORT with native-feature ReID tuned
-    for the 6 Hz sample stream (botsort_baddy.yaml). ``reset_tracker=True`` on a
-    rally's first frame starts a fresh id space per rally AND clears a previous
-    rally's tracker failure so one transient exception doesn't silently degrade
-    every following rally. Falls back to plain predict when tracking is
-    unavailable (missing lap dependency etc.) — downstream keeps its heuristic.
+    TASK-024/031/034: model.track carries a track id across the sampled frames
+    of a rally (the tracker motion-models occlusions the app's serve-time
+    centroid heuristic cannot), emitted as ``track_id`` on each box AND its
+    paired pose. The tracker is BoT-SORT with native-feature ReID tuned for the
+    6 Hz sample stream (botsort_baddy.yaml). ``reset_tracker=True`` on a
+    rally's first frame starts a fresh id space per rally (explicit
+    ``_reset_player_tracker`` — see its docstring for why ``persist`` can't
+    express this) AND clears a previous rally's tracker failure so one
+    transient exception doesn't silently degrade every following rally. Falls
+    back to plain predict when tracking is unavailable (missing lap dependency
+    etc.) — downstream keeps its heuristic.
     """
     global _track_error
     if _pose_model is None:
         return [], [], 0.0
-    if reset_tracker and _track_error:
+    if reset_tracker:
         _track_error = ""
+        _reset_player_tracker()
     h, w = frame.shape[:2]
     result = None
     if not _track_error:
         try:
             result = _pose_model.track(frame, imgsz=YOLO_IMGSZ, conf=YOLO_CONF,
                                        device=DEVICE, verbose=False,
-                                       persist=not reset_tracker,
+                                       persist=True,
                                        tracker=TRACKER_CONFIG)[0]
         except Exception as exc:  # noqa: BLE001 - tracking is an enhancement
             _track_error = f"{type(exc).__name__}: {exc}"

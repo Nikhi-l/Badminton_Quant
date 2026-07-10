@@ -2,7 +2,10 @@ runpod>=1.7
 requests>=2.32
 numpy>=2.1
 opencv-python-headless>=4.10
-ultralytics>=8.3
+# Pinned (TASK-034): the tracker lifecycle fix relies on verified 8.4.70
+# callback semantics (register-once persist capture, BYTETracker.reset id
+# behavior); '>=8.3' let every image rebuild pick up silent tracker drift.
+ultralytics==8.4.70
 pandas>=2.0
 Pillow>=10.0
 tqdm>=4.66
