@@ -5,6 +5,98 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 18: Tracking v2 + 3D flow fixes + timeline redesign (TASK-031/032/033)
+**Date:** 2026-07-10
+**Goal:** The three user-reported quality gaps: "player tracking is very shitty",
+"pose tracking not good", "improve the timeline design", "fix the 3D environment
+mapping flow".
+**PRD:** §16 remediation (follow-ons to TASK-024/025/027/029/030), §8a editor anatomy.
+**Branches (stacked):** `feat/TASK-031-player-pose-tracking-v2` →
+`feat/TASK-032-court3d-flow` → `feat/TASK-033-timeline-redesign`, all off `0cae987`.
+
+**TASK-031 — why tracking looked bad (found in review, fixed):**
+- Phantom fallback boxes: worker+local injected two HARDCODED conf-0.12 player
+  boxes whenever YOLO whiffed a frame; they passed the canonicalize (≥0.05) and
+  camera (≥0.10) gates, steering the virtual camera to empty court and inflating
+  player_quality past the pq≥0.28 trust gate. Removed — empty frames are honest.
+- The camera ignored worker ByteTrack ids entirely (`_two_player_tracks` 2-slot
+  nearest-centroid heuristic): rebuilt on continuous per-player tracks — track_id
+  grouping, linear interpolation between ~6 Hz samples (was nearest-hold
+  stair-steps), ghost expiry (slots used to persist forever), near/far hysteresis
+  (anchor no longer teleports between crossing doubles partners).
+- Tracker upgrade: BoT-SORT + native-feature ReID (`botsort_baddy.yaml`) tuned
+  for the 6 Hz seeked-frame regime (gmc none, buffer 60 samples ≈10 s,
+  match 0.85, proximity 0.25, appearance 0.6); per-rally reset of the sticky
+  tracker-failure latch. Model default yolo26m→yolo26l-pose (l+m baked).
+- Court gating: person detections gated to the (22%-expanded) court polygon
+  BEFORE the top-4 cap on both backends, corners plumbed run.py→vision→payload;
+  fail-safe to ungated when a bad quad would blank the frame.
+- Identity plumbing: `_ids_from_worker` cliff 0.9→0.6 (one thin stretch used to
+  discard ALL tracker ids); `_relabel_merged` now requires spatial continuity —
+  height-only merging fused same-height doubles partners into one id.
+- Pose: One-Euro filter per (person id, keypoint) on the public `pose_track`
+  (`app/pipeline/smooth.py`); local path top-2→top-4; racquet caps 2→4.
+**Rollout note:** worker image rebuild required for the worker-side pieces
+(`gcloud builds submit --config runpod_worker/cloudbuild.yaml runpod_worker/
+--substitutions=_TAG=trackingv2-20260710` → `python
+scripts/runpod_update_endpoint_image.py --image …:trackingv2-20260710 --apply` →
+bounce workers 0→2). Contract is additive; old workers keep working, and all
+app-side fixes apply to old results too.
+
+**TASK-032 — 3D mapping flow (silent failures made loud, real bugs fixed):**
+- court.py: weak CV quad with Gemini declined was returned status "ok" at ANY
+  confidence and drove heatmaps/3D with garbage geometry → now
+  `low_confidence` below 0.35 (geometry kept for provisional display);
+  synthetic net from the homography for manual/Gemini courts (the "Net line"
+  toggle silently did nothing on them); `frame_wh` recorded.
+- run.py: manual corners calibrated vs SOURCE dims (was proxy); pipeline notes
+  when the court is missing/uncertain; slim non-ok `rally_3d` status on every
+  rally. main.py forwards those statuses; POST /court runs the LM fits in
+  `asyncio.to_thread` (it used to block the single event loop for seconds) and
+  returns per-rally statuses.
+- replay3d.js: honors `mirrored_frame` (legacy shuttle rendered x-mirrored vs
+  marionettes); resize-before-memo (stale stretched canvas); removed the dead
+  duplicated `break` that made the current-shot ribbon unreachable; 30 Hz
+  repaint bucket = smooth marionette/shuttle interpolation over the 12 Hz sim;
+  per-status empty-state text.
+- Studio UX: 3D empty state explains WHY + "Draw court corners" CTA
+  (cross-links to the Court layer + draw mode, pausing playback); Court layer
+  shows uncertain/not-detected as actionable text; recompute reports per-rally
+  outcomes; upload picker warns on degenerate quads the server silently drops
+  (and no longer sends them).
+
+**TASK-033 — timeline redesign (structural bugs, then polish):**
+- Lanes fit: pose + soundtrack lanes (incl. the entire waveform feature)
+  rendered into CLIPPED invisible space (202px row vs 240px content) — heights
+  rebudgeted to 170px, row 236px (mobile 208px + scrollable board).
+- Zoom: 80–99 was a dead range that desynced the playhead (%×scale vs a block
+  lane that can't shrink) → floor 1x, max 6x, % readout, cursor/playhead
+  anchoring, pinch/ctrl-wheel; playhead now pixel-positioned with edge-flip
+  chip + auto-follow; adaptive ruler density (≥70px labels; was ~60 colliding
+  labels on a 30-min source); per-SEGMENT selection; hover timecode ghost;
+  `,`/`.` frame-step; filmstrip capture cache (zoom rebuilds stop re-seeking
+  video); dead source-mode lanes removed; geometric lane icons.
+- Assets bumped to style v=34 / app v=35 / replay3d v=32.
+
+**Concurrent session note:** while TASK-033 was in flight another
+session/editor was working in the same checkout; its Studio changes are
+preserved verbatim in `4bc82f7` + `f5c65fd` + its own `0a87869` (landscape
+response, media HEAD route) — not part of these tasks.
+
+**Tests:** 102 passing (was 73): +19 TASK-031 (camera tracks, identity guards,
+one-euro, court gate, phantom tripwire), +5 TASK-032 (acceptance floor,
+synthetic net, status forwarding), +5 TASK-033 structural guards.
+**Verification commands:**
+- `./scripts/check.sh` → `102 passed`
+- `node --check web/app.js` → OK
+- Browser (live :8011 instance, viewport 1280×820, manual `studioTick()` ticks —
+  the preview pane reports `visibilityState=hidden` so rAF never fires): all six
+  lanes fully visible (soundtrack 34/34px, pose 24/24px — were 0px); playhead
+  pixel-exact at 3× zoom (1689px @ t=dur/2); zoom anchor exact
+  (scrollLeft 1126 after 1×→3× around center); hover ghost + per-seg selection +
+  source-mode lane set verified; 3D-layer "Draw court corners" CTA enters draw
+  mode with playback paused.
+
 ## Cycle 17: Production triage — GPU worker crash, render crash, doubles caps, retry (TASK-029)
 **Date:** 2026-07-08
 **Goal:** Fix the two crashes surfaced by real uploads and support doubles.

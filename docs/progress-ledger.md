@@ -5,8 +5,10 @@ docs commit after each functional slice.
 
 ## Current branch / mission
 - Main branch: `main` (protected; releasable; live at baddyai.com)
-- Active branch: `main` (all Cycle 13-15 branches ff-merged)
-- Current branch base SHA: `29af265` (Cycle 13 stack base)
+- Active branches (Cycle 18 stack, base `0cae987`):
+  `feat/TASK-031-player-pose-tracking-v2` → `feat/TASK-032-court3d-flow` →
+  `feat/TASK-033-timeline-redesign` (merge in that order; 033 also carries a
+  concurrent session's Studio commits `4bc82f7`/`f5c65fd`/`0a87869`)
 - **Deployed 2026-06-24:** the full editor/camera/queue sweep is LIVE on baddyai.com,
   plus a follow-up Studio polish deploy (`227e05a`, v=19 assets): real shuttle
   trail (was a stray green bar) + temporal smoothing (EMA, snap-on-cut) for the
@@ -43,6 +45,9 @@ docs commit after each functional slice.
 | 2026-07-07 | Manual court + racquet chain | Done + rolled out (Cycle 16) | TASK-027 — upload corner picker + Studio draw mode + court recompute endpoint (uservid3: 5 rallies gained 3D from drawn corners); racquet: custom→COCO-tennis-racket (wrist-gated)→candidates, racquet_track + overlay. Image `racquet-20260707` (yolo11s baked) on template `ic265brof1`, endpoint ready 2/unhealthy 0 |
 | 2026-07-08 | Production triage: GPU crash + render crash + doubles + retry | Done (Cycle 17) | TASK-029 — Hough unpack fix (GPU jobs were silently falling back to CPU), badge/_blend render crash fix, 2→4 player caps for doubles, retry endpoint + UI. Worker `doubles-20260708` |
 | 2026-07-08 | Doubles far-player detection (resolution) | **Done + verified** (Cycle 17b) | TASK-030 — root cause: 480p analysis proxy makes far doubles players ~20px (undetectable); cap 2→4 (TASK-029) necessary but not sufficient. Fix: separate higher-res `vision_proxy.mp4` (1080p, capped to source) for the GPU pose+shuttle pass only (Gemini/rally/motion stay 480p); `gpu.analyze` uploads whichever proxy passed, 480p fallback. Template env `YOLO_IMGSZ=1920`, `YOLO_CONF=0.12` (no rebuild). **Verified on IMG_0477: player_quality 0.44→0.63, max_boxes/frame 1→2-3 across all 3 rallies (was 1).** Far cluster of 3 overlapping players partial — 2 stable ids (near+far), not 4; closer camera / TASK-028 fine-tune is the ceiling. |
+| 2026-07-10 | Player + pose tracking v2 | On branch (Cycle 18) | TASK-031 — phantom conf-0.12 fallback boxes removed (they steered the camera to empty court); camera rebuilt on continuous tracks (worker track_id grouping, 6Hz interpolation, ghost expiry, near/far hysteresis); BoT-SORT+ReID tuned for 6Hz (`botsort_baddy.yaml`); court-polygon gating pre-cap; yolo26l-pose default; worker-id cliff 0.9→0.6 + spatial fragment-merge guard; One-Euro pose_track smoothing; local top-4; racquet caps 4. **Worker rebuild pending**: `_TAG=trackingv2-20260710` + template patch + worker bounce |
+| 2026-07-10 | 3D mapping flow | On branch (Cycle 18) | TASK-032 — weak-CV court now `low_confidence` (was silently "ok" → garbage 3D); slim non-ok `rally_3d` statuses to the UI; POST /court off the event loop + per-rally outcomes; replay3d bugs fixed (mirrored_frame, resize memo, dead shot-ribbon break, 30Hz visual lerp); Studio: 3D empty state explains why + Draw-corners CTA, degenerate-quad warning at upload |
+| 2026-07-10 | Timeline redesign | On branch (Cycle 18) | TASK-033 — pose+soundtrack lanes were clipped invisible (202px row vs 240px content) → 170px lane budget in a 236px row; zoom dead-range killed, pixel playhead + anchor-preserving 1–6x zoom + pinch; adaptive ruler; per-seg selection; hover ghost; frame-step keys; filmstrip cache. Browser-verified px-exact |
 
 ## Active priorities
 1. ~~Rebuild + redeploy the RunPod worker~~ **DONE 2026-07-01**: image
