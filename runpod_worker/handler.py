@@ -514,10 +514,10 @@ def _run_tracknet(video: Path, source_start: float) -> tuple[list[dict], float, 
     """Run qaz812345/TrackNetV3 predict.py when the repo and weights are baked in."""
     global _tracknet_error
     if not _tracknet_ready():
-        return [], 0.0, "not_configured"
+        return [], dict(_EMPTY_TRACK_METRICS), "not_configured"
     if TRACKNET_INPAINTNET_FILE and not Path(TRACKNET_INPAINTNET_FILE).exists():
         _tracknet_error = f"InpaintNet checkpoint missing: {TRACKNET_INPAINTNET_FILE}"
-        return [], 0.0, "missing_inpaintnet"
+        return [], dict(_EMPTY_TRACK_METRICS), "missing_inpaintnet"
 
     save_dir = video.parent / f"tracknet_{video.stem}"
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -545,16 +545,16 @@ def _run_tracknet(video: Path, source_start: float) -> tuple[list[dict], float, 
     except subprocess.CalledProcessError as exc:  # surface predict.py's own error
         tail = " | ".join((exc.output or "").strip().splitlines()[-4:])[:400]
         _tracknet_error = f"tracknet exit {exc.returncode}: {tail or '(no output)'}"
-        return [], 0.0, "failed"
+        return [], dict(_EMPTY_TRACK_METRICS), "failed"
     except Exception as exc:  # noqa: BLE001 - worker can fall back to motion shuttle.
         _tracknet_error = f"{type(exc).__name__}: {exc}"
-        return [], 0.0, "failed"
+        return [], dict(_EMPTY_TRACK_METRICS), "failed"
 
     meta = _video_meta(video)
     csv_path = save_dir / f"{video.stem}_ball.csv"
     if not csv_path.exists():
         _tracknet_error = f"missing TrackNet CSV: {csv_path.name}"
-        return [], 0.0, "missing_csv"
+        return [], dict(_EMPTY_TRACK_METRICS), "missing_csv"
 
     points: list[dict] = []
     with csv_path.open(newline="") as f:
@@ -572,13 +572,62 @@ def _run_tracknet(video: Path, source_start: float) -> tuple[list[dict], float, 
                 "t": round(source_start + frame / max(meta["fps"], 1.0), 3),
                 "x": _clamp01(x / max(meta["width"], 1)),
                 "y": _clamp01(y / max(meta["height"], 1)),
-                # TrackNetV3 CSV exposes visibility, not probability; confidence
-                # is conservative and final quality is coverage-gated.
+                # TrackNetV3 CSV exposes visibility, not probability; this is a
+                # fixed placeholder consumers threshold at ≥0.3, NOT a measured
+                # confidence. The rally-level quality is _track_metrics, which
+                # penalizes gaps/teleports instead of averaging this constant.
                 "confidence": 0.82,
                 "source": "tracknetv3",
             })
-    quality = _quality([p["confidence"] for p in points], max(2, int(meta["duration"] * meta["fps"] * 0.35)))
-    return points, quality, "ok" if points else "empty"
+    metrics = _track_metrics(points, meta["duration"], meta["fps"])
+    return points, metrics, "ok" if points else "empty"
+
+
+_EMPTY_TRACK_METRICS = {"coverage": 0.0, "longest_gap_sec": 0.0, "teleports": 0,
+                        "quality": 0.0}
+
+
+def _track_metrics(points: list[dict], duration: float, fps: float) -> dict:
+    """Honest shuttle-track score: coverage × continuity × stability (TASK-034).
+
+    The old score was mean(constant 0.82) × point coverage — a jerky track with
+    full coverage scored exactly 0.82 ("82%" in the UI) no matter how bad it
+    was. TrackNetV3's CSV exposes binary visibility only, so localization
+    accuracy is unmeasurable here (that needs the labelled bench); what IS
+    measurable from the track itself:
+      - coverage: kept points vs the expected visible-frame budget (as before;
+        the shuttle is genuinely invisible ~⅔ of a rally at 30 fps),
+      - longest_gap_sec: the longest unobserved stretch — occlusion around a
+        hit (≤0.5 s) is normal, only the excess penalizes,
+      - teleports: consecutive-point jumps no shuttle flies (>0.22 of the
+        frame within ~2 frames) — TrackNet re-locking on a light or a shirt.
+    """
+    n = len(points)
+    out = {"coverage": 0.0, "longest_gap_sec": round(max(duration, 0.0), 2),
+           "teleports": 0, "quality": 0.0}
+    if not n or duration <= 0:
+        return out
+    expected = max(2, int(duration * max(fps, 1.0) * 0.35))
+    coverage = min(1.0, n / expected)
+    longest_gap = 0.0
+    teleports = 0
+    for a, b in zip(points, points[1:]):
+        dt = float(b["t"]) - float(a["t"])
+        longest_gap = max(longest_gap, dt)
+        if dt <= 2.5 / max(fps, 1.0):
+            jump = math.hypot(float(b["x"]) - float(a["x"]),
+                              float(b["y"]) - float(a["y"]))
+            if jump > 0.22:
+                teleports += 1
+    gap_factor = _clamp01(1.0 - max(0.0, longest_gap - 0.5) / duration)
+    jump_factor = _clamp01(1.0 - 8.0 * teleports / max(n - 1, 1))
+    out.update({
+        "coverage": round(coverage, 3),
+        "longest_gap_sec": round(longest_gap, 2),
+        "teleports": teleports,
+        "quality": _clamp01(coverage * gap_factor * jump_factor),
+    })
+    return out
 
 
 def _sample_times(start: float, end: float) -> list[float]:
@@ -606,17 +655,18 @@ def _process_rally(cap, meta: dict, rally: dict, video_path: Path, workdir: Path
     end = min(meta["duration"], _num(rally.get("end"), start))
     times = _sample_times(start, end)
     tracknet_points: list[dict] = []
-    tracknet_quality = 0.0
+    tracknet_metrics = dict(_EMPTY_TRACK_METRICS)
     tracknet_status = "skipped" if not want_shuttle else "not_configured"
     if want_shuttle and _tracknet_ready():
         clip = workdir / f"rally_{int(_num(rally.get('rally_index'), 0)):02d}_tracknet.mp4"
         try:
             _cut_clip(video_path, clip, start, end)
-            tracknet_points, tracknet_quality, tracknet_status = _run_tracknet(clip, start)
+            tracknet_points, tracknet_metrics, tracknet_status = _run_tracknet(clip, start)
         except Exception as exc:  # noqa: BLE001
             global _tracknet_error
             _tracknet_error = f"{type(exc).__name__}: {exc}"
             tracknet_status = "failed"
+    tracknet_quality = tracknet_metrics["quality"]
     prev_gray = None
     frames = []
     first_pose_frame = True   # fresh ByteTrack id space per rally
@@ -678,6 +728,12 @@ def _process_rally(cap, meta: dict, rally: dict, video_path: Path, workdir: Path
             "status": tracknet_status,
             "points": len(tracknet_points),
             "quality": tracknet_quality,
+            # Score components, so "82%" can never again hide a jerky track:
+            # what fraction of expected frames were seen, the longest blind
+            # stretch, and the count of physically impossible jumps.
+            "coverage": tracknet_metrics["coverage"],
+            "longest_gap_sec": tracknet_metrics["longest_gap_sec"],
+            "teleports": tracknet_metrics["teleports"],
         },
         "racquet_candidate_samples": len([v for v in candidate_confs if v > 0]),
         "frames": frames,
