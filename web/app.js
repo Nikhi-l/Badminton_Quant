@@ -1458,6 +1458,12 @@ function r3dWhyNot() {
     return `The court is set, but ${n("no_track")} rall${n("no_track") === 1 ? "y has" : "ies have"} no TrackNet shuttle track — `
       + "select Shuttle = TrackNetV3 when uploading (or reprocess this job) to get 3D.";
   }
+  if (n("implausible")) {
+    return "The court is set and arcs were fitted, but every one violated physics "
+      + "(below the floor, through the net, or off the court) so it was rejected "
+      + "rather than shown — usually imprecise corners or a bad shuttle track. "
+      + "Redrawing the corners often fixes it.";
+  }
   if (n("no_fit") || n("bad_camera")) {
     return "The court is set but no ballistic fit matched the shuttle track — usually a "
       + "very short rally or imprecise corners. Redrawing the corners often fixes it.";
@@ -1479,7 +1485,7 @@ function renderLayerList() {
     { id: "shuttle", ico: "◉", title: "Shuttle FX", sub: `${styleLabel(state.overlays.shuttle.style)} · ${Math.round(state.overlays.shuttle.opacity * 100)}%`, state: state.overlays.shuttle.enabled ? "on" : "off" },
     { id: "pose", ico: "◇", title: "Players & pose", sub: `tracks · ${poseReadyCount()} rallies`, state: state.overlays.pose.enabled ? "on" : "off" },
     { id: "court", ico: "▦", title: "Court", sub: courtSub(), state: courtOf() ? (state.overlays.court.enabled ? "on" : "off") : (courtRawOf() && courtRawOf().status === "low_confidence" ? "fix" : "n/a") },
-    { id: "replay3d", ico: "▲", title: "3D replay", sub: (typeof replay3D !== "undefined" && replay3D.anyRally3d()) ? `reconstructed · sim ${(reelSegments().find(x => x.r && x.r.rally_3d && x.r.rally_3d.status === "ok") || { r: { rally_3d: { fps: 12 } } }).r.rally_3d.fps}fps` : (courtOf() ? "no reconstruction" : "needs court — draw corners"), state: (typeof replay3D !== "undefined" && replay3D.anyRally3d()) ? (state.overlays.replay3d.enabled ? "on" : "off") : "n/a" },
+    { id: "replay3d", ico: "▲", title: "3D replay (2.5D)", sub: (typeof replay3D !== "undefined" && replay3D.anyRally3d()) ? `reconstructed · sim ${(reelSegments().find(x => x.r && x.r.rally_3d && x.r.rally_3d.status === "ok") || { r: { rally_3d: { fps: 12 } } }).r.rally_3d.fps}fps` : (courtOf() ? "no reconstruction" : "needs court — draw corners"), state: (typeof replay3D !== "undefined" && replay3D.anyRally3d()) ? (state.overlays.replay3d.enabled ? "on" : "off") : "n/a" },
     { id: "soundtrack", ico: "♪", title: "Soundtrack", sub: "Current stitch bed", state: "fixed" },
   ];
   $("layerList").innerHTML = layers.map(l => `
@@ -1659,9 +1665,9 @@ function renderInspector() {
     const r3 = seg && seg.r.rally_3d;
     panel.innerHTML = `
       <div class="control-group">
-        <div class="control-title"><span>3D replay</span><label><input type="checkbox" id="r3dEnabled" ${r3o.enabled && has ? "checked" : ""} ${has ? "" : "disabled"}> Show</label></div>
+        <div class="control-title"><span>3D replay (2.5D)</span><label><input type="checkbox" id="r3dEnabled" ${r3o.enabled && has ? "checked" : ""} ${has ? "" : "disabled"}> Show</label></div>
         ${has ? `
-        <div class="control-hint muted">Monocular reconstruction: camera pose from the detected court, shuttle 3D from a drag-ballistic fit over the TrackNet rays. Simulation runs at ${r3 ? r3.fps : 12}fps (view interpolates); drag the panel to orbit, wheel to zoom.</div>
+        <div class="control-hint muted">Illustrative 2.5D: the shuttle arc is a monocular reconstruction (camera pose from the detected court, drag-ballistic fit over the TrackNet rays, physically gated) — player figures are camera-facing billboards, not measured 3D pose. Simulation runs at ${r3 ? r3.fps : 12}fps (view interpolates); drag the panel to orbit, wheel to zoom.</div>
         <div class="metric-list">
           <div class="metric"><b>${reelSegments().filter(x => x.r && x.r.rally_3d && x.r.rally_3d.status === "ok").length}</b><span>rallies reconstructed</span></div>
           <div class="metric"><b>${r3 ? r3.shots.length : 0}</b><span>shots (first rally)</span></div>
@@ -2531,8 +2537,10 @@ async function submitCourtDraw() {
     const st = resp.rally_statuses || [];
     const noTrack = st.filter(s => s.status === "no_track").length;
     const noFit = st.filter(s => s.status === "no_fit" || s.status === "bad_camera").length;
+    const implaus = st.filter(s => s.status === "implausible").length;
     let msg = `court saved — heatmaps updated · ${resp.rallies_3d}/${st.length || "?"} rall${resp.rallies_3d === 1 ? "y" : "ies"} reconstructed in 3D`;
     if (!resp.rallies_3d && noTrack) msg += ` · ${noTrack} without a TrackNet shuttle track (enable Shuttle=TrackNetV3 at upload)`;
+    else if (!resp.rallies_3d && implaus) msg += " · fits rejected as physically impossible — corners are likely imprecise, try redrawing";
     else if (!resp.rallies_3d && noFit) msg += " · no ballistic fit — corners may be imprecise, try redrawing";
     $("tpHint").textContent = msg;
     renderLayerList();

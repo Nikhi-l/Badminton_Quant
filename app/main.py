@@ -654,6 +654,10 @@ def _public_rally(rr: dict) -> dict:
             # for this rally and point at the fix (TASK-032).
             out["rally_3d"] = {"status": str(r3.get("status") or "failed"),
                                "message": str(r3.get("message") or "")[:200]}
+            if isinstance(r3.get("rejected"), dict) and r3["rejected"]:
+                # Which physical gates killed the fits (TASK-034): floor/net/
+                # bounds/speed/… — the Studio turns this into actionable copy.
+                out["rally_3d"]["rejected"] = r3["rejected"]
     vision = _compact_vision(rr.get("vision"))
     if vision:
         out["vision"] = vision
@@ -867,6 +871,8 @@ async def job_set_court(job_id: str, request: Request):
                     # the Studio explains WHY each rally has no 3D (TASK-032).
                     rr["rally_3d"] = {"status": str(r3d.get("status") or "failed"),
                                       "message": str(r3d.get("message") or "")[:200]}
+                    if isinstance(r3d.get("rejected"), dict) and r3d["rejected"]:
+                        rr["rally_3d"]["rejected"] = r3d["rejected"]
                 statuses.append({"start": rr.get("start"),
                                  "status": rr["rally_3d"]["status"],
                                  "shots": len(r3d.get("shots") or [])

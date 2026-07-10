@@ -178,6 +178,51 @@ def test_reconstruction_ignores_raw_teleports():
     assert clean["status"] == out["status"] == "ok"
     assert len(out["shots"]) == len(clean["shots"]) == 1
     assert abs(out["shots"][0]["residual_px"] - clean["shots"][0]["residual_px"]) < 0.5
+    # Accepted shots are gate-clean and the rejection tally is exposed.
+    assert "gate" not in out["shots"][0]
+    assert out["rejected"] == {}
+
+
+def test_shot_gate_rejects_each_physical_violation():
+    """TASK-034 P0: low reprojection residual ≠ correct 3D — every accepted
+    shot must also be physically possible. One test per gate reason."""
+    p0 = np.array([3.0, 10.0, 2.0])
+    v0 = np.array([0.0, -8.0, 3.0])
+    ok = np.array([[3.0, 10.0, 2.0], [3.0, 8.0, 2.5], [3.0, 6.0, 2.3], [3.0, 4.0, 1.6]])
+    assert rally3d._shot_gate(p0, v0, ok) is None
+
+    under = ok.copy()
+    under[-1, 2] = -0.4                      # dips below the floor
+    assert rally3d._shot_gate(p0, v0, under) == "floor"
+
+    high = ok.copy()
+    high[0, 2] = 5.0
+    assert rally3d._shot_gate(np.array([3.0, 10.0, 5.0]), v0, high) == "contact_height"
+
+    assert rally3d._shot_gate(p0, np.array([0.0, -58.0, 10.0]), ok) == "speed"
+
+    off = ok.copy()
+    off[:, 0] = 12.0                         # 6 m outside the sideline
+    assert rally3d._shot_gate(np.array([12.0, 10.0, 2.0]), v0, off) == "bounds"
+
+    through_net = np.array([[3.0, 8.0, 0.8], [3.0, 5.0, 0.5], [3.0, 4.0, 0.4]])
+    assert rally3d._shot_gate(np.array([3.0, 8.0, 0.8]), v0, through_net) == "net"
+
+
+def test_prune_discontinuous_drops_higher_residual_shot():
+    def mk(t0, t1, x, res):
+        return {"t0": t0, "t1": t1, "residual_px": res,
+                "samples": [{"t": t0, "x": x, "y": 5.0, "z": 2.0},
+                            {"t": t1, "x": x, "y": 5.0, "z": 2.0}]}
+
+    a = mk(1.0, 2.0, 1.0, res=2.0)
+    b = mk(2.1, 3.0, 5.0, res=9.0)   # starts 4 m from a's end, 0.1 s later
+    kept, dropped = rally3d._prune_discontinuous([a, b])
+    assert dropped == 1 and kept == [a]
+
+    c = mk(4.0, 5.0, 5.0, res=9.0)   # far apart in time: not each other's problem
+    kept, dropped = rally3d._prune_discontinuous([a, c])
+    assert dropped == 0 and len(kept) == 2
 
 
 def test_reconstruction_degrades_gracefully():

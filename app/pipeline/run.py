@@ -266,6 +266,8 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
                 # rally instead of a bare "no reconstruction" (TASK-032).
                 entry["rally_3d"] = {"status": str(r3d.get("status") or "failed"),
                                      "message": str(r3d.get("message") or "")[:200]}
+                if isinstance(r3d.get("rejected"), dict) and r3d["rejected"]:
+                    entry["rally_3d"]["rejected"] = r3d["rejected"]
         else:
             entry["rally_3d"] = {"status": "no_court",
                                  "message": str(court_info.get("message") or "")[:200]}
