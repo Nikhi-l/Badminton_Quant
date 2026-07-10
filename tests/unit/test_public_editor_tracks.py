@@ -1,6 +1,7 @@
 import json
+import math
 
-from app.main import _public_rally, _public_result
+from app.main import _public_rally, _public_result, _sample_shuttle_track
 
 
 def test_gallery_light_result_omits_heavy_tracking():
@@ -55,6 +56,45 @@ def test_public_rally_exposes_bounded_shuttle_track():
     assert 0 < len(track) <= 180
     assert set(track[0]) == {"t", "x", "y", "confidence"}
     assert track[0] == {"t": 0.0, "x": 0.2, "y": 0.45, "confidence": 0.91}
+
+
+def test_long_rally_shuttle_track_keeps_studio_continuity():
+    """TASK-034 P0 repro: a perfectly smooth 70 s 10 Hz track was uniformly
+    decimated to 175 points spaced 0.4 s — EVERY pair above Studio's 0.35 s
+    dropout cutoff (TRAIL_MAX_STEP_SEC), so the trail was always empty and the
+    marker flickered. Contract now: in-segment spacing stays ≤ 0.33 s
+    regardless of rally length; continuity is never destroyed by decimation."""
+    dense = [{"t": round(i * 0.1, 3),
+              "x": 0.5 + 0.3 * math.sin(i * 0.02),
+              "y": 0.4 + 0.2 * math.cos(i * 0.03),
+              "confidence": 0.82} for i in range(700)]
+
+    track = _sample_shuttle_track(dense)
+
+    assert len(track) >= 600            # no whole-rally 180-point cap
+    gaps = [b["t"] - a["t"] for a, b in zip(track, track[1:])]
+    assert max(gaps) <= 0.35 - 1e-9     # every pair below the Studio threshold
+
+
+def test_shuttle_track_preserves_real_dropouts_as_gaps():
+    """A real detector dropout must SURVIVE sampling (Studio hides the marker
+    there on purpose) — not be papered over, and not poison nearby spacing."""
+    def seg(t0, x0, dx):
+        return [{"t": round(t0 + i / 30, 3), "x": round(x0 + i * dx, 5),
+                 "y": 0.5, "confidence": 0.82} for i in range(150)]
+
+    dense = seg(0.0, 0.3, 0.004) + seg(7.0, 0.9, -0.004)   # 2 s blind hole
+
+    track = _sample_shuttle_track(dense)
+
+    gaps = [round(b["t"] - a["t"], 3) for a, b in zip(track, track[1:])]
+    big = [g for g in gaps if g > 0.35]
+    assert len(big) == 1 and 1.9 < big[0] < 2.2   # exactly the real hole
+    assert all(g <= 0.35 for g in gaps if g != big[0])   # in-segment spacing ok
+    # Segment endpoints are kept: the marker's last-seen position is exact.
+    assert track[0]["t"] == 0.0
+    assert any(abs(f["t"] - 4.967) < 1e-6 for f in track)   # end of flight 1
+    assert any(abs(f["t"] - 7.0) < 1e-6 for f in track)     # start of flight 2
 
 
 def _box(cx, cy, w=0.12, h=0.28, conf=0.8):

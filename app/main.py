@@ -243,36 +243,64 @@ def _sample_racquet_track(racquets: list | None, max_frames: int = 120) -> list[
     return out
 
 
-def _sample_shuttle_track(points: list | None, max_points: int = 180) -> list[dict]:
-    """Public, bounded time-level shuttle track for editor overlays.
+# Public shuttle-track contract (TASK-034 P0), shared with web/app.js: within a
+# contiguous flight the emitted spacing stays ≤ 1/HZ + GAP_SEC = 0.33 s, safely
+# under Studio's 0.35 s dropout threshold (TRAIL_MAX_STEP_SEC); a source dt
+# above GAP_SEC is a real detector dropout and is preserved as a gap.
+SHUTTLE_TRACK_HZ = 12.5
+SHUTTLE_GAP_SEC = 0.25
+SHUTTLE_TRACK_MAX_POINTS = 2400   # ≈3 min of continuous flight; see below
 
-    Internal vision output can contain dense frame-by-frame points. The editor only
-    needs enough normalized samples to place/preview shuttle graphics, so keep the
-    response small and strip non-coordinate vendor details. False detections are
-    filtered with the same outlier rejection the camera uses, so the overlay never
-    shows a marker jumping to a light or a shirt.
+
+def _sample_shuttle_track(points: list | None, rate_hz: float = SHUTTLE_TRACK_HZ,
+                          gap_sec: float = SHUTTLE_GAP_SEC,
+                          max_points: int = SHUTTLE_TRACK_MAX_POINTS) -> list[dict]:
+    """Public, gap-preserving shuttle track for editor overlays.
+
+    Internal vision output is dense (one point per source frame TrackNet saw).
+    The old whole-rally uniform decimation (``points[::step]`` capped at 180)
+    spread long rallies past 0.4 s spacing — above Studio's 0.35 s dropout
+    threshold, so the trail drew nothing and the marker flickered (audit P0).
+    Now each CONTIGUOUS run is thinned to ~``rate_hz`` keeping segment
+    endpoints, and real dropouts survive as gaps instead of being papered over.
+    False detections are filtered with the same outlier rejection the camera
+    uses, so the overlay never shows a marker jumping to a light or a shirt.
     """
     if not isinstance(points, list) or not points:
         return []
     from .pipeline import track as _track
-    points = _track.filter_shuttle_points(points)
-    if not points:
-        return []
-    step = max(1, math.ceil(len(points) / max_points))
-    out = []
-    for p in points[::step]:
-        if not isinstance(p, dict):
-            continue
+    pts: list[tuple[float, float, float, float]] = []
+    for p in _track.filter_shuttle_points(points):
         try:
-            out.append({
-                "t": round(float(p.get("t")), 3),
-                "x": round(float(p.get("x")), 5),
-                "y": round(float(p.get("y")), 5),
-                "confidence": round(float(p.get("confidence", 0.0)), 3),
-            })
-        except (TypeError, ValueError):
+            pts.append((float(p["t"]), float(p["x"]), float(p["y"]),
+                        float(p.get("confidence", 0.0))))
+        except (KeyError, TypeError, ValueError):
             continue
-    return out
+    pts.sort(key=lambda r: r[0])
+    if not pts:
+        return []
+
+    def _emit(interval: float) -> list[tuple[float, float, float, float]]:
+        out = [pts[0]]
+        for i in range(1, len(pts)):
+            cur, prev = pts[i], pts[i - 1]
+            nxt = pts[i + 1] if i + 1 < len(pts) else None
+            new_segment = cur[0] - prev[0] > gap_sec       # first point after a gap
+            ends_segment = nxt is None or nxt[0] - cur[0] > gap_sec
+            due = cur[0] - out[-1][0] >= interval
+            if new_segment or ends_segment or due:
+                out.append(cur)
+        return out
+
+    out = _emit(1.0 / max(rate_hz, 1.0))
+    if len(out) > max_points:
+        # Payload ceiling (never reached by real rallies at ≤3 min of visible
+        # flight). Degrading the rate breaks the ≤0.35 s spacing contract, so
+        # this is a deliberate, documented fallback — not a silent cap.
+        span = max(out[-1][0] - out[0][0], 1e-6)
+        out = _emit(max(1.0 / max(rate_hz, 1.0), span / max_points))[:max_points]
+    return [{"t": round(t, 3), "x": round(x, 5), "y": round(y, 5),
+             "confidence": round(c, 3)} for t, x, y, c in out]
 
 
 def _stable_ids(frames: list[tuple[float, list[tuple[float, float, float]]]],
@@ -426,7 +454,14 @@ def _ids_from_worker(worker_ids: list[list[int | None]]) -> list[list[int]] | No
     return out
 
 
-def _sample_player_track(players: list | None, max_frames: int = 120) -> list[dict]:
+# 180 matches the worker's MAX_FRAMES_PER_RALLY: the public track never
+# decimates BELOW the worker's own sampling (a second 120-frame cut pushed
+# long-rally spacing past what Studio's interpolation bridges — TASK-034).
+PUBLIC_TRACK_MAX_FRAMES = 180
+
+
+def _sample_player_track(players: list | None,
+                         max_frames: int = PUBLIC_TRACK_MAX_FRAMES) -> list[dict]:
     """Public, bounded per-frame player boxes with stable track ids for the editor.
 
     Vision stores dense per-frame player detections as boxes only. The editor needs
@@ -517,7 +552,8 @@ def _pose_height(person: dict, keypoints: list[dict]) -> float:
     return (max(ys) - min(ys)) if len(ys) >= 2 else 0.25
 
 
-def _sample_pose_track(poses: list | None, max_frames: int = 120) -> list[dict]:
+def _sample_pose_track(poses: list | None,
+                       max_frames: int = PUBLIC_TRACK_MAX_FRAMES) -> list[dict]:
     """Public, bounded COCO-17 pose track for Studio skeleton overlays.
 
     Canonical vision stores per-frame people with normalized keypoints. This keeps
