@@ -2223,10 +2223,11 @@ function updateOverlayPreview() {
   // Shuttle: draw ONLY when the shuttle is actually tracked at the current time —
   // no fixed-default/last-position marker (that was the phantom "circle"). The trail
   // follows the shuttle's real recent path, not a fixed-offset bar. Tight
-  // window/maxGap so the graphic disappears during detector dropouts (>0.3s)
-  // instead of freezing or slowly gliding across the gap.
+  // window/maxGap so during a real detector dropout the graphic fades out within
+  // ~0.15s of the last detection instead of freezing there or gliding across the
+  // gap (interp still smooths normal ≤0.35s sample spacing).
   const sh = state.overlays.shuttle;
-  const p = (sh.enabled && ctx) ? currentShuttlePoint(ctx, 0.3, 0.35) : null;
+  const p = (sh.enabled && ctx) ? currentShuttlePoint(ctx, 0.15, 0.35) : null;
   const pos = p ? trackPointToScreen(p.x, p.y, ctx) : null;
   if (pos) {
     if (sh.trail) parts.push(shuttleTrailSvg(sh, ctx));
@@ -2882,6 +2883,7 @@ function setPreviewAspect(aspect) {
     updateOverlayPreview();
   };
   setStageVideo(desiredVideoSrc(), applyAR);
+  applyAR();   // immediate (fallback AR) so the stage answers the click now; re-runs on metadata
   frame.classList.toggle("landscape", landscape);
   $("aspectToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.aspect === aspect));
   $("tpHint").textContent = landscape ? "landscape · original frame · source time" : "";

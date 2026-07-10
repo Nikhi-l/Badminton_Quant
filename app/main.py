@@ -1175,8 +1175,11 @@ def student_profile(student_id: str, request: Request):
     }
 
 
+@app.head("/media/{job_id}/{name}")
 @app.get("/media/{job_id}/{name}")
 def media_file(job_id: str, name: str):
+    # HEAD too: players/proxies probe media with HEAD before ranged GETs, and a
+    # GET-only route answers those probes 404 (video then never loads).
     if name not in MEDIA_WHITELIST or not job_id.isalnum():
         raise HTTPException(404)
     path = config.OUTPUTS / job_id / name
