@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=33">
+<link rel="stylesheet" href="/style.css?v=34">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🏸</text></svg>">
 </head>
 <body>
@@ -256,7 +256,9 @@
         <span class="muted" id="timelineMeta"></span>
       </div>
       <div class="timeline-tools">
-        <input type="range" id="timelineZoom" min="80" max="180" value="100" aria-label="Timeline zoom">
+        <span class="tl-kbd" title="Space play/pause · ← → ±5s · , . frame-step · ⌘/Ctrl+scroll zoom">keys</span>
+        <input type="range" id="timelineZoom" min="100" max="600" step="10" value="100" aria-label="Timeline zoom">
+        <span class="tl-zoomval" id="timelineZoomVal">100%</span>
       </div>
     </div>
     <div class="timeline-grid">
@@ -264,6 +266,7 @@
       <div class="timeline-board" id="tlBoard">
         <div class="ruler" id="tlRuler"></div>
         <div class="lane" id="tlLane"></div>
+        <div class="ghost-head" id="tlGhost" hidden><div class="gh-time" id="tlGhostTime">0:00</div></div>
         <div class="playhead" id="tlHead"><div class="ph-time" id="tlHeadTime">0:00</div></div>
       </div>
     </div>
@@ -279,7 +282,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=34"></script>
+<script src="/app.js?v=35"></script>
 <script src="/replay3d.js?v=32"></script>
 </body>
 </html>

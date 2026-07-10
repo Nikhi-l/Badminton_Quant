@@ -1015,15 +1015,30 @@ function desiredVideoSrc() {
 }
 
 // Per-track icon + lane height (px). Drives the variable-height lanes.
+// Geometric glyphs match the layer rail's icon set (emoji rendered
+// platform-inconsistently); heights sum to 170px so every lane fits inside the
+// timeline row — the pose + soundtrack lanes used to render into clipped,
+// invisible space (TASK-033).
 const TRACK_META = {
-  reel:       { ico: "🎞", h: 56 },
-  source:     { ico: "🎬", h: 56 },
-  caption:    { ico: "💬", h: 30 },
-  camera:     { ico: "🎥", h: 26 },
-  shuttle:    { ico: "🏸", h: 28 },
-  pose:       { ico: "🦴", h: 28 },
-  soundtrack: { ico: "🎵", h: 44 },
+  reel:       { ico: "▤", h: 46 },
+  source:     { ico: "▤", h: 46 },
+  caption:    { ico: "❝", h: 22 },
+  camera:     { ico: "◎", h: 20 },
+  shuttle:    { ico: "◉", h: 24 },
+  pose:       { ico: "◇", h: 24 },
+  soundtrack: { ico: "♪", h: 34 },
 };
+
+// Timeline zoom scale (1x..6x). The old slider allowed 0.8x, but a block lane
+// can't render below 100% width — 80..99 was a dead zone whose only effect was
+// desyncing the playhead math (TASK-033).
+function tlScale() {
+  return Math.max(1, Math.min(6, Number($("timelineZoom").value || 100) / 100));
+}
+
+function segKey(trackId, s) {
+  return `${trackId}:${Number(s.t0 || 0).toFixed(2)}`;
+}
 
 function captionTextOf(s) {
   const note = (s.r && s.r.note) || s.note || "";
@@ -1042,9 +1057,11 @@ function buildTimeline() {
   const item = studio.item;
   const lane = $("tlLane"), labels = $("tlLabels"), ruler = $("tlRuler");
   lane.innerHTML = ""; labels.innerHTML = ""; ruler.innerHTML = "";
-  const timelineScale = Math.max(0.8, Math.min(1.8, Number($("timelineZoom").value || 100) / 100));
+  const timelineScale = tlScale();
   lane.style.minWidth = `${timelineScale * 100}%`;
   ruler.style.minWidth = `${timelineScale * 100}%`;
+  const zoomVal = $("timelineZoomVal");
+  if (zoomVal) zoomVal.textContent = `${Math.round(timelineScale * 100)}%`;
   let dur, tracks;
   if (effectiveMode() === "reel") {
     dur = item.duration || 1;
@@ -1070,15 +1087,16 @@ function buildTimeline() {
       : (item.rallies || []).map(r => ({ ...r, used: true }));
     const srcSegs = list.map((r, i) => ({ t0: r.start || 0, t1: r.end || (r.start || 0) + (r.dur || 0),
       label: `R${i + 1}`, sub: `${Math.round(r.dur || 0)}s${r.note ? " · " + r.note : ""}`, note: r.note, skip: !r.used, layer: "reel" }));
+    // No camera lane (keyframe marks are reel-time only) and no Ambient lane
+    // (it was permanently empty) in source mode — dead rows ate scarce lane
+    // height for nothing (TASK-033).
     tracks = [
       { id: "source", label: "Source rallies", count: list.length, type: "clip", segs: srcSegs },
       { id: "caption", label: "Captions", type: "caption",
         segs: srcSegs.filter(s => !s.skip).map(s => ({ t0: s.t0, t1: s.t1, layer: "reel", label: captionTextOf(s) })) },
-      { id: "camera", label: "Camera", type: "camera", count: cameraLaneCount(), segs: [] },
       { id: "shuttle", label: "Shuttle FX", count: trackedRallies().length, type: "shuttle",
         segs: trackedRallies().map(s => ({ ...s, layer: "shuttle", label: "Track", sub: rallyVisionText(s.vision) || "source coordinates" })) },
       { id: "pose", label: "Pose", count: studio.editorState.overlays.pose.enabled ? poseReadyCount() : 0, type: "pose", segs: [] },
-      { id: "soundtrack", label: "Ambient", count: 0, type: "audio", segs: [] },
     ];
   }
   tracks.forEach(t => { if (t.count == null) t.count = t.segs.length; });
@@ -1086,10 +1104,16 @@ function buildTimeline() {
   studio.timelineSegments = tracks.flatMap(t => t.segs.map(s => ({ ...s, type: t.type })));
   $("timelineMeta").textContent = `· ${fmtT(dur)} · ${tracks.length} tracks`;
 
-  // ruler: labelled major ticks + unlabelled minor ticks at half-steps
-  const step = dur > 200 ? 30 : dur > 90 ? 15 : dur > 40 ? 10 : 5;
-  for (let t = 0; t <= dur + 1e-6; t += step / 2) {
-    const major = Math.abs(t % step) < 1e-6;
+  // Ruler: adaptive density from effective pixels-per-second, so labels never
+  // collide — the old fixed 30s cap drew ~60 overlapping labels on a 30-minute
+  // source (TASK-033). Major labels keep >=70px spacing at the current zoom.
+  const boardW = ($("tlBoard").clientWidth || 1100) * timelineScale;
+  const pps = boardW / dur;
+  const STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1200];
+  const step = STEPS.find(s => s * pps >= 70) || STEPS[STEPS.length - 1];
+  const minor = (step / 5) * pps >= 14 ? step / 5 : step / 2;
+  for (let t = 0; t <= dur + 1e-6; t += minor) {
+    const major = Math.abs(t / step - Math.round(t / step)) < 1e-6;
     const el = document.createElement("div");
     el.className = major ? "tick" : "tick minor";
     el.style.left = `${t / dur * 100}%`;
@@ -1175,19 +1199,25 @@ function buildTimeline() {
     }
 
     track.segs.forEach(s => {
+      const key = segKey(track.id, s);
       const el = document.createElement("div");
+      // Selection is per SEGMENT (the old layer-keyed class ringed every
+      // segment in the lane when one was clicked — TASK-033).
       el.className = `seg ${track.type}` + (s.skip ? " skip" : "") +
         (s.vision && s.vision.status === "ok" ? " vision-ok" : "") +
         (s.vision && s.vision.mask_enabled ? " mask-on" : "") +
         (s.wave ? " has-wave" : "") +
-        (s.layer === studio.selectedLayer ? " active-seg" : "");
+        (studio.activeSegKey === key ? " active-seg" : "");
       el.style.left = `${Math.max(0, s.t0) / dur * 100}%`;
       el.style.width = `${Math.max((s.t1 - s.t0) / dur * 100, track.type === "caption" ? 0.8 : 1.4)}%`;
       if (track.type === "clip") {
         el.innerHTML = `<div class="film"></div><div class="clip-cap"><b>${esc(s.label)}</b><span>${esc(s.sub || "")}</span></div>`;
         const film = el.querySelector(".film");
-        if (item.thumb) film.style.backgroundImage = `url("${item.thumb}")`;
-        el._film = film; el._mid = (s.t0 + s.t1) / 2;
+        const vSrc = ($("stVideo").currentSrc || $("stVideo").src || "").split("?")[0];
+        const cached = studio._filmCache && studio._filmCache.get(`${vSrc}|${((s.t0 + s.t1) / 2).toFixed(2)}`);
+        if (cached) film.style.backgroundImage = `url("${cached}")`;
+        else if (item.thumb) film.style.backgroundImage = `url("${item.thumb}")`;
+        el._film = film; el._mid = (s.t0 + s.t1) / 2; el._cached = !!cached;
       } else if (track.type === "caption") {
         el.innerHTML = `<b>${esc(s.label || "")}</b>`;
       } else if (s.wave) {
@@ -1209,6 +1239,7 @@ function buildTimeline() {
       if (s.vision) el.title = rallyVisionTitle(s.vision);
       el.onclick = (e) => {
         e.stopPropagation();
+        studio.activeSegKey = key;
         selectLayer(s.layer || track.id);
         const v = $("stVideo");
         v.currentTime = Math.min(s.t0 + 0.05, v.duration || dur);
@@ -1290,10 +1321,16 @@ function allPosePoints() {
 let _filmBusy = false;
 async function upgradeFilmstrip() {
   if (_filmBusy) return;
-  const clips = [...document.querySelectorAll(".seg.clip")]
-    .map(seg => ({ film: seg._film, mid: seg._mid })).filter(c => c.film && c.mid != null);
   const v = $("stVideo");
   const src = (v && (v.currentSrc || v.src)) || "";
+  // Cache captured frames per (file, clip-midpoint): every zoom tick rebuilds
+  // the DOM, and re-seeking a hidden video for frames we already have was the
+  // main source of rebuild jank (TASK-033).
+  studio._filmCache = studio._filmCache || new Map();
+  const srcKey = src.split("?")[0];
+  const clips = [...document.querySelectorAll(".seg.clip")]
+    .map(seg => ({ film: seg._film, mid: seg._mid, cached: seg._cached }))
+    .filter(c => c.film && c.mid != null && !c.cached);
   if (!clips.length || !src) return;
   _filmBusy = true;
   try {
@@ -1306,7 +1343,9 @@ async function upgradeFilmstrip() {
       try {
         await new Promise((res) => { vid.onseeked = res; vid.currentTime = Math.min(c.mid, (vid.duration || 1) - 0.05); setTimeout(res, 1800); });
         ctx.drawImage(vid, 0, 0, cv.width, cv.height);
-        c.film.style.backgroundImage = `url("${cv.toDataURL("image/jpeg", 0.62)}")`;
+        const url = cv.toDataURL("image/jpeg", 0.62);
+        c.film.style.backgroundImage = `url("${url}")`;
+        studio._filmCache.set(`${srcKey}|${c.mid.toFixed(2)}`, url);
       } catch (_) { /* keep thumb */ }
     }
   } catch (_) { /* keep thumb fallback */ }
@@ -1351,8 +1390,19 @@ function studioTick() {
   if ($("studio").hidden) return;
   const v = $("stVideo");
   const dur = v.duration || studio.dur || 1;
-  const timelineScale = Math.max(0.8, Math.min(1.8, Number($("timelineZoom").value || 100) / 100));
-  $("tlHead").style.left = `${Math.min(v.currentTime / dur, 1) * timelineScale * 100}%`;
+  // Pixel-space playhead against the actual lane width: the old %*scale math
+  // lied about time whenever the slider and rendered width disagreed (TASK-033).
+  const lane = $("tlLane"), board = $("tlBoard"), head = $("tlHead");
+  const laneW = lane.offsetWidth || 1;
+  const px = Math.min(v.currentTime / dur, 1) * laneW;
+  head.style.left = `${px}px`;
+  head.classList.toggle("flip", px > laneW - 64);   // chip clips at the right edge
+  // Auto-follow while playing on a zoomed board (never fight a manual scroll
+  // when paused).
+  if (!v.paused && laneW > board.clientWidth + 4
+      && (px < board.scrollLeft + 8 || px > board.scrollLeft + board.clientWidth - 24)) {
+    board.scrollLeft = Math.max(0, px - board.clientWidth * 0.3);
+  }
   $("tlHeadTime").textContent = fmtT(v.currentTime);
   $("tpTime").textContent = `${fmtT(v.currentTime)} / ${fmtT(dur)}`;
   $("tpPlay").textContent = v.paused ? "▶" : "⏸";
@@ -2372,11 +2422,14 @@ const courtDraw = { active: false, pts: [] };
 function startCourtDraw() {
   courtDraw.active = true;
   courtDraw.pts = [];
+  // Pause BEFORE the aspect swap: setStageVideo preserves play state across the
+  // reel→proxy switch, so a pause placed after it gets undone once the proxy
+  // loads. Corners on a moving frame = misclicks (TASK-032).
+  const v = $("stVideo");
+  if (v && !v.paused) v.pause();
   setPreviewAspect("landscape");
   studio.editorState.framing = { fit: "fit", zoom: 1, x: 0, y: 0 };
   applyFraming();
-  const v = $("stVideo");
-  if (v && !v.paused) v.pause();   // corners on a moving frame = misclicks (TASK-032)
   const frame = $("stageFrame");
   frame.style.cursor = "crosshair";
   frame.addEventListener("pointerdown", courtDrawClick, true);
@@ -2894,7 +2947,54 @@ $("aspectToggle").querySelectorAll("button").forEach(b => {
   b.onclick = () => setPreviewAspect(b.dataset.aspect);
 });
 
-$("timelineZoom").oninput = () => buildTimeline();
+// Zoom keeps the anchor time (cursor, else playhead) fixed on screen: the old
+// handler rebuilt without touching scrollLeft, so content shifted arbitrarily
+// around whatever you were looking at (TASK-033).
+function setTimelineZoom(sliderVal, anchorClientX = null) {
+  const board = $("tlBoard"), lane = $("tlLane"), slider = $("timelineZoom");
+  const laneW = lane.offsetWidth || 1;
+  let anchorPx;
+  if (anchorClientX != null) {
+    anchorPx = anchorClientX - board.getBoundingClientRect().left;
+  } else {
+    const v = $("stVideo");
+    const dur = v.duration || studio.dur || 1;
+    const headPx = Math.min((v.currentTime || 0) / dur, 1) * laneW;
+    anchorPx = Math.max(16, Math.min(board.clientWidth - 16, headPx - board.scrollLeft));
+  }
+  const anchorFrac = (board.scrollLeft + anchorPx) / laneW;
+  slider.value = String(Math.round(Math.max(100, Math.min(600, sliderVal))));
+  buildTimeline();
+  board.scrollLeft = Math.max(0, anchorFrac * (lane.offsetWidth || 1) - anchorPx);
+}
+$("timelineZoom").oninput = () => setTimelineZoom(Number($("timelineZoom").value));
+// Trackpad pinch / ctrl+wheel zooms around the cursor; plain wheel scrolls.
+$("tlBoard").addEventListener("wheel", (e) => {
+  if (!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault();
+  setTimelineZoom(Number($("timelineZoom").value || 100) * (e.deltaY > 0 ? 0.88 : 1.14), e.clientX);
+}, { passive: false });
+
+// Hover timecode ghost: a light line + chip under the cursor so you can read a
+// time without committing to a seek (TASK-033).
+(function initTimelineHover() {
+  const board = $("tlBoard"), lane = $("tlLane"), ghost = $("tlGhost");
+  if (!ghost) return;
+  board.addEventListener("pointermove", (e) => {
+    if (e.buttons || e.pointerType === "touch") { ghost.hidden = true; return; }
+    const r = lane.getBoundingClientRect();
+    const v = $("stVideo");
+    const d = v.duration || studio.dur || 1;
+    if (r.width <= 0) return;
+    const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    ghost.hidden = false;
+    ghost.style.left = `${frac * (lane.offsetWidth || 1)}px`;
+    $("tlGhostTime").textContent = fmtT(frac * d);
+  });
+  board.addEventListener("pointerleave", () => { ghost.hidden = true; });
+  board.addEventListener("pointerdown", () => { ghost.hidden = true; });
+})();
+
 $("tpScrub").oninput = () => {
   const v = $("stVideo");
   const dur = v.duration || studio.dur || 1;
@@ -2907,6 +3007,9 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "Space") { e.preventDefault(); v.paused ? v.play().catch(() => {}) : v.pause(); }
   if (e.key === "ArrowRight") v.currentTime = Math.min(v.currentTime + 5, v.duration || 0);
   if (e.key === "ArrowLeft") v.currentTime = Math.max(v.currentTime - 5, 0);
+  // frame-step (~1/30s) for precise overlay inspection (TASK-033)
+  if (e.key === ".") v.currentTime = Math.min(v.currentTime + 1 / 30, v.duration || 0);
+  if (e.key === ",") v.currentTime = Math.max(v.currentTime - 1 / 30, 0);
 });
 
 function closeStudio() {

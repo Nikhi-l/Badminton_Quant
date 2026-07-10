@@ -4,14 +4,34 @@
     {
       "name": "baddy",
       "runtimeExecutable": ".venv/bin/uvicorn",
-      "runtimeArgs": ["app.main:app", "--port", "8011"],
+      "runtimeArgs": [
+        "app.main:app",
+        "--port",
+        "8011"
+      ],
       "port": 8011
     },
     {
       "name": "baddy-web",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8019", "--directory", "web"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8019",
+        "--directory",
+        "web"
+      ],
       "port": 8019
+    },
+    {
+      "name": "baddy-preview",
+      "runtimeExecutable": ".venv/bin/uvicorn",
+      "runtimeArgs": [
+        "app.main:app",
+        "--port",
+        "8021"
+      ],
+      "port": 8021
     }
   ]
 }

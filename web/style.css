@@ -159,7 +159,9 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
 /* ---------- studio (AI reel editor) ---------- */
 .studio{
   position:fixed;inset:0;z-index:120;background:#090a0d;color:var(--text);
-  display:grid;grid-template-rows:58px minmax(0,1fr) 52px 202px;font-size:13px;
+  /* timeline row = 38px header + 28px ruler + 170px lanes (TRACK_META heights):
+     202px used to clip the pose + soundtrack lanes into invisible space (TASK-033) */
+  display:grid;grid-template-rows:58px minmax(0,1fr) 52px 236px;font-size:13px;
 }
 .studio-top{display:grid;grid-template-columns:minmax(260px,1fr) minmax(300px,auto);align-items:center;gap:18px;padding:10px 16px;border-bottom:1px solid #20232b;background:#0b0c10}
 .studio-brand{display:flex;align-items:center;gap:10px;min-width:0;font-family:"Space Grotesk";letter-spacing:.12em}
@@ -367,20 +369,24 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
 .speed-toggle{display:flex;gap:3px;background:#11131a;border:1px solid #2a2d36;padding:3px;border-radius:8px}
 .speed-toggle button{border:0;background:transparent;color:var(--muted);padding:4px 10px;border-radius:5px;cursor:pointer;font:700 11.5px Inter}
 .speed-toggle button.active{background:#2a2d36;color:var(--text)}
-.timeline{position:relative;margin:0;border-top:1px solid #20232b;background:#11131a;overflow:hidden;cursor:crosshair}
+.timeline{position:relative;margin:0;border-top:1px solid #20232b;background:#11131a;overflow:hidden}
 .timeline-top{height:38px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid #20232b}
 .timeline-top b{font-family:"Space Grotesk";letter-spacing:.03em;margin-right:10px}
-.timeline-tools input{accent-color:var(--lime);width:120px}
-.timeline-grid{max-height:268px;display:grid;grid-template-columns:154px minmax(0,1fr)}
-.track-labels{border-right:1px solid #20232b;background:#0b0d12;padding-top:28px}
-.track-label{display:flex;align-items:center;gap:7px;padding:0 11px;border-bottom:1px solid rgba(255,255,255,.05);color:#aeb5c6;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
-.track-label .tl-ico{font-size:13px;line-height:1;opacity:.92}
-.track-label .tl-n{margin-left:auto;color:#5f6678;font-weight:700;font-variant-numeric:tabular-nums}
-.track-label span{color:#626a7d;font-weight:700}
-.timeline-board{position:relative;overflow:auto;background:#14161c}
-.ruler{position:sticky;top:0;z-index:3;height:28px;min-width:100%;border-bottom:1px solid #242833;font-size:10px;color:#8992a6;background:#11141b}
-.ruler .tick{position:absolute;top:0;bottom:0;border-left:1px solid rgba(255,255,255,.13);padding:7px 0 0 5px;font-variant-numeric:tabular-nums}
-.ruler .tick.minor{border-left-color:rgba(255,255,255,.05)}
+.timeline-tools input{accent-color:var(--lime);width:140px}
+.tl-zoomval{min-width:38px;text-align:right;font-size:10.5px;font-weight:700;color:#8b93a6;font-variant-numeric:tabular-nums}
+.tl-kbd{font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#6b7386;border:1px solid #2a2d36;border-radius:5px;padding:2px 6px;margin-right:6px;cursor:help}
+.timeline-grid{height:198px;display:grid;grid-template-columns:154px minmax(0,1fr)}
+.track-labels{border-right:1px solid #20232b;background:#0b0d12;padding-top:28px;overflow:hidden}
+.track-label{display:flex;align-items:center;gap:8px;padding:0 11px;border-bottom:1px solid rgba(255,255,255,.05);color:#b6bdcf;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em}
+.track-label .tl-ico{width:16px;text-align:center;font-size:11px;line-height:1;color:var(--cyan);font-weight:900}
+.track-label .tl-n{margin-left:auto;color:#7d8598;font-weight:700;font-variant-numeric:tabular-nums}
+.track-label span{color:#7d8598;font-weight:700}
+/* the crosshair belongs on the scrubbable board only — it used to cover the
+   non-scrubbable label column and header too (TASK-033) */
+.timeline-board{position:relative;overflow:auto;background:#14161c;cursor:crosshair}
+.ruler{position:sticky;top:0;z-index:3;height:28px;min-width:100%;border-bottom:1px solid #242833;font-size:10px;color:#93a0b8;background:#11141b}
+.ruler .tick{position:absolute;top:0;bottom:0;border-left:1px solid rgba(255,255,255,.16);padding:7px 0 0 5px;font-variant-numeric:tabular-nums}
+.ruler .tick.minor{border-left-color:rgba(255,255,255,.055)}
 .lane{position:relative}
 .lane-row{position:relative;border-bottom:1px solid rgba(255,255,255,.05)}
 .lane-row.lane-clip{background:#0c0e13}
@@ -410,6 +416,13 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
 .playhead::before{content:"";position:absolute;top:0;left:-5px;border:6px solid transparent;border-top-color:var(--lime)}
 .ph-time{position:absolute;top:4px;left:5px;background:var(--lime);color:#07080b;font-size:9.5px;font-weight:800;
   font-variant-numeric:tabular-nums;padding:1px 5px;border-radius:4px;white-space:nowrap;box-shadow:0 2px 7px rgba(0,0,0,.45)}
+/* near the right edge the chip flips to the left of the line instead of
+   clipping under .timeline{overflow:hidden} (TASK-033) */
+.playhead.flip .ph-time{left:auto;right:5px}
+/* hover timecode ghost (TASK-033) */
+.ghost-head{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,.3);pointer-events:none;z-index:4}
+.gh-time{position:absolute;top:4px;left:5px;background:#2a2d36;color:#dfe4ef;font-size:9.5px;font-weight:800;
+  font-variant-numeric:tabular-nums;padding:1px 5px;border-radius:4px;white-space:nowrap}
 
 /* filmstrip clip lane — video frames behind the rally label */
 .seg.clip{padding:0;align-items:stretch;border-color:rgba(255,255,255,.2)}
@@ -497,7 +510,7 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
   .result{flex-direction:column;align-items:stretch}
   .result video{width:100%;max-width:280px;margin:0 auto}
   .nav-links a:not(.btn){display:none}
-  .studio{grid-template-rows:auto minmax(0,1fr) auto 176px}
+  .studio{grid-template-rows:auto minmax(0,1fr) auto 208px}
   .studio-top{grid-template-columns:1fr;align-items:stretch}
   .studio-right{justify-content:space-between;flex-wrap:wrap}
   .studio-workspace{grid-template-columns:1fr}
@@ -505,7 +518,7 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
   .stage-frame{height:min(100%,56vh)}
   .transport{flex-wrap:wrap}
   .tp-right{margin-left:0}
-  .timeline-grid{grid-template-columns:94px minmax(0,1fr)}
+  .timeline-grid{grid-template-columns:94px minmax(0,1fr);height:170px}
   .track-label{padding:0 8px;font-size:10px}
   .coachbar{max-height:86px}
   .coach-main,.coach-note{max-width:100%;width:100%}
