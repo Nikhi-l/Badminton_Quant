@@ -256,6 +256,7 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
 .aspect-toggle{display:inline-flex;background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:99px;padding:2px;margin-right:10px}
 .aspect-toggle button{border:0;background:none;color:#aeb5c6;font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px;cursor:pointer}
 .aspect-toggle button.active{background:var(--lime);color:#07080b}
+.aspect-toggle button:disabled{opacity:.35;cursor:not-allowed}
 .stage-frame::after{content:"";position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
 .stage-frame video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
 .ai-overlays{position:absolute;inset:0;pointer-events:none}
