@@ -608,6 +608,14 @@ def filter_shuttle_points(shuttle_frames: list, min_conf: float = 0.3,
     inside an endpoint's window can't poison the median and drop real points —
     the second pass re-evaluates everything against spike-free windows.
     Low-confidence and out-of-frame points are dropped. Order is preserved.
+
+    Endpoints (fully one-sided windows) are judged against a LINEAR
+    EXTRAPOLATION of the two nearest kept neighbours rather than the one-sided
+    median (TASK-034): an arc decelerating in image space always takes its
+    biggest step at launch, so the first point after a hit — the contact
+    point, the highest-information sample for 3D — read as an outlier against
+    the forward median. A genuine teleport at a segment edge still fails the
+    extrapolation by the full spike distance.
     """
     cands = []
     for s in (shuttle_frames or []):
@@ -622,8 +630,19 @@ def filter_shuttle_points(shuttle_frames: list, min_conf: float = 0.3,
         return [c[3] for c in cands]
     cands.sort(key=lambda r: r[0])
     n = len(cands)
+    ts = np.array([c[0] for c in cands])
     xs = np.array([c[1] for c in cands])
     ys = np.array([c[2] for c in cands])
+
+    def _extrap_residual(i: int, a: int, b: int) -> float:
+        """Distance from point i to the line through kept neighbours a (nearest)
+        and b, extended to t_i. Works for both track edges."""
+        span = float(ts[a] - ts[b])
+        k = (float(ts[i] - ts[a]) / span) if abs(span) > 1e-9 else 0.0
+        px = float(xs[a] + (xs[a] - xs[b]) * k)
+        py = float(ys[a] + (ys[a] - ys[b]) * k)
+        return float(np.hypot(xs[i] - px, ys[i] - py))
+
     keep = np.ones(n, dtype=bool)
     for _ in range(max(1, iterations)):
         kept_idx = np.where(keep)[0]
@@ -637,8 +656,13 @@ def filter_shuttle_points(shuttle_frames: list, min_conf: float = 0.3,
             nb = left + right
             if not nb:
                 continue
-            med_x, med_y = float(np.median(xs[nb])), float(np.median(ys[nb]))
-            res = float(np.hypot(xs[i] - med_x, ys[i] - med_y))
+            if not left and len(right) >= 2:
+                res = _extrap_residual(i, right[0], right[1])
+            elif not right and len(left) >= 2:
+                res = _extrap_residual(i, left[-1], left[-2])
+            else:
+                med_x, med_y = float(np.median(xs[nb])), float(np.median(ys[nb]))
+                res = float(np.hypot(xs[i] - med_x, ys[i] - med_y))
             if len(nb) > 1:
                 steps = np.hypot(np.diff(xs[nb]), np.diff(ys[nb]))
                 allowed = max(max_residual, speed_k * float(np.median(steps)))

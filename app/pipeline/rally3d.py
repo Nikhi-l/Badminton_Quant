@@ -25,6 +25,7 @@ import math
 import numpy as np
 
 from . import court as court_mod
+from .track import filter_shuttle_points
 
 G = 9.81
 K_DRAG = 0.25          # shuttle drag: terminal velocity ≈ √(g/k) ≈ 6.3 m/s
@@ -371,7 +372,10 @@ def reconstruct_rally(vision_rally: dict | None, court_info: dict | None,
     if not court_info or court_info.get("status") != "ok" or not court_info.get("homography"):
         return {"status": "no_court"}
     shuttle = (vision_rally or {}).get("shuttle") or []
-    pts = [p for p in shuttle if isinstance(p, dict)]
+    # Same canonical track as camera/Studio/export (TASK-034 P0): raw TrackNet
+    # output contains the isolated teleports the Hampel filter removes — feeding
+    # them here seeded shots from false points no other consumer even displays.
+    pts = filter_shuttle_points([p for p in shuttle if isinstance(p, dict)])
     if len(pts) < MIN_SEG_POINTS:
         return {"status": "no_track"}
     cam = camera_from_homography(court_info["homography"], *source_wh)

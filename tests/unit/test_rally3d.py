@@ -155,6 +155,31 @@ def test_two_shots_split_and_fit():
     assert out["fps"] == rally3d.REPLAY_FPS
 
 
+def test_reconstruction_ignores_raw_teleports():
+    """TASK-034 P0: 3D consumes the same filtered track as camera/Studio/export.
+    A raw TrackNet teleport (a stadium light) used to reach the solver directly
+    — splitting shots at a phantom 'hit' — while every display path hid it."""
+    R, t, _ = _gt_camera()
+    info = _court_info(R, t)
+    p0 = np.array([1.6, 11.2, 2.4])
+    v0 = np.array([1.2, -9.5, 5.0])
+    t0 = 10.0
+    ts = np.arange(t0, t0 + 1.0, 0.1)
+    gt = rally3d.simulate(p0, v0, t0, ts)
+    img = _project(R, t, gt)
+    shuttle = [{"t": float(tt), "x": float(x), "y": float(y), "confidence": 0.9}
+               for tt, (x, y) in zip(ts, img)]
+
+    clean = rally3d.reconstruct_rally({"shuttle": shuttle}, info, (W, H))
+    spiked = [dict(s) for s in shuttle]
+    spiked.insert(5, {"t": float(ts[4]) + 0.05, "x": 0.97, "y": 0.03, "confidence": 0.9})
+    out = rally3d.reconstruct_rally({"shuttle": spiked}, info, (W, H))
+
+    assert clean["status"] == out["status"] == "ok"
+    assert len(out["shots"]) == len(clean["shots"]) == 1
+    assert abs(out["shots"][0]["residual_px"] - clean["shots"][0]["residual_px"]) < 0.5
+
+
 def test_reconstruction_degrades_gracefully():
     assert rally3d.reconstruct_rally({"shuttle": []}, {"status": "not_found"}, (W, H))["status"] == "no_court"
     R, t, _ = _gt_camera()

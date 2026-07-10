@@ -51,6 +51,27 @@ def test_filter_keeps_fast_smash():
     assert len(kept) == 8
 
 
+def test_filter_keeps_decelerating_launch_endpoint():
+    """TASK-034: an arc's biggest image-space step is its first (deceleration
+    after the hit). The one-sided endpoint median read the CONTACT point — the
+    highest-information sample for 3D — as an outlier and dropped it."""
+    ys = [0.36, 0.25, 0.19, 0.155, 0.135, 0.125, 0.13, 0.15, 0.18]
+    pts = [_pt(i / 10, 0.7 - 0.02 * i, ys[i]) for i in range(len(ys))]
+    kept = track.filter_shuttle_points(pts)
+    assert len(kept) == len(pts), "launch endpoint must survive"
+
+
+def test_filter_still_rejects_endpoint_teleports():
+    # The extrapolation rule must not open a hole for spikes AT segment edges.
+    pts = [_pt(i / 10, 0.2 + 0.05 * i, 0.45) for i in range(10)]
+    pts[0] = _pt(0.0, 0.95, 0.05)
+    pts[9] = _pt(0.9, 0.02, 0.98)
+    kept = track.filter_shuttle_points(pts)
+    xs = [p["x"] for p in kept]
+    assert 0.95 not in xs and 0.02 not in xs
+    assert len(kept) == 8
+
+
 def test_spike_does_not_yank_camera():
     # Same rally with and without a spike: the spike must not move the camera
     # path meaningfully (the filter removes it before interpolation).

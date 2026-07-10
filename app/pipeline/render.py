@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .. import config
 from . import media
-from .track import FocusPath
+from .track import FocusPath, filter_shuttle_points
 
 FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
@@ -161,6 +161,13 @@ def render_rally(src: str | Path, info: media.VideoInfo, t0: float, t1: float,
     camera_path is the sampled crop window actually used, normalized to the
     source frame: [{t, x, y, w, h}] with t in source seconds."""
     W, H = info.width, info.height
+
+    # One canonical shuttle track (TASK-034 P0): the baked marker used to pick
+    # nearest RAW points while camera + Studio used the outlier-filtered track —
+    # a false detection invisible in the Studio could still stamp the export.
+    if annotations and annotations.get("shuttle"):
+        annotations = {**annotations,
+                       "shuttle": filter_shuttle_points(annotations["shuttle"])}
 
     badge = _badge(label, sub)
     mark = _wordmark()
