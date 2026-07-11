@@ -75,13 +75,19 @@ impossible 3D — before any model swaps.
 - Bench smoke on uservid3 correctly FAILs `d3_below_floor_accepted` on the
   STORED (old-solver) rally_3d — the runner detects stale artifacts.
 
-**Rollout (pending, not done in this cycle):**
-- Worker image rebuild REQUIRED (handler.py + botsort_baddy.yaml +
-  requirements.txt): suggested `_TAG=phase0-20260711`, then template patch +
-  bounce warm workers (supersedes the pending `trackingv2-20260710` rebuild).
-- VM deploy for app/ + web/ (assets bumped to `app.js?v=36`).
-- Reprocess a reference clip and compare `tracknet.coverage/teleports`,
-  stable ids, and `rally_3d.rejected` against this cycle's numbers.
+**Rollout (DONE 2026-07-11, same day):**
+- Worker image `phase0-20260711` built via Cloud Build (5m03s, SUCCESS —
+  weight bake verified the pinned ultralytics loads yolo26l/m), template
+  `ic265brof1` patched via REST, warm workers bounced 0→2 (Cycle-17 gotcha),
+  endpoint healthy (idle 1 / unhealthy 0).
+- VM deployed via `bash deploy/deploy.sh`: baddy.service active,
+  `{"ok":true}`, assets `app.js?v=36` live with the new interp code.
+- GPU smoke (8s HSBC window via /media proxy, run `6997f947…-e2`, 42s):
+  `worker_version=phase0-20260711`, tracker `botsort_baddy`, no track_error;
+  **ids 1/2 present 48/48 frames (persistence fix confirmed on real GPU)**;
+  tracknet `{coverage 1.0, longest_gap 0.8s, teleports 2, quality 0.886}` —
+  honest metric live (not the flat 0.82). Old stored reels keep old tracking
+  until reprocessed (`/api/jobs/{id}/retry?reprocess=1`).
 
 **Open risks / next steps:** Phase-1 queue rows in PRD §16 (match_type
 contract, crop-based pose, TrackNet overlap/InpaintNet A/B via the bench,
