@@ -12,6 +12,13 @@ tripod AND handheld, clean AND compressed uploads, at least one rally >45 s.
 Process each through the normal pipeline once and keep the job's
 `data/outputs/<job>/result.json` immutable (copy it into `bench/results/`).
 
+**Camera-angle diversity (TASK-035).** TrackNetV3's training data is broadcast
+footage (elevated behind-the-baseline). The smash-speed literature had to
+build a custom dataset because side-on/perpendicular views are out of that
+domain — expect the same gap here. Include at least one side-on/courtside
+amateur recording so any TrackNet fine-tune decision is made against the
+angles our users actually shoot.
+
 `bench/manifest.json`:
 
 ```json
@@ -71,3 +78,22 @@ Exit code 1 when any gate fails — wire it into a model-upgrade checklist.
 
 Metric definitions live in `scripts/bench/metrics.py` (unit-tested); gates in
 `metrics.RELEASE_GATES`.
+
+## 5. Speed-validation protocol (TASK-035)
+
+The 3D speed MAPE gate needs ground truth. The smash-speed literature's
+validation design transfers directly — and so does its trap:
+
+- **Capture**: record ~20 smashes with a radar gun behind the net facing the
+  hitter, simultaneously with a normal Baddy upload (tripod). Log radar
+  readings per trial.
+- **Compare AT-NET, not impact.** A radar gun locks on only after metres of
+  flight; shuttle drag decays speed so fast that peak-at-impact vs radar
+  differed by ~66 km/h MAE in the paper's 20-trial validation, while their
+  at-net estimates matched the radar closely. Our `rally_3d` shots now carry
+  both: `speed_kmh` (impact, |v0|) and `speed_at_net_kmh` (net-plane
+  crossing). **The MAPE ≤ 15% gate applies to `speed_at_net_kmh` vs radar**;
+  `speed_kmh` has no consumer-hardware ground truth and is validated only
+  through the landing/trajectory gates.
+- Keep smashes reasonably straight: monocular 3D and radar cone both degrade
+  on sharp cross-court angles; note the angle in the trial log.

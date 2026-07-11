@@ -5,6 +5,48 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 20: Smash-speed paper intake — measured shuttle confidence + radar-comparable speeds (TASK-035)
+**Date:** 2026-07-11
+**Goal:** Apply the transferable techniques from a smartphone smash-speed
+paper (custom YOLOv5 + constant-velocity Kalman tracking-by-detection,
+kinematic plausibility bounds, radar-gun validation methodology) to the two
+analytics gaps TASK-034 deferred: meaningless flat shuttle confidence, and
+speed numbers users can't relate to hardware they know.
+**PRD:** §16 remediation — TASK-035 row (queued Phase-1 rows renumbered 036–038).
+**Branch:** `feat/TASK-035-kalman-shuttle-speed` (base `e7c4714`, atop TASK-034).
+
+**What shipped**
+- `track.refine_shuttle_track` (hooked in `gpu._frames_from`, which BOTH
+  vision backends flow through): forward+backward constant-velocity
+  innovation scoring with the miss normalized by the local median step
+  (resolution/speed independent, cf. the paper's W/4 proximity
+  normalization); static-run rejection (≥8 pts inside ~1% of the frame — a
+  light/net post/floor-rest; their <5 km/h reject); hard gate on implied
+  speeds >~500 km/h normalized (their 375 km/h bound);
+  `provenance:"observed"` stamped for future inpainted/predicted fills.
+  Confidence ∈ [0.05, 0.95]; consumers keep ≥0.3 thresholds.
+- `rally3d.fit_shot`: `speed_at_net_kmh` (first net-plane crossing,
+  finite-differenced at REPLAY_FPS) alongside impact `speed_kmh` — the
+  paper measured ~66 km/h MAE between peak-at-impact and radar readings
+  (radar locks on after drag decay); at-net is the radar-comparable number.
+  Studio 3D panel: "X km/h at impact · Y at net · peak Zm" (v=37).
+- `docs/benchmarks/PHASE0_BENCH.md`: speed-validation protocol (MAPE gate
+  applies to `speed_at_net_kmh` vs radar, NOT impact speed) + camera-angle
+  diversity requirement (TrackNet's broadcast training domain vs side-on
+  amateur angles — the paper had to build a custom dataset for exactly this).
+
+**Verification**
+- `./scripts/check.sh` — 131 passed (`tests/unit/test_shuttle_refine.py`:
+  smooth/teleport/static-run/false-head/speed-gate/garbage;
+  `test_rally3d.py::test_shot_speed_at_net_is_radar_comparable`).
+- Real-artifact sanity (`data/outputs/uservid3/result.json`, 5 rallies):
+  467 raw pts → 24 static-run dropped, 27 distrusted <0.3 (6%), flight
+  medians 0.86–0.92 — previously every point claimed a flat 0.82.
+- `node --check web/app.js`.
+**Deploy note:** app-side only (worker untouched — 0.82 placeholder is
+rewritten at canonicalization). Old stored reels keep old confidences until
+reprocessed.
+
 ## Cycle 19: Phase-0 audit fixes — deterministic tracking/3D bugs (TASK-034)
 **Date:** 2026-07-11
 **Goal:** Implement Phase 0 of the 2026-07-11 codebase audit: the deterministic
