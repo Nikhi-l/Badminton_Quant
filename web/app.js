@@ -1672,7 +1672,7 @@ function renderInspector() {
           <div class="metric"><b>${reelSegments().filter(x => x.r && x.r.rally_3d && x.r.rally_3d.status === "ok").length}</b><span>rallies reconstructed</span></div>
           <div class="metric"><b>${r3 ? r3.shots.length : 0}</b><span>shots (first rally)</span></div>
         </div>
-        ${r3 ? `<div class="kf-list">${r3.shots.slice(0, 8).map(sh => `<div class="kf-item"><span class="kf-t">${fmtT(sh.t0)}</span><span class="kf-tgt">${sh.speed_kmh} km/h · peak ${sh.peak_z}m · ±${sh.residual_px}px</span></div>`).join("")}</div>` : ""}`
+        ${r3 ? `<div class="kf-list">${r3.shots.slice(0, 8).map(sh => `<div class="kf-item"><span class="kf-t">${fmtT(sh.t0)}</span><span class="kf-tgt">${sh.speed_kmh} km/h at impact${sh.speed_at_net_kmh ? ` · ${sh.speed_at_net_kmh} at net` : ""} · peak ${sh.peak_z}m</span></div>`).join("")}</div>` : ""}`
         : `<div class="control-hint muted">${r3dWhyNot()}</div>
         ${courtOf() ? "" : `<button class="btn btn-small" id="r3dDrawCourtBtn">✏️ Draw court corners</button>`}`}
       </div>`;

@@ -374,6 +374,9 @@ def fit_shot(cam: dict, seg: list[dict]) -> dict | None:
         "t1": round(float(obs_t[-1]), 3),
         "p0": [round(float(v), 3) for v in p0],
         "v0": [round(float(v), 3) for v in v0],
+        # |v0| is the speed AT IMPACT — the number a radar gun physically
+        # cannot read (it locks on after metres of drag decay; the smash-speed
+        # literature measured ~66 km/h mean gap between the two).
         "speed_kmh": round(float(np.linalg.norm(v0)) * 3.6, 1),
         "peak_z": round(float(np.max(samples[:, 2])), 2),
         "residual_px": round(rms, 2),
@@ -384,9 +387,29 @@ def fit_shot(cam: dict, seg: list[dict]) -> dict | None:
                      "z": round(float(p[2]), 3)}
                     for t, p in zip(ts, samples)],
     }
+    v_net = _speed_at_net(samples)
+    if v_net is not None:
+        # Radar-comparable: the speed where the shot crosses the net plane.
+        shot["speed_at_net_kmh"] = round(v_net * 3.6, 1)
     if best is None:
         shot["gate"] = gated_reason
     return shot
+
+
+def _speed_at_net(samples: np.ndarray) -> float | None:
+    """Speed (m/s) at the first net-plane crossing, or None if no crossing.
+
+    Finite-differenced from the simulated samples (REPLAY_FPS): coarse but
+    honest — it is the drag-decayed speed a net-side radar gun would report,
+    which players can sanity-check against numbers they already know.
+    """
+    if len(samples) < 2:
+        return None
+    for a, b in zip(samples, samples[1:]):
+        da, db = float(a[1]) - NET_Y, float(b[1]) - NET_Y
+        if (da <= 0.0 <= db) or (db <= 0.0 <= da):
+            return float(np.linalg.norm(b - a)) * REPLAY_FPS
+    return None
 
 
 def _sharpest_turn(seg: list[dict]) -> int:

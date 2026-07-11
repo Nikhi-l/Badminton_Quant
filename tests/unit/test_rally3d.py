@@ -230,3 +230,40 @@ def test_reconstruction_degrades_gracefully():
     R, t, _ = _gt_camera()
     info = _court_info(R, t)
     assert rally3d.reconstruct_rally({"shuttle": []}, info, (W, H))["status"] == "no_track"
+
+
+def test_shot_speed_at_net_is_radar_comparable():
+    """TASK-035: |v0| is speed AT IMPACT; a radar gun reads the drag-decayed
+    value near the net (the smash-speed paper measured ~66 km/h mean gap
+    between the two). Net-crossing shots must carry speed_at_net_kmh, decayed
+    below impact speed; same-side shots must not carry it at all."""
+    R, t, _ = _gt_camera()
+    info = _court_info(R, t)
+    t0 = 5.0
+
+    p0 = np.array([2.5, 10.5, 2.6])
+    v0 = np.array([0.5, -9.0, 3.5])
+    ts = np.arange(t0, t0 + 0.9, 1 / 30)
+    gt = rally3d.simulate(p0, v0, t0, ts)
+    assert float(gt[:, 2].min()) > 0.2                            # airborne
+    assert float(gt[-1, 1]) < rally3d.NET_Y < float(gt[0, 1])     # crosses net
+
+    img = _project(R, t, gt)
+    out = rally3d.reconstruct_rally({"shuttle": [
+        {"t": float(tt), "x": float(x), "y": float(y), "confidence": 0.9}
+        for tt, (x, y) in zip(ts, img)]}, info, (W, H))
+    assert out["status"] == "ok" and out["shots"]
+    shot = out["shots"][0]
+    assert 10.0 < shot["speed_at_net_kmh"] < shot["speed_kmh"]
+
+    p0b = np.array([3.0, 10.8, 2.2])
+    v0b = np.array([0.3, -2.0, 2.6])
+    tsb = np.arange(t0, t0 + 0.8, 1 / 30)
+    gtb = rally3d.simulate(p0b, v0b, t0, tsb)
+    assert float(gtb[:, 1].min()) > rally3d.NET_Y                 # stays one side
+    imgb = _project(R, t, gtb)
+    outb = rally3d.reconstruct_rally({"shuttle": [
+        {"t": float(tt), "x": float(x), "y": float(y), "confidence": 0.9}
+        for tt, (x, y) in zip(tsb, imgb)]}, info, (W, H))
+    assert outb["status"] == "ok" and outb["shots"]
+    assert "speed_at_net_kmh" not in outb["shots"][0]
