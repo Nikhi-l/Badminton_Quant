@@ -323,6 +323,13 @@ def _frames_from(raw_rally: dict, rally: dict) -> tuple[list[dict], list[dict], 
             players.append({"t": t, "boxes": boxes[:4]})
 
     shuttle.sort(key=lambda x: x["t"])
+    # TASK-035: replace the workers' placeholder confidence (flat 0.82 —
+    # TrackNet only exposes binary visibility) with measured plausibility +
+    # provenance BEFORE storage, so every consumer (camera, Studio, render
+    # marker, 3D) inherits it. Both vision backends flow through here
+    # (vision.py routes the CPU path into _canonicalize too).
+    from . import track as _track
+    shuttle = _track.refine_shuttle_track(shuttle)
     players.sort(key=lambda x: x["t"])
     poses.sort(key=lambda x: x["t"])
     racquets.sort(key=lambda x: x["t"])

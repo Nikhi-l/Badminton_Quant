@@ -594,6 +594,122 @@ def _two_player_tracks(player_frames: list, times) -> list:
     return res
 
 
+# ---- TASK-035: measured shuttle confidence (tracking-by-detection style) ----
+# Frame width spans roughly the court diagonal (~14 m) in typical footage, so
+# 10 normalized-units/s ≈ 500 km/h — beyond any real smash (the smash-speed
+# literature rejects >375 km/h for amateurs; world-record initial ≈ 490).
+SHUTTLE_V_MAX_NORM_S = 10.0
+_STATIC_RADIUS = 0.012      # a "shuttle" pinned inside ~1% of the frame…
+_STATIC_RUN = 8             # …for ≥8 consecutive points is a light / net post
+_REFINE_SEG_GAP_S = 0.35    # dt above this starts a new flight segment
+
+
+def _innovation_scores(seq: list[tuple[float, float, float]]) -> list[float | None]:
+    """One directional pass of constant-velocity innovation scoring.
+
+    Each point is compared against the extrapolation of the last ACCEPTED
+    points of its flight segment; confidence falls linearly with the miss
+    distance normalized by the local median step (resolution- and
+    speed-independent, like the smash-speed paper's W/4 normalization).
+    ``None`` means "no motion context in this direction" (segment head) — the
+    caller merges with the opposite pass, where that same point sits at a
+    segment TAIL and gets an informed score.
+    """
+    out: list[float | None] = [None] * len(seq)
+    ref: list[tuple[float, float, float]] = []   # last accepted (t, x, y)
+    steps: list[float] = []                      # recent accepted step sizes
+    for idx, (t, x, y) in enumerate(seq):
+        if ref and t - ref[-1][0] > _REFINE_SEG_GAP_S:
+            ref, steps = [], []
+        if not ref:
+            ref.append((t, x, y))
+            continue
+        t0, x0, y0 = ref[-1]
+        dt = max(t - t0, 1e-3)
+        if len(ref) >= 2:
+            t1, x1, y1 = ref[-2]
+            dt01 = max(t0 - t1, 1e-3)
+            px, py = x0 + (x0 - x1) / dt01 * dt, y0 + (y0 - y1) / dt01 * dt
+        else:
+            px, py = x0, y0
+        miss = math.hypot(x - px, y - py)
+        scale = max(0.02, 3.0 * (sorted(steps)[len(steps) // 2] if steps else 0.02))
+        conf = max(0.05, min(0.95, 0.95 - 0.33 * miss / scale))
+        if math.hypot(x - x0, y - y0) / dt > SHUTTLE_V_MAX_NORM_S:
+            conf = 0.05   # implied speed no shuttle reaches: hard reject
+        out[idx] = conf
+        if conf >= 0.3:   # rejected points must not drag the reference
+            steps.append(math.hypot(x - x0, y - y0))
+            del steps[:-12]
+            ref.append((t, x, y))
+            del ref[:-3]
+    return out
+
+
+def refine_shuttle_track(points: list) -> list:
+    """Replace placeholder shuttle confidence with MEASURED plausibility
+    (TASK-035, adapted from smartphone smash-speed tracking pipelines).
+
+    TrackNetV3's CSV exposes binary visibility, so the workers stored a flat
+    0.82 on every point — consumers thresholding confidence learned nothing
+    from it (audit P0: "82% is a coverage score"). This pass runs at
+    canonicalization time for BOTH vision backends and:
+
+    - drops static runs (≥``_STATIC_RUN`` points inside ``_STATIC_RADIUS``):
+      a stadium light, a net post, or a floor-resting shuttle is not flight;
+    - scores every remaining point by constant-velocity innovation, forward
+      AND backward, keeping the better score — a false positive opening a
+      segment poisons the forward reference but is exposed by the backward
+      pass, while a genuine segment head scores well backward;
+    - hard-rejects implied speeds above ``SHUTTLE_V_MAX_NORM_S`` (≈500 km/h);
+    - stamps ``provenance: "observed"`` (future inpainted/predicted fills
+      must label themselves — consumers may trust them differently).
+
+    Confidence lands in [0.05, 0.95]; consumers keep their ≥0.3 threshold, so
+    an implausible point is now actually excluded from the camera, Studio,
+    render marker, and 3D — not painted at 82%. Segment heads with no motion
+    context in either direction (1–2 point orphans) get a neutral 0.6 and are
+    left for the Hampel spatial filter, which stays complementary.
+    """
+    pts: list[tuple[float, float, float, dict]] = []
+    for p in points or []:
+        try:
+            t, x, y = float(p["t"]), float(p["x"]), float(p["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0.0 < x <= 1.0 and 0.0 < y <= 1.0:
+            pts.append((t, x, y, p))
+    pts.sort(key=lambda r: r[0])
+    if not pts:
+        return []
+
+    # Static-run rejection (the paper rejects implied speeds < 5 km/h).
+    n = len(pts)
+    drop: set[int] = set()
+    i = 0
+    while i < n:
+        j = i + 1
+        while (j < n and pts[j][0] - pts[j - 1][0] <= _REFINE_SEG_GAP_S
+               and math.hypot(pts[j][1] - pts[i][1], pts[j][2] - pts[i][2]) <= _STATIC_RADIUS):
+            j += 1
+        if j - i >= _STATIC_RUN:
+            drop.update(range(i, j))
+        i = j if j > i + 1 else i + 1
+    kept = [pts[k] for k in range(n) if k not in drop]
+    if not kept:
+        return []
+
+    xyz = [(t, x, y) for t, x, y, _ in kept]
+    fwd = _innovation_scores(xyz)
+    bwd = list(reversed(_innovation_scores([(-t, x, y) for t, x, y in reversed(xyz)])))
+    out = []
+    for (t, x, y, p), f, b in zip(kept, fwd, bwd):
+        informed = [v for v in (f, b) if v is not None]
+        conf = max(informed) if informed else 0.6
+        out.append({**p, "confidence": round(conf, 3), "provenance": "observed"})
+    return out
+
+
 def filter_shuttle_points(shuttle_frames: list, min_conf: float = 0.3,
                           window: int = 3, max_residual: float = 0.16,
                           speed_k: float = 2.5, iterations: int = 2) -> list:
