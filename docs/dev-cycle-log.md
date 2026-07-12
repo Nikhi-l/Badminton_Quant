@@ -71,6 +71,21 @@ reprocessed post-deploy (see ledger).
   per-segment encodes + concat-demuxer stream copy (memory bounded to one
   decoder), with segment i/N progress on the status endpoint.
 
+**Verification round 3 (found via real reprocesses):**
+- Trim OOM fix VERIFIED live: 33 segments processed sequentially, site
+  health stayed {"ok":true} throughout, trimmed.mp4 ready in ~1 min.
+- annotated.mp4 second crash (read-only np.frombuffer views) fixed and
+  VERIFIED (annotated:True, serves 206) — np.array() forces the writable
+  copy; regression test feeds read-only frames AND draws.
+- RunPod deadline bug (the "transient" GPU failure was NOT transient): the
+  poll deadline was set at SUBMISSION, so an 8-min queue + 13-min run
+  (21 min wall) timed out at 20 min and abandoned a job that COMPLETED on
+  the worker — silently downgrading to the CPU camera (no shuttle,
+  evaluator can't prune without track_ids). Fixed: execution clock starts
+  only when RUNNING; queue time bounded separately (RUNPOD_QUEUE_MAX_SEC).
+  Deterministic-clock tests. Known gap: CPU-fallback path has no track_ids,
+  so the evaluator fail-opens there (GPU-only pruning) — acceptable.
+
 ## Cycle 22: Owner review intake — shuttle in-play index v0 + wrist signals + future vision (TASK-040 v0)
 **Date:** 2026-07-12
 **Goal:** Fold the owner's audit review into code and docs: the in-play index
