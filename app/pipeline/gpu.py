@@ -369,10 +369,17 @@ def _canonicalize(raw: Any, rallies: list[dict],
         rr = _match(raw_rallies, idx)
         shuttle, players, poses, racquets, racquet_candidates = _frames_from(rr, rally, court_corners)
         dur = _num(rally.get("dur"), _num(rally.get("end")) - _num(rally.get("start")))
-        shuttle_quality = _clamp01(
-            rr.get("shuttle_quality", rr.get("shuttle_track_quality", _score_samples(shuttle, dur))),
-            _score_samples(shuttle, dur),
-        )
+        # TASK-041: score the CLEANED track (post refine + court gate). The
+        # worker measures its raw output, so a rally whose track was mostly a
+        # background court reads 0.0 even after the junk is gone — starving
+        # the shuttle-follow camera. The worker's own number stays visible in
+        # the tracknet payload.
+        from . import track as _track_mod
+        if shuttle:
+            shuttle_quality = _clamp01(_track_mod.shuttle_track_quality(shuttle, dur))
+        else:
+            shuttle_quality = _clamp01(
+                rr.get("shuttle_quality", rr.get("shuttle_track_quality", 0.0)))
         player_samples = [b for f in players for b in f.get("boxes", [])]
         player_quality = _clamp01(
             rr.get("player_quality", rr.get("person_quality", _score_samples(player_samples, dur, 2.0))),

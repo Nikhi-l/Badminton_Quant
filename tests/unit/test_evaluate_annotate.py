@@ -80,3 +80,57 @@ def test_annotate_frame_skips_stale_tracks():
         "poses": [], "shuttle": [{"t": 1.0, "x": 0.5, "y": 0.5, "confidence": 0.9}]}
     out = annotate.annotate_frame(frame, vision, 9.0)   # 8s from any data
     assert not out.any()                                # honest blank, no stale marker
+
+def test_render_annotated_unpacks_iter_frames_pairs(monkeypatch, tmp_path):
+    """Regression: media.iter_frames yields (index, frame) PAIRS; wrapping it
+    in enumerate fed tuples to numpy and crashed the first annotated bake
+    ('inhomogeneous shape'). Pin the generator contract end-to-end with the
+    media layer mocked."""
+    from types import SimpleNamespace
+    from app.pipeline import annotate as ann, media
+
+    written = []
+
+    class _FakeWriter:
+        def __init__(self, dst, w, h, fps, audio_src, a0, a1):
+            self.dst = dst
+        def write(self, frame):
+            assert isinstance(frame, np.ndarray) and frame.ndim == 3
+            written.append(frame.shape)
+        def close(self):
+            Path(self.dst).write_bytes(b"x")
+
+    def _fake_iter(path, t0, t1, *, fps, gray=False):
+        for i in range(5):
+            yield i, np.zeros((120, 160, 3), dtype=np.uint8)
+
+    from pathlib import Path
+    (tmp_path / "proxy.mp4").write_bytes(b"x")
+    monkeypatch.setattr(media, "probe", lambda p: SimpleNamespace(
+        width=160, height=120, fps=30.0, duration=100.0))
+    monkeypatch.setattr(media, "iter_frames", _fake_iter)
+    monkeypatch.setattr(media, "FrameWriter", _FakeWriter)
+
+    result = {"rallies": [{"start": 10.0, "end": 12.0, "vision": {
+        "players": [], "poses": [], "shuttle": []}}]}
+    out = ann.render_annotated(tmp_path, result, log=lambda m: None)
+
+    assert out is not None and out.name == "annotated.mp4"
+    assert len(written) == 5 and all(s == (120, 160, 3) for s in written)
+
+
+def test_post_gate_quality_recovers_cleaned_track():
+    """Regression: the worker scores its RAW track — a rally that was mostly
+    background-court junk reads 0.0 even after the court gate cleaned it,
+    starving the shuttle-follow camera. The post-gate recompute must score
+    the surviving main-court flight on its own cadence."""
+    from app.pipeline.track import shuttle_track_quality
+    clean = [{"t": 5.0 + i / 30, "x": 0.4 + 0.003 * i, "y": 0.5, "confidence": 0.9}
+             for i in range(150)]          # 5s of clean 30Hz flight in a 12s rally
+    assert shuttle_track_quality(clean, 12.0) > 0.3
+    assert shuttle_track_quality([], 12.0) == 0.0
+    # teleporty leftovers still score low
+    jerky = list(clean)
+    for i in range(0, len(jerky), 6):
+        jerky[i] = {**jerky[i], "x": 0.95, "y": 0.05}
+    assert shuttle_track_quality(jerky, 12.0) < 0.1

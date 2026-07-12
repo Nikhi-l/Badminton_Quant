@@ -204,7 +204,8 @@ def _compact_vision(v: dict | None) -> dict | None:
     tracknet = v.get("tracknet") if isinstance(v.get("tracknet"), dict) else None
     if tracknet:
         out["tracknet"] = {k: tracknet.get(k) for k in (
-            "enabled", "status", "points", "quality"
+            "enabled", "status", "points", "quality",
+            "coverage", "longest_gap_sec", "teleports",
         ) if k in tracknet}
     track = _sample_shuttle_track(shuttle)
     if track:

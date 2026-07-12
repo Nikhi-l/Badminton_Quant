@@ -646,6 +646,46 @@ def _innovation_scores(seq: list[tuple[float, float, float]]) -> list[float | No
     return out
 
 
+def shuttle_track_quality(points: list, dur: float, fps: float | None = None) -> float:
+    """Post-filter shuttle quality: coverage × longest-gap × teleport factors —
+    the same formula the worker reports, recomputed on the CLEANED track
+    (TASK-041). The worker's number is measured on its raw output, so a rally
+    whose track was mostly a background court reads 0.0 even after the court
+    gate removed the junk — starving the shuttle-follow camera of a track that
+    is now perfectly usable. Consumers gate on ≥0.22 (camera) / ≥0.65 (POV
+    follow, mask); this recompute is what those gates should see.
+    """
+    n = len(points or [])
+    if not n or dur <= 0:
+        return 0.0
+    ts = []
+    for p in points:
+        try:
+            ts.append((float(p["t"]), float(p["x"]), float(p["y"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not ts:
+        return 0.0
+    ts.sort()
+    if fps is None:
+        # Self-calibrate to the track's own cadence (TrackNet = source fps,
+        # the motion fallback ~6 Hz) so coverage compares like with like.
+        dts = sorted(b[0] - a[0] for a, b in zip(ts, ts[1:]) if b[0] > a[0])
+        fps = min(30.0, max(4.0, 1.0 / dts[len(dts) // 2])) if dts else 30.0
+    expected = max(2, int(dur * max(fps, 1.0) * 0.35))
+    coverage = min(1.0, len(ts) / expected)
+    longest_gap = 0.0
+    teleports = 0
+    for (t0, x0, y0), (t1, x1, y1) in zip(ts, ts[1:]):
+        dt = t1 - t0
+        longest_gap = max(longest_gap, dt)
+        if dt <= 2.5 / max(fps, 1.0) and math.hypot(x1 - x0, y1 - y0) > 0.22:
+            teleports += 1
+    gap_factor = max(0.0, min(1.0, 1.0 - max(0.0, longest_gap - 0.5) / dur))
+    jump_factor = max(0.0, min(1.0, 1.0 - 8.0 * teleports / max(len(ts) - 1, 1)))
+    return max(0.0, min(1.0, coverage * gap_factor * jump_factor))
+
+
 def court_shuttle_gate(points: list, corners: list | None, expand: float = 1.35,
                        min_inside_frac: float = 0.5, gap_s: float = 0.35) -> list:
     """Drop shuttle flight SEGMENTS that belong to a background court (TASK-041).
