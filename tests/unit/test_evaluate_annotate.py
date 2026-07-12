@@ -102,7 +102,10 @@ def test_render_annotated_unpacks_iter_frames_pairs(monkeypatch, tmp_path):
 
     def _fake_iter(path, t0, t1, *, fps, gray=False):
         for i in range(5):
-            yield i, np.zeros((120, 160, 3), dtype=np.uint8)
+            # exactly what media.iter_frames yields: a READ-ONLY frombuffer
+            # view (cv2 refuses to draw on it — the second bake crash)
+            frame = np.frombuffer(bytes(120 * 160 * 3), dtype=np.uint8).reshape(120, 160, 3)
+            yield i, frame
 
     from pathlib import Path
     (tmp_path / "proxy.mp4").write_bytes(b"x")
@@ -112,7 +115,10 @@ def test_render_annotated_unpacks_iter_frames_pairs(monkeypatch, tmp_path):
     monkeypatch.setattr(media, "FrameWriter", _FakeWriter)
 
     result = {"rallies": [{"start": 10.0, "end": 12.0, "vision": {
-        "players": [], "poses": [], "shuttle": []}}]}
+        # a real box so cv2 actually DRAWS on the read-only-derived frame
+        "players": [{"t": 10.5, "boxes": [{"x1": 0.2, "y1": 0.2, "x2": 0.5,
+                                           "y2": 0.8, "confidence": 0.9, "track_id": 1}]}],
+        "poses": [], "shuttle": []}}]}
     out = ann.render_annotated(tmp_path, result, log=lambda m: None)
 
     assert out is not None and out.name == "annotated.mp4"

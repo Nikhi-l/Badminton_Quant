@@ -140,9 +140,12 @@ def render_annotated(workdir: Path, result: dict, log=print) -> Path | None:
         writer = media.FrameWriter(clip, info.width, info.height, fps, proxy, t0, t1)
         try:
             # iter_frames yields (index, frame) pairs — unpack, don't enumerate
-            # (a tuple fed to numpy was the inhomogeneous-shape crash).
+            # (a tuple fed to numpy was the inhomogeneous-shape crash). And the
+            # frames are np.frombuffer views: READ-ONLY, with ascontiguousarray
+            # a no-op on them — cv2 needs np.array's forced writable copy
+            # (same numpy gotcha as CLAUDE.md's np.asarray(PIL) note).
             for j, frame in media.iter_frames(proxy, t0, t1, fps=fps):
-                frame = np.ascontiguousarray(frame)
+                frame = np.array(frame)
                 annotate_frame(frame, rr["vision"], t0 + j / fps)
                 writer.write(frame)
         finally:
