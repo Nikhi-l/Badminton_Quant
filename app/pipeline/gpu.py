@@ -369,14 +369,17 @@ def _canonicalize(raw: Any, rallies: list[dict],
         rr = _match(raw_rallies, idx)
         shuttle, players, poses, racquets, racquet_candidates = _frames_from(rr, rally, court_corners)
         dur = _num(rally.get("dur"), _num(rally.get("end")) - _num(rally.get("start")))
-        # TASK-041: score the CLEANED track (post refine + court gate). The
-        # worker measures its raw output, so a rally whose track was mostly a
-        # background court reads 0.0 even after the junk is gone — starving
-        # the shuttle-follow camera. The worker's own number stays visible in
-        # the tracknet payload.
+        # TASK-041: score the track the CONSUMERS actually use — i.e. after the
+        # SAME Hampel outlier filter the public overlay and camera apply
+        # (filter_shuttle_points), not the raw refined list. The worker scores
+        # its own raw output (still visible in the tracknet payload); a rally
+        # whose raw track teleported to a background court read 0.0 there even
+        # after filtering left a clean main-court trail — starving the
+        # shuttle-follow camera on tracks that are actually usable.
         from . import track as _track_mod
         if shuttle:
-            shuttle_quality = _clamp01(_track_mod.shuttle_track_quality(shuttle, dur))
+            scored = _track_mod.filter_shuttle_points(shuttle)
+            shuttle_quality = _clamp01(_track_mod.shuttle_track_quality(scored, dur))
         else:
             shuttle_quality = _clamp01(
                 rr.get("shuttle_quality", rr.get("shuttle_track_quality", 0.0)))

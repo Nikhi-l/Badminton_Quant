@@ -140,3 +140,19 @@ def test_post_gate_quality_recovers_cleaned_track():
     for i in range(0, len(jerky), 6):
         jerky[i] = {**jerky[i], "x": 0.95, "y": 0.05}
     assert shuttle_track_quality(jerky, 12.0) < 0.1
+
+
+def test_quality_scores_filtered_track_not_raw_teleports():
+    """TASK-041: a raw track with isolated teleports (background-court
+    re-locks) that the Hampel filter removes must score on the CLEANED track,
+    not the raw one — else a rally with a perfectly usable filtered trail
+    reads 0.0 and the shuttle-follow camera never engages."""
+    from app.pipeline.track import shuttle_track_quality, filter_shuttle_points
+    clean = [{"t": 5.0 + i / 30, "x": 0.4 + 0.003 * i, "y": 0.5, "confidence": 0.85}
+             for i in range(150)]
+    raw = list(clean)
+    for i in range(0, len(raw), 7):          # isolated teleports to a "light"
+        raw[i] = {**raw[i], "x": 0.97, "y": 0.03}
+    # raw scores low; the filtered track (what consumers use) scores high
+    assert shuttle_track_quality(raw, 12.0) < 0.2
+    assert shuttle_track_quality(filter_shuttle_points(raw), 12.0) > 0.6
