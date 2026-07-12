@@ -53,8 +53,20 @@ adjacent-court players tracked again — owner proposed court-area masking.
 
 **Verification:** 168 passed (new: court gate ×5, churn/revert ×2, action
 camera ×3, audio refine ×5; regression contract updated: shuttle leads,
-player may trail to the edge, camera must actually move). Deploy + GPU
-reprocess below.
+player may trail to the edge, camera must actually move).
+
+**Deployed + GPU-verified 2026-07-13** (two deploys — the first reprocess
+exposed that `?reprocess=1` DROPPED the owner's drawn court: corners lived
+only in the overwritten result while reprocess re-ran the ORIGINAL upload
+options → court `not_found` → gates failed open → left-court boxes returned.
+Fixed: `db.set_job_options`; POST /court persists validated corners into job
+options; retry-time fallback folds manual corners from the prior result.
+170 tests.) Final reprocess of `1faaa5e4a02f`: court ok/manual/0.98,
+**LEFT-court boxes 0 across every rally (was 39–48%)**, 19 audio-refined
+rallies (all `audio_hits`, coverage 257s→140s), constant 1.55x panning
+camera, evaluator ok, reel/annotated/thumb serving 206. n_used=4 (validation
+ladder dropped one of 5 rendered clips). Far-player recall still the queued
+ceiling (boxes/frame med 1 — detection, not gating).
 
 ## Cycle 23: Upload-review batch — pose visibility, evaluator, court gate, trim button (TASK-041)
 **Date:** 2026-07-12
