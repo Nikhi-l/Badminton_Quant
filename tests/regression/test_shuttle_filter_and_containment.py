@@ -100,9 +100,12 @@ def test_spike_does_not_yank_camera():
     assert dx < 0.02, f"a single false detection moved the camera by {dx:.3f}"
 
 
-def test_camera_keeps_shuttle_and_player_in_frame():
-    # Shuttle sweeps to the far right edge while the near player lags behind —
-    # the crop must contain the shuttle point AND the player's body every frame.
+def test_camera_follows_shuttle_with_player_leash():
+    """TASK-042 action camera: the crop LEADS with the shuttle at a court-aware
+    zoom; the near player may trail toward the crop edge but never vanishes.
+    (The pre-042 contract — player AND shuttle hard-contained every frame —
+    forced fully-wide zoom whenever they spread apart: the owner's 'camera
+    never moves, not even tracking the shuttle' reel.)"""
     t0, t1, fps = 0.0, 4.0, 30
     times = [t0 + i / fps for i in range(round((t1 - t0) * fps))]
     shu = lambda t: 0.30 + 0.62 * (t / (t1 - t0))          # 0.30 -> 0.92 (edge)
@@ -123,5 +126,10 @@ def test_camera_keeps_shuttle_and_player_in_frame():
         hw, hh = CW / (2 * z), CH / (2 * z)
         worst_shuttle = max(worst_shuttle, abs(shu(t) - cx) - hw, abs(0.5 - cy) - hh)
         worst_player = max(worst_player, abs(near(t) - cx) - hw)
+    # a slow coherent sweep keeps the shuttle in frame the whole way
     assert worst_shuttle <= 0.005, f"shuttle escapes the crop by {worst_shuttle:.3f}"
-    assert worst_player <= 0.005, f"near player escapes the crop by {worst_player:.3f}"
+    # the trailing player's centre stays within ~half a body of the edge
+    assert worst_player <= 0.07, f"near player fully lost ({worst_player:.3f})"
+    # and the camera actually MOVES at action zoom — the punch contract
+    assert float(path.zs.min()) >= 1.35, f"zoom collapsed to {path.zs.min():.2f}"
+    assert float(path.xs.max() - path.xs.min()) >= 0.2, "camera did not pan"

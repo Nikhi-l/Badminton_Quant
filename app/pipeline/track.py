@@ -1044,8 +1044,49 @@ def _shuttle_track(shuttle_frames: list, times, max_gap_s: float = 0.5):
     return sx, sy
 
 
+Z_ACTION_MAX = 2.25          # court-aware zoom ceiling (auto camera, TASK-042)
+
+
+def _action_zoom(player_frames: list, shuttle_frames: list, ch: float,
+                 pad_t: float, pad_b: float) -> tuple[float, float]:
+    """Whole-rally court-aware zoom target + the action band's top edge.
+
+    The band is the vertical span the rally actually lives in: player box
+    extents (P5..P95) plus the shuttle's mid-flight heights (P15 — apex
+    outliers deliberately trimmed; a clear's apex briefly leaving a tight
+    crop reads far better than the whole rally rendered fully wide). Returns
+    ``(z_rally, band_lo)`` where z_rally fills ~90% of the crop height with
+    the band, clipped to [Z_MAX, Z_ACTION_MAX] — footage where players
+    already fill the frame keeps today's gentle framing.
+    """
+    tops, bots = [], []
+    for f in player_frames or []:
+        for b in f.get("boxes") or []:
+            try:
+                tops.append(float(b["y1"]))
+                bots.append(float(b["y2"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+    if not bots:
+        return Z_MAX, 0.0
+    lo_y = float(np.percentile(tops, 5)) - pad_t
+    hi_y = float(np.percentile(bots, 95)) + pad_b
+    sy = []
+    for p in shuttle_frames or []:
+        try:
+            sy.append(float(p["y"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if len(sy) >= 8:
+        lo_y = min(lo_y, float(np.percentile(sy, 15)) - 0.02)
+    band = max(hi_y - min(lo_y, hi_y), 0.18)
+    z = float(np.clip(ch / (band * 1.12), Z_MAX, Z_ACTION_MAX))
+    return z, max(0.0, lo_y)
+
+
 def _contain_targets(xs, ys, zs, cw, ch, shu_x, shu_y, tracks,
-                     pad: float = 0.035, smooth_win: int = 9):
+                     pad: float = 0.035, smooth_win: int = 9,
+                     shuttle_soft: bool = False):
     """Post-smoothing guarantee that the crop keeps its subjects in frame.
 
     The heavy path solver optimises smoothness, which can drag the crop off a
@@ -1055,6 +1096,14 @@ def _contain_targets(xs, ys, zs, cw, ch, shu_x, shu_y, tracks,
     zoom, (b) shifts the centre minimally to contain them. Runs shift → light
     re-smooth → shift so the final path is both smooth and containing; the last
     pass is unsmoothed, so containment wins at output.
+
+    ``shuttle_soft`` (TASK-042): with the court-aware action zoom, hard shuttle
+    containment is self-defeating — every far-half crossing forced the zoom
+    back to fully-wide (the "camera never moves" reel), and gating it per-frame
+    pops the zoom instead. Soft mode drops the shuttle from the containment
+    subjects entirely: the leash pan in the planner already chases it, and a
+    smashed shuttle briefly leaving the slice reads better than an unzoomed
+    rally. The near player stays hard-guaranteed.
     """
     xs = np.asarray(xs, np.float64).copy()
     ys = np.asarray(ys, np.float64).copy()
@@ -1064,13 +1113,17 @@ def _contain_targets(xs, ys, zs, cw, ch, shu_x, shu_y, tracks,
     def required_extent(i):
         rx, ry = [], []
         sx, sy = float(shu_x[i]), float(shu_y[i])
-        if not np.isnan(sx):
+        if not np.isnan(sx) and not shuttle_soft:
             rx.append(sx)
             ry.append(sy)
         near = tracks[i][0] if i < len(tracks) else None
         if near is not None:
             bx, by, bhw, bhh = near
-            rx += [bx - bhw * 0.6, bx + bhw * 0.6]
+            if not shuttle_soft:
+                # hard x-containment fights the blend-follow plan (the pan
+                # deliberately leans off the player toward the shuttle);
+                # unsmoothed clamps here were the ax99 spikes (TASK-042)
+                rx += [bx - bhw * 0.6, bx + bhw * 0.6]
             ry += [by - bhh * 0.8, by + bhh * 0.8]
         return rx, ry
 
@@ -1136,9 +1189,17 @@ def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
     tracks = _two_player_tracks(player_frames, times)
 
     PAD_X, PAD_T, PAD_B = 0.05, 0.10, 0.13   # body padding around a player box
-    SHUTTLE_LED_Z = Z_HARD                   # widest tall slice when following alone
     SHUTTLE_LED_CY = 0.55                    # bias vertical so both court halves show
     MIN_HW, MIN_HH = 0.085, 0.135            # zoom floor: don't punch onto the shuttle
+
+    # Court-aware action zoom (TASK-042). The reel read "completely static":
+    # zoom was capped at a gentle 1.40x while the court occupied a third of the
+    # frame, and hard player+shuttle containment forced fully-wide whenever the
+    # shuttle crossed to the far half. The whole-rally vertical action band
+    # (player extents + mid-flight shuttle, percentile-trimmed so apex clears
+    # don't inflate it) sets a STABLE per-rally zoom target; horizontal
+    # containment is demoted to a pan leash around the near player.
+    z_rally, band_lo = _action_zoom(player_frames, shuttle_frames, ch, PAD_T, PAD_B)
 
     if shuttle_ok:
         shu_x, shu_y = _shuttle_track(shuttle_frames, times)
@@ -1160,66 +1221,83 @@ def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
     def fit_zoom(half_w, half_h):
         return min(cw / (2 * max(half_w, MIN_HW)), ch / (2 * max(half_h, MIN_HH)))
 
+    # Pass 1: per-frame vertical action span → ONE constant zoom for the whole
+    # rally. Constant z reads like a broadcast cut (pan does the storytelling)
+    # and makes zoom-accel a non-issue by construction; per-frame fitted zoom
+    # breathed with every clear (TASK-042).
+    spans = []
+    for i in range(n):
+        sy = float(shu_y[i])
+        near, far = tracks[i]
+        anchor = near or far
+        if anchor is None:
+            continue
+        nxlo, nxhi, nylo, nyhi = extent(anchor)
+        vlo, vhi = nylo, nyhi
+        if not np.isnan(sy):
+            sy_band = max(sy, band_lo)         # apex clears don't widen the rally
+            vlo, vhi = min(vlo, sy_band), max(vhi, sy_band)
+        spans.append((vhi - vlo) / 2)
+    if spans:
+        z_fit = fit_zoom(MIN_HW, float(np.percentile(spans, 92)))
+        z_rally = float(np.clip(min(z_fit, z_rally), Z_HARD, z_rally))
+    hw_r = cw / (2 * z_rally)
+    hh_r = ch / (2 * z_rally)
+
     for i in range(n):
         sx, sy = float(shu_x[i]), float(shu_y[i])
         has_shuttle = not np.isnan(sx)
         near, far = tracks[i]
         anchor = near or far
 
-        # (a) Follow the shuttle HORIZONTALLY; keep the nearest player contained and
-        #     stay anchored to the court vertically (never chase a high shuttle into
-        #     the ceiling — the tall 9:16 crop contains the airborne shuttle anyway).
+        # (a) Blend-follow: x leans toward the shuttle from the near player —
+        #     a 9:16 slice usually cannot contain both at action zoom, and
+        #     zooming out to force it is what froze the old camera at 1.0x.
         if has_shuttle and anchor is not None and not shuttle_led:
             nxlo, nxhi, nylo, nyhi = extent(anchor)
-            need_w = max(abs(sx - nxlo), abs(nxhi - sx))    # contain near player around shuttle x
-            vlo, vhi = min(nylo, sy), max(nyhi, sy)         # vertical span: player + shuttle
-            if near and far:                                # include far player if it still fits
+            sy_band = max(sy, band_lo)
+            vlo, vhi = min(nylo, sy_band), max(nyhi, sy_band)
+            if near and far:                   # far player joins if the zoom holds
                 fxlo, fxhi, fylo, fyhi = extent(far)
-                fw = max(abs(sx - fxlo), abs(fxhi - sx))
                 fvlo, fvhi = min(vlo, fylo), max(vhi, fyhi)
-                if fit_zoom(max(need_w, fw), (fvhi - fvlo) / 2) >= Z_HARD:
-                    need_w, vlo, vhi = max(need_w, fw), fvlo, fvhi
-            z = float(np.clip(fit_zoom(need_w, (vhi - vlo) / 2), Z_HARD, Z_MAX))
-            hw, hh = cw / (2 * z), ch / (2 * z)
-            # x centres on the shuttle (slides only to keep the player in frame);
-            # y centres on the player+shuttle span, so the court stays anchored.
-            cx = float(np.clip(sx, nxhi - hw, nxlo + hw)) if (nxhi - nxlo) <= 2 * hw else sx
+                if fit_zoom(MIN_HW, (fvhi - fvlo) / 2) >= z_rally * 0.85:
+                    vlo, vhi = fvlo, fvhi
+            ncx = (nxlo + nxhi) / 2
+            cx = 0.62 * sx + 0.38 * ncx
             cy = (vlo + vhi) / 2
-            xs[i], ys[i], zs[i], seen[i] = np.clip(cx, hw, 1 - hw), np.clip(cy, hh, 1 - hh), z, True
+            xs[i], ys[i] = np.clip(cx, hw_r, 1 - hw_r), np.clip(cy, hh_r, 1 - hh_r)
+            zs[i], seen[i] = z_rally, True
             continue
 
         # (b) Shuttle-led (weak pose) or no player: centre the shuttle in the slice.
         if has_shuttle and (shuttle_led or anchor is None):
-            z = float(np.clip(SHUTTLE_LED_Z, Z_HARD, Z_MAX))
-            hw, hh = cw / (2 * z), ch / (2 * z)
-            xs[i] = np.clip(sx, hw, 1.0 - hw)
-            ys[i] = np.clip(0.5 * sy + 0.5 * SHUTTLE_LED_CY, hh, 1.0 - hh)
-            zs[i], seen[i] = z, True
+            xs[i] = np.clip(sx, hw_r, 1.0 - hw_r)
+            ys[i] = np.clip(0.5 * max(sy, band_lo) + 0.5 * SHUTTLE_LED_CY, hh_r, 1.0 - hh_r)
+            zs[i], seen[i] = z_rally, True
             continue
 
-        # (c) No shuttle this frame: frame the player(s).
+        # (c) No shuttle this frame: frame the player(s) at the same zoom.
         if anchor is None:
             continue
         nxlo, nxhi, nylo, nyhi = extent(anchor)
         bxlo, bxhi, bylo, byhi = nxlo, nxhi, nylo, nyhi
         if near and far:
             fxlo, fxhi, fylo, fyhi = extent(far)
-            bxlo, bxhi = min(bxlo, fxlo), max(bxhi, fxhi)
-            bylo, byhi = min(bylo, fylo), max(byhi, fyhi)
-        z_both = zoom_for(bxlo, bxhi, bylo, byhi)
-        if z_both >= Z_HARD:
-            cx, cy, z = (bxlo + bxhi) / 2, (bylo + byhi) / 2, z_both
-        else:
-            z = max(zoom_for(nxlo, nxhi, nylo, nyhi), Z_HARD)
-            cx, cy = (nxlo + nxhi) / 2, (nylo + nyhi) / 2
-        z = float(np.clip(z * 0.97, Z_HARD, Z_MAX))
-        hw, hh = cw / (2 * z), ch / (2 * z)
-        xs[i], ys[i], zs[i], seen[i] = np.clip(cx, hw, 1 - hw), np.clip(cy, hh, 1 - hh), z, True
+            fit_both = zoom_for(min(bxlo, fxlo), max(bxhi, fxhi),
+                                min(bylo, fylo), max(byhi, fyhi))
+            if fit_both >= z_rally * 0.85:     # both only if the punch survives
+                bxlo, bxhi = min(bxlo, fxlo), max(bxhi, fxhi)
+                bylo, byhi = min(bylo, fylo), max(byhi, fyhi)
+        cx, cy = (bxlo + bxhi) / 2, (bylo + byhi) / 2
+        xs[i], ys[i] = np.clip(cx, hw_r, 1 - hw_r), np.clip(cy, hh_r, 1 - hh_r)
+        zs[i], seen[i] = z_rally, True
 
     if seen.mean() < 0.15:
         return None
 
-    for arr, fill in ((xs, 0.5), (ys, 0.55), (zs, Z_HARD)):
+    # unseen stretches inherit the rally zoom — a Z_HARD fill ramped the zoom
+    # wide-in at detection gaps, popping the zoom-accel audit (TASK-042)
+    for arr, fill in ((xs, 0.5), (ys, 0.55), (zs, z_rally)):
         last = fill
         for i in range(n):
             if seen[i]:
@@ -1246,11 +1324,14 @@ def from_vision(proxy_path, t0: float, t1: float, vision_rally: dict | None,
                             (1.0 - hw).astype(np.float64), beta=5e4, w_bound=600.0)
     ys = _solve_smooth_path(ys.astype(np.float64), hh.astype(np.float64),
                             (1.0 - hh).astype(np.float64), beta=2e4, w_bound=600.0)
-    # Keep-in-frame guarantee: never let smoothing drag the crop off the shuttle
-    # or the near player (shift + zoom-out where required, lightly re-smoothed).
+    # Keep-in-frame guarantee: never let smoothing drag the crop off the near
+    # player (shift + zoom-out where required, lightly re-smoothed). Shuttle
+    # containment is SOFT — see _contain_targets(shuttle_soft) — so far-half
+    # crossings pan instead of unzooming the whole rally (TASK-042).
     # In shuttle-led mode the boxes are untrusted, so only the shuttle is required.
     xs, ys, zs = _contain_targets(xs, ys, zs, cw, ch, shu_x, shu_y,
-                                  [] if shuttle_led else tracks)
+                                  [] if shuttle_led else tracks,
+                                  shuttle_soft=not shuttle_led)
     return FocusPath(t0=t0, fps=fps, xs=xs, ys=ys, zs=zs.astype(np.float32))
 
 

@@ -50,6 +50,12 @@ def _why(v: dict) -> str:
     return ", ".join(f"{f.get('framing')}@{f.get('t')}s" for f in bad[:3]) or "gemini"
 
 
+def _reel_annotations(vision_rally: dict | None) -> dict | None:
+    """The final reel is clean footage unless the spotlight is opted in —
+    annotations belong to annotated.mp4 (owner review 2026-07-12)."""
+    return vision_rally if config.REEL_SHUTTLE_MASK else None
+
+
 def _can_use_vision_camera(pov: bool, vision_rally: dict | None) -> bool:
     """POV footage usually rejects frame-diff tracking, but high-quality TrackNet
     shuttle points are source-frame coordinates and can still drive the crop."""
@@ -227,7 +233,7 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
         out = clips_dir / f"clip_{i:02d}.mp4"
         label = (f"RALLY {i}", f"{r['dur']:.0f}s · {r['note'] or 'match play'}")
         dur, cam_path = render.render_rally(input_path, info, t0, t1, path, out, *label,
-                                            annotations=vision_rally)
+                                            annotations=_reel_annotations(vision_rally))
         render_window = (t0, t1)
 
         note("validate", f"rally {i}/{len(picked)}: checking frames")
@@ -245,7 +251,7 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
                 if path is None:
                     path = track.track(proxy, nt0, nt1, force_gentle=pov)
                 dur, cam_path = render.render_rally(input_path, info, nt0, nt1, path, out, *label,
-                                                    annotations=vision_rally)
+                                                    annotations=_reel_annotations(vision_rally))
                 render_window = (nt0, nt1)
                 v = validate.validate_clip(out, motion_limit, pov, lenient_framing=trim_shuttle_cam)
                 attempt = {"rally": i, "pass": "trimmed", "ok": v["ok"]}
@@ -255,7 +261,7 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
             note("validate", f"rally {i}: failed ({_why(v)}) — re-rendering with safe camera")
             dur, cam_path = render.render_rally(input_path, info, t0, t1,
                                                 track.safe_path(proxy, t0, t1), out, *label,
-                                                annotations=vision_rally)
+                                                annotations=_reel_annotations(vision_rally))
             render_window = (t0, t1)
             v = validate.validate_clip(out, motion_limit, pov)
             attempt = {"rally": i, "pass": "safe", "ok": v["ok"]}
@@ -444,7 +450,7 @@ def remix(input_path, workdir: str | Path, order: list[int], mirror: bool = Fals
             clip = workdir / "clips" / f"cam_{r['clip']}"
             _, cam_path = render.render_rally(src, info, t0, t1, path, clip,
                                               f"RALLY {slot}", f"{r['dur']:.0f}s · {r['note'] or 'match play'}",
-                                              mirror=mirror, annotations=r.get("vision"))
+                                              mirror=mirror, annotations=_reel_annotations(r.get("vision")))
             r.update(render_window=[round(t0, 3), round(t1, 3)], camera_path=cam_path)
         elif mirror:
             note("render", f"rally {slot}/{len(chosen)}: mirrored re-render")
@@ -455,7 +461,7 @@ def remix(input_path, workdir: str | Path, order: list[int], mirror: bool = Fals
             clip = workdir / "clips" / f"mirror_{r['clip']}"
             _, cam_path = render.render_rally(src, info, t0, t1, path, clip,
                                               f"RALLY {slot}", f"{r['dur']:.0f}s · {r['note'] or 'match play'}",
-                                              mirror=True, annotations=r.get("vision"))
+                                              mirror=True, annotations=_reel_annotations(r.get("vision")))
             r.update(render_window=[round(t0, 3), round(t1, 3)], camera_path=cam_path)
         clips.append(clip)
         reel_t0 += clip_dur

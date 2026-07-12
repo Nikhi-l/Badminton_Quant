@@ -174,6 +174,10 @@ TOP_RALLIES = int(os.environ.get("TOP_RALLIES", "5"))
 ANNOTATED_PREVIEW = os.environ.get("ANNOTATED_PREVIEW", "1") == "1"
 # Gemini frame evaluator: count main-court players, verify box placement.
 GEMINI_EVAL = os.environ.get("GEMINI_EVAL", "1") == "1"
+# Shuttle spotlight baked into the FINAL reel. Off by default (owner review
+# 2026-07-12: "we do not need to highlight the shuttle in the final reel") —
+# annotations live in annotated.mp4; the reel stays clean footage.
+REEL_SHUTTLE_MASK = os.environ.get("REEL_SHUTTLE_MASK", "0") == "1"
 MIN_RALLY_SEC = 3.0
 PAD_BEFORE, PAD_AFTER = 1.0, 1.6
 
