@@ -54,6 +54,23 @@ reprocessed post-deploy (see ledger).
   now recomputed post-gate at canonicalization (self-calibrated cadence),
   worker number kept in the tracknet payload.
 
+**Verification round 2 (same day) — three more found-and-fixed on real data:**
+- Court gate DELETED real flight on the owner's low-angle footage (corners
+  y∈[0.75,0.95] are the FLOOR; the shuttle flies in the air above it in image
+  space — <50% of any real segment sat inside the quad). Redesigned:
+  lateral-only x-range cut (side courts), no-opinion when the quad spans
+  ≥90% of frame width; vertical separation queued for player-anchored v2.
+- annotated.mp4 second crash, reproduced locally on uservid3:
+  media.iter_frames yields READ-ONLY np.frombuffer views and
+  ascontiguousarray is a no-op on contiguous arrays → cv2 refused to draw.
+  np.array() forces the writable copy; regression test now feeds read-only
+  frames AND draws. End-to-end bake verified locally (2.3MB output).
+- Trim OOM took the site down: one filter_complex with 29 trim/atrim
+  branches buffers the source per branch — ffmpeg hit 32GB RSS, kernel OOM
+  (serial console), ports unresponsive; VM reset. Rewritten as sequential
+  per-segment encodes + concat-demuxer stream copy (memory bounded to one
+  decoder), with segment i/N progress on the status endpoint.
+
 ## Cycle 22: Owner review intake — shuttle in-play index v0 + wrist signals + future vision (TASK-040 v0)
 **Date:** 2026-07-12
 **Goal:** Fold the owner's audit review into code and docs: the in-play index
