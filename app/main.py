@@ -980,6 +980,21 @@ def job_retry(job_id: str, reprocess: int = 0):
         raise HTTPException(409, "only failed jobs (or done jobs with ?reprocess=1) can be retried")
     if not worker._find_input(job_id):
         raise HTTPException(409, "the original upload is no longer on the server — upload again")
+    # TASK-042: a court drawn AFTER the original run lives only in the result —
+    # reprocessing from the ORIGINAL upload options silently dropped it (court
+    # re-detected as not_found → player/shuttle court gates fail open). Fold
+    # manual corners into the job options before requeueing.
+    opts = db.job_options(job_id)
+    if not opts.get("court_corners"):
+        try:
+            prior = json.loads((config.OUTPUTS / job_id / "result.json").read_text())
+            court_prior = prior.get("court") or {}
+            corners = (config.court_corners_option(court_prior.get("corners"))
+                       if court_prior.get("source") == "manual" else None)
+            if corners:
+                db.set_job_options(job_id, {**opts, "court_corners": corners})
+        except (OSError, ValueError):
+            pass
     (config.OUTPUTS / job_id / "analysis.json").unlink(missing_ok=True)  # derived — now stale
     db.requeue(job_id)
     worker.enqueue(job_id)
@@ -1014,6 +1029,9 @@ async def job_set_court(job_id: str, request: Request):
     frame_wh = (int(src.get("w") or 1920), int(src.get("h") or 1080))
     court_info = court_mod.manual_result(corners, frame_wh)
     result["court"] = court_info
+    # TASK-042: drawn corners are USER INPUT — persist them on the job so any
+    # ?reprocess=1 re-run keeps the court (and the player/shuttle court gates).
+    db.set_job_options(job_id, {**db.job_options(job_id), "court_corners": corners})
 
     def _recompute() -> list[dict]:
         """Multi-second numpy LM fits — runs on a worker thread so the single

@@ -109,6 +109,40 @@ def test_set_court_endpoint_recomputes_3d(client):
     assert disk["rallies"][0]["rally_3d"]["shots"]
 
 
+def test_set_court_endpoint_persists_corners_into_options(client):
+    """TASK-042 regression: corners drawn after the original run lived only in
+    the result — ?reprocess=1 re-ran with the ORIGINAL upload options, court
+    re-detected as not_found, and the player/shuttle court gates failed open
+    (background-court players came back)."""
+    job_id, ordered = _seed_job("manualcourt3")
+    r = client.post(f"/api/jobs/{job_id}/court", json={"corners": ordered})
+    assert r.status_code == 200, r.text
+    # stored form = the validated (4-decimal) corners, ready for normalize_options
+    assert db.job_options(job_id).get("court_corners") == config.court_corners_option(ordered)
+
+
+def test_reprocess_inherits_manual_court_from_prior_result(client, monkeypatch):
+    """Jobs whose court was drawn BEFORE the options-persistence fix keep it
+    across reprocess via the retry-time fallback (result.court source=manual)."""
+    from app import worker
+    monkeypatch.setattr(worker, "enqueue", lambda jid: None)
+    job_id = "oldcourtjob"
+    (config.UPLOADS / job_id).mkdir(parents=True, exist_ok=True)
+    (config.UPLOADS / job_id / "input_00.mp4").write_bytes(b"x")
+    db.create_job(job_id, "old.mp4", options={"shuttle": "tracknetv3"})
+    workdir = config.OUTPUTS / job_id
+    workdir.mkdir(parents=True, exist_ok=True)
+    result = {"duration": 5, "court": {"status": "ok", "source": "manual",
+                                       "corners": CORNERS}}
+    (workdir / "result.json").write_text(json.dumps(result))
+    db.set_done(job_id, result)
+
+    assert client.post(f"/api/jobs/{job_id}/retry?reprocess=1").status_code == 200
+    opts = db.job_options(job_id)
+    assert opts.get("court_corners") == CORNERS
+    assert opts.get("shuttle") == "tracknetv3"      # original options preserved
+
+
 def test_set_court_endpoint_rejects_bad_corners(client):
     job_id, _ = _seed_job("manualcourt2")
     r = client.post(f"/api/jobs/{job_id}/court", json={"corners": [[0.5, 0.5]] * 4})

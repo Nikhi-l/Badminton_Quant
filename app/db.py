@@ -122,6 +122,14 @@ def job_options(job_id: str) -> dict:
         return {}
 
 
+def set_job_options(job_id: str, options: dict) -> None:
+    """Persist updated per-job options (TASK-042: user-drawn court corners
+    must survive ?reprocess=1 — they are user input, not derived state)."""
+    with _conn() as c:
+        c.execute("UPDATE jobs SET options=?, updated_at=? WHERE id=?",
+                  (json.dumps(options), time.time(), job_id))
+
+
 def update_stage(job_id: str, stage: str, message: str = ""):
     now = time.time()
     with _conn() as c:
