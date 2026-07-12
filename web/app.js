@@ -2498,7 +2498,10 @@ function renderPoseOverlay(pose, po, ctx) {
     });
   }
   if (!parts.length) return "";
-  return `<svg class="pose-figure ${esc(po.style)}" viewBox="0 0 ${fw} ${fh}" preserveAspectRatio="none" style="opacity:${po.opacity};--pose-width:${lw}px">${parts.join("")}</svg>`;
+  // ps- prefix: the bare style name collided with the landing page's decorative
+  // .glow blob rule (position:fixed + blur(120px) + opacity .16), which blurred
+  // the default-style skeleton into invisibility.
+  return `<svg class="pose-figure ps-${esc(po.style)}" viewBox="0 0 ${fw} ${fh}" preserveAspectRatio="none" style="opacity:${po.opacity};--pose-width:${lw}px">${parts.join("")}</svg>`;
 }
 
 /* ---------- TASK-027: draw the court on an existing job ---------- */

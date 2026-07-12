@@ -280,12 +280,12 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
 .pose-limb.p2,.pose-joint.p2{stroke:#ffd166;fill:#ffd166}
 .pose-limb.p3,.pose-joint.p3{stroke:#b388ff;fill:#b388ff}
 .pose-joint.p1,.pose-joint.p2,.pose-joint.p3{stroke:#081018}
-.pose-figure.minimal .pose-limb{stroke:rgba(255,255,255,.82);filter:none}
-.pose-figure.minimal .pose-joint{fill:rgba(255,255,255,.9);stroke:#11131a;filter:none}
-.pose-figure.heat .pose-limb{stroke:#ff8a5c;filter:drop-shadow(0 0 4px rgba(255,77,109,.6))}
-.pose-figure.heat .pose-joint{fill:#ff4d6d;stroke:#2a0b12;filter:drop-shadow(0 0 4px rgba(255,77,109,.6))}
-.pose-figure.velocity .pose-limb{stroke:var(--lime);filter:drop-shadow(0 0 5px rgba(183,245,66,.5))}
-.pose-figure.velocity .pose-joint{fill:var(--lime);stroke:#101403}
+.pose-figure.ps-minimal .pose-limb{stroke:rgba(255,255,255,.82);filter:none}
+.pose-figure.ps-minimal .pose-joint{fill:rgba(255,255,255,.9);stroke:#11131a;filter:none}
+.pose-figure.ps-heat .pose-limb{stroke:#ff8a5c;filter:drop-shadow(0 0 4px rgba(255,77,109,.6))}
+.pose-figure.ps-heat .pose-joint{fill:#ff4d6d;stroke:#2a0b12;filter:drop-shadow(0 0 4px rgba(255,77,109,.6))}
+.pose-figure.ps-velocity .pose-limb{stroke:var(--lime);filter:drop-shadow(0 0 5px rgba(183,245,66,.5))}
+.pose-figure.ps-velocity .pose-joint{fill:var(--lime);stroke:#101403}
 /* TASK-022: detected court boundary + post-game movement heatmaps */
 .court-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .court-edge{fill:rgba(183,245,66,.06);stroke:var(--lime);stroke-width:2;stroke-linejoin:round;filter:drop-shadow(0 0 6px rgba(183,245,66,.35))}
