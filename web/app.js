@@ -1849,17 +1849,25 @@ function cameraAt(t) {
   };
 }
 
-// Resolve a target spec to a normalized centre {x,y}, or null if not trackable now.
-function resolveTargetCenter(spec) {
-  if (!spec) return null;
-  if (spec.target === "point") return { x: Number(spec.point.x), y: Number(spec.point.y) };
+// Resolve a target spec to the DISPLAYED video's normalized centre {x,y}, or
+// null if not trackable now. Tracks (and point keyframes) live in SOURCE
+// coordinates, but the displayed reel is the baked camera's moving CROP of
+// the source — centring raw source coords on the reel panned the preview to
+// the wrong region entirely, so "follow shuttle" never followed (TASK-041).
+// Every target now maps through the same inverse-crop the overlays use;
+// a legacy reel without camera_path maps to null and the preview falls back
+// to manual framing (matching the overlay behavior + hint).
+function resolveTargetCenter(spec, ctx = trackContext()) {
+  if (!spec || !ctx) return null;
+  const map = (x, y) => toDisplayNorm(Number(x), Number(y), ctx, false);
+  if (spec.target === "point") return map(spec.point.x, spec.point.y);
   if (spec.target === "player") {
-    const boxes = currentPlayers();
+    const boxes = currentPlayers(ctx);
     const b = boxes.find(pb => pb.id === spec.targetPlayer) || boxes[0];
-    return b ? { x: Number(b.x), y: Number(b.y) } : null;
+    return b ? map(b.x, b.y) : null;
   }
-  const p = currentShuttlePoint();
-  return p ? { x: Number(p.x), y: Number(p.y) } : null;
+  const p = currentShuttlePoint(ctx);
+  return p ? map(p.x, p.y) : null;
 }
 
 // Effective {fit,zoom,x,y} centring the camera target now, or null to fall back to
@@ -1871,14 +1879,15 @@ function evalCameraFraming() {
   if (effectiveMode() !== "reel") return null;
   const plan = cameraAt(cameraTime());
   if (!plan) return null;
-  let center = resolveTargetCenter(plan);
+  const ctx = trackContext();
+  let center = resolveTargetCenter(plan, ctx);
   const BLEND = 0.4;
   if (plan.prev && plan.sinceSwitch < BLEND) {
     const prevCenter = resolveTargetCenter({
       target: plan.prev.target || "shuttle",
       targetPlayer: plan.prev.targetPlayer == null ? 0 : plan.prev.targetPlayer,
       point: plan.prev.point || { x: 0.5, y: 0.45 },
-    });
+    }, ctx);
     if (center && prevCenter) {
       const k = plan.sinceSwitch / BLEND;
       center = { x: prevCenter.x + (center.x - prevCenter.x) * k, y: prevCenter.y + (center.y - prevCenter.y) * k };
