@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from .. import config
-from . import audio, coach, court, gemini, media, rally, rally3d, render, stitch, track, validate
+from . import annotate, audio, coach, court, evaluate, gemini, media, rally, rally3d, render, stitch, track, validate
 from . import vision as vision_engine
 
 STAGES = ["combine", "probe", "proxy", "rallies", "vision", "tracking", "render",
@@ -185,6 +185,19 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
         note("vision", f"vision ready ({vision.get('backend', 'gpu')}): "
                        f"players {player_q:.0%}, shuttle {shuttle_q:.0%}")
 
+    # TASK-041: Gemini verifies the tracker on annotated frames BEFORE the
+    # camera trusts it — background-court players get pruned from the stored
+    # tracks here, so they can't steer the virtual camera or the Studio.
+    if vision.get("status") not in ("disabled", "failed"):
+        try:
+            evaluation = evaluate.evaluate_players(workdir, vision,
+                                                   log=lambda m: note("vision", m))
+        except Exception as e:  # noqa: BLE001 - the evaluator must never sink a job
+            evaluation = {"status": "failed", "message": f"{type(e).__name__}: {e}"}
+    else:
+        evaluation = {"status": "skipped", "message": "vision unavailable"}
+
+    annotated_inputs: list[dict] = []
     clips: list[Path] = []
     rendered = []
     validation: list[dict] = []
@@ -290,6 +303,8 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
                 "mask_enabled", "shuttle_engine", "tracknet", "shuttle", "players", "poses",
                 "racquets"
             )}
+            annotated_inputs.append({"start": r["start"], "end": r["end"],
+                                     "vision": vision_rally})
         rendered.append(entry)
 
     if not clips:
@@ -321,6 +336,19 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
                      f"motion jerk p99={reel_motion['jerk99']}px — "
                      f"{'clean' if reel_check['ok'] else 'ISSUES'}")
 
+    # TASK-041: bake the analysis preview — shuttle + pose drawn into pixels
+    # at exact frame times (the Studio's live overlays depend on layer state
+    # and paint timing; this artifact never does). Enhancement only.
+    annotated_ok = False
+    if config.ANNOTATED_PREVIEW and annotated_inputs:
+        try:
+            note("stitch", "baking annotated analysis preview")
+            annotated_ok = annotate.render_annotated(
+                workdir, {"rallies": annotated_inputs},
+                log=lambda m: note("stitch", m)) is not None
+        except Exception as e:  # noqa: BLE001 - preview must never sink the job
+            note("stitch", f"annotated preview failed: {type(e).__name__}: {e}")
+
     out = {
         "reel": str(result["reel"]),
         "thumb": str(result["thumb"]),
@@ -349,6 +377,8 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
                                               "backend")},
         "coach": coach_result,
         "audio": audio_info,
+        "evaluation": evaluation,
+        "annotated": annotated_ok,
         "gemini_usage": gemini.usage_snapshot(),
         "elapsed_sec": round(time.time() - t_start, 1),
     }
