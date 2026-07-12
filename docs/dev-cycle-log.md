@@ -5,7 +5,47 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
-## Cycle 20: Smash-speed paper intake — measured shuttle confidence + radar-comparable speeds (TASK-035)
+## Cycle 21: Rally-break audit + analysis export + architecture board (TASK-039)
+**Date:** 2026-07-12
+**Goal:** Audit how rally boundaries/in-play are decided (user: long rallies
+keep shuttle-pickup dead time; "longest = best" unvalidated), export one
+machine-readable match report per job, start audio-based highlight data, and
+ship a live architecture board with a demo runner.
+**PRD:** §16 — TASK-039 row; TASK-040 (in-play mask v1) queued with design.
+**Branch:** `feat/TASK-039-inplay-audit-architecture` (base `c8c9136`).
+
+**What shipped**
+- Audit: `docs/reviews/2026-07-12-rally-break-inplay-audit.md` — boundaries
+  are Gemini-only, whole-second, never cross-checked; nothing splits play
+  from no-play inside a rally; audio was discarded. In-play mask v1 design
+  (flight ∪ audio ∪ kinetics fusion, hysteresis, bench gates) queued.
+- `app/pipeline/audio.py`: mono 16k RMS energy series (0.25s stored) +
+  median-floor impact-peak detection on the ambient proxy audio; stored on
+  every new job (`result.audio`). Never gates the reel.
+- `app/pipeline/analysis.py` + `GET /api/jobs/{id}/analysis`: analysis.json —
+  play/no-play timeline (dead time labelled, not implied), per-rally hits
+  (impact + at-net km/h), shuttle-flight segments, audio peaks, per-player
+  court-space movement series (ankles when ids allow, box-foot fallback,
+  `src` marked). Cached; invalidated on reprocess/court redraw.
+- Raw model persistence: `gemini_rallies_raw.json` (rally.py save_raw) and
+  `vision_raw.json` (gpu.py) written next to result.json; /media whitelisted.
+- `baddyai.com/architecture` (`web/architecture.html`, route in main.py):
+  pipeline boxes w/ algorithms + top steps + audit gaps, interpolation layer
+  marked as the isolated iterate-here module, improvement-queue chips, demo
+  runner (chunked upload or job id) with live stage chips and per-model
+  panels: timeline bar, rallies table, vision metrics (incl. tracknet
+  coverage/gap/teleports), 3D shots + speeds, audio sparkline + peaks,
+  court-movement canvas, artifact links.
+
+**Verification**
+- `./scripts/check.sh` — 140 passed (new: `test_audio_energy.py` ×4,
+  `test_analysis_export.py` ×5).
+- Real artifact (uservid3): 336s source → 14 rallies, play 56s / no-play
+  280.1s explicitly labelled; 33 audio impact peaks; rally0: 3 hits, 3
+  flight segments; analysis payload 43KB. Caught + fixed: summary used the
+  REEL duration instead of source.duration (no_play read 0.0).
+- `node --check` n/a (page inline script; loaded + exercised on deploy).
+**Deploy:** VM only (worker untouched).
 **Date:** 2026-07-11
 **Goal:** Apply the transferable techniques from a smartphone smash-speed
 paper (custom YOLOv5 + constant-velocity Kalman tracking-by-detection,
