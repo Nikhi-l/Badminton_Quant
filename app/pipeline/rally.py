@@ -1,4 +1,5 @@
 """Rally segmentation: upload the proxy video to Gemini and get rally time ranges back."""
+import json
 from pathlib import Path
 
 from .. import config
@@ -88,8 +89,14 @@ def _clean(raw: list, duration: float) -> list[dict]:
     return merged
 
 
-def segment(proxy_path: str | Path, duration: float, log=print) -> tuple[str, list[dict]]:
-    """Returns (sport, rallies sorted by start time)."""
+def segment(proxy_path: str | Path, duration: float, log=print,
+            save_raw: Path | None = None) -> tuple[str, list[dict]]:
+    """Returns (sport, rallies sorted by start time).
+
+    ``save_raw`` persists the model's verbatim parsed response next to the
+    job's other artifacts (TASK-039): rally boundaries are model output paid
+    for once — audits and boundary-algorithm work must never need a re-run.
+    """
     log(f"uploading proxy to Gemini Files API ({Path(proxy_path).stat().st_size // 1_000_000} MB)")
     file = gemini.upload_file(proxy_path, mime="video/mp4")
     file = gemini.wait_active(file)
@@ -100,6 +107,11 @@ def segment(proxy_path: str | Path, duration: float, log=print) -> tuple[str, li
             log(f"asking {model} for rally boundaries")
             text = gemini.generate(model, [part_video, {"text": PROMPT}], json_schema=SCHEMA)
             data = gemini.parse_json(text)
+            if save_raw is not None:
+                try:
+                    save_raw.write_text(json.dumps({"model": model, "response": data}, indent=2))
+                except OSError:
+                    pass
             sport = str(data.get("sport") or "racket sport").lower()[:30]
             rallies = _clean(data.get("rallies") or [], duration)
             if rallies:

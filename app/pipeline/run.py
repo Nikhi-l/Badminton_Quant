@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from .. import config
-from . import coach, court, gemini, media, rally, rally3d, render, stitch, track, validate
+from . import audio, coach, court, gemini, media, rally, rally3d, render, stitch, track, validate
 from . import vision as vision_engine
 
 STAGES = ["combine", "probe", "proxy", "rallies", "vision", "tracking", "render",
@@ -109,6 +109,13 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
     proxy = workdir / "proxy.mp4"
     pinfo = media.make_proxy(input_path, proxy)
 
+    # Ambient-audio energy + impact peaks (TASK-039): stored for every job so
+    # the in-play/highlight fusion work starts from data, not re-runs. Never
+    # gates the reel.
+    audio_info = audio.analyze_file(proxy, log=lambda m: note("proxy", m))
+    if audio_info.get("status") != "ok":
+        note("proxy", f"audio analysis: {audio_info.get('status')}")
+
     # Court geometry (TASK-022): boundary corners + homography for court-space
     # heatmaps and the 3D view. User-drawn corners (TASK-027) are authoritative;
     # otherwise best-effort detection — a POV/occluded court just skips it.
@@ -140,7 +147,8 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
                       f"gentle camera, source shake tolerated")
 
     note("rallies", "Gemini is watching the game")
-    sport, all_rallies = rally.segment(proxy, pinfo.duration, log=lambda m: note("rallies", m))
+    sport, all_rallies = rally.segment(proxy, pinfo.duration, log=lambda m: note("rallies", m),
+                                       save_raw=workdir / "gemini_rallies_raw.json")
     picked = rally.select_for_reel(all_rallies)
     picked.sort(key=lambda r: r["dur"], reverse=True)  # longest first in the reel
     if not picked:
@@ -340,10 +348,14 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
                                               "worker_version", "message", "models", "summary",
                                               "backend")},
         "coach": coach_result,
+        "audio": audio_info,
         "gemini_usage": gemini.usage_snapshot(),
         "elapsed_sec": round(time.time() - t_start, 1),
     }
     (workdir / "result.json").write_text(json.dumps(out, indent=2))
+    # analysis.json is derived from result.json (built + cached by the API);
+    # a fresh result invalidates any cached derivation.
+    (workdir / "analysis.json").unlink(missing_ok=True)
     note("stitch", f"done in {out['elapsed_sec']}s")
     return out
 

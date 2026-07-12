@@ -555,6 +555,13 @@ def analyze(proxy_path: str | Path, workdir: str | Path, sport: str,
     try:
         log("submitting proxy and rally windows to Runpod")
         raw = _runpod_request(payload, log=log)
+        try:
+            # TASK-039: persist the worker's verbatim output — GPU minutes are
+            # paid for once; canonicalization changes must be re-runnable
+            # against stored raws, never against the meter.
+            (workdir / "vision_raw.json").write_text(json.dumps(raw))
+        except (OSError, TypeError):
+            pass
         return _canonicalize(raw, rallies)
     except Exception as e:  # noqa: BLE001 - GPU enrichment must not kill CPU reel generation.
         log(f"Runpod vision failed, continuing with CPU tracking: {type(e).__name__}: {e}")

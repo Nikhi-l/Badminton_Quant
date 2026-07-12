@@ -17,7 +17,8 @@ from .pipeline import smooth
 from .pipeline.run import STAGES
 
 ALLOWED_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
-MEDIA_WHITELIST = {"reel.mp4", "thumb.jpg", "proxy.mp4", "vision_proxy.mp4"}
+MEDIA_WHITELIST = {"reel.mp4", "thumb.jpg", "proxy.mp4", "vision_proxy.mp4",
+                   "analysis.json", "gemini_rallies_raw.json", "vision_raw.json"}
 CHUNK_SIZE = 8 * 1024 * 1024
 MAX_UPLOAD = 3 * 1024 ** 3
 
@@ -798,6 +799,46 @@ def job_status(job_id: str):
     }
 
 
+@app.get("/api/jobs/{job_id}/analysis")
+def job_analysis(job_id: str, refresh: int = 0):
+    """The machine-readable match report (TASK-039): play/no-play timeline,
+    per-rally markers (hits + speeds, shuttle-flight segments, audio impact
+    peaks), and per-player court-space movement series. Built once from the
+    stored result (model outputs are never re-run for analytics) and cached
+    as `analysis.json` next to the reel; ?refresh=1 rebuilds after Studio
+    edits like a court redraw."""
+    from .pipeline import analysis as analysis_mod
+
+    job = db.get_job(job_id)
+    if not job or job["status"] != "done":
+        raise HTTPException(409, "job has no completed result to analyze")
+    path = config.OUTPUTS / job_id / "analysis.json"
+    if path.exists() and not refresh:
+        return JSONResponse(json.loads(path.read_text()))
+    result_path = config.OUTPUTS / job_id / "result.json"
+    if result_path.exists():
+        result = json.loads(result_path.read_text())
+    elif job.get("result"):
+        result = json.loads(job["result"])
+    else:
+        raise HTTPException(409, "job result is not on disk")
+    per_rally_tracks = []
+    for rr in result.get("rallies") or []:
+        vision = rr.get("vision") if isinstance(rr.get("vision"), dict) else {}
+        per_rally_tracks.append({
+            "players_track": _sample_player_track(vision.get("players")),
+            "pose_track": _sample_pose_track(vision.get("poses")),
+        })
+    out = analysis_mod.build_analysis(
+        result, job_id=job_id, per_rally_tracks=per_rally_tracks,
+        generated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    try:
+        path.write_text(json.dumps(out))
+    except OSError:
+        pass
+    return JSONResponse(out)
+
+
 @app.post("/api/jobs/{job_id}/retry")
 def job_retry(job_id: str, reprocess: int = 0):
     """Re-run a job from its still-on-disk upload (TASK-029). Failed jobs retry
@@ -816,6 +857,7 @@ def job_retry(job_id: str, reprocess: int = 0):
         raise HTTPException(409, "only failed jobs (or done jobs with ?reprocess=1) can be retried")
     if not worker._find_input(job_id):
         raise HTTPException(409, "the original upload is no longer on the server — upload again")
+    (config.OUTPUTS / job_id / "analysis.json").unlink(missing_ok=True)  # derived — now stale
     db.requeue(job_id)
     worker.enqueue(job_id)
     return {"ok": True, "id": job_id}
@@ -883,6 +925,7 @@ async def job_set_court(job_id: str, request: Request):
     statuses = await asyncio.to_thread(_recompute)
     rebuilt = sum(1 for s in statuses if s["status"] == "ok")
     result_path.write_text(json.dumps(result))
+    (config.OUTPUTS / job_id / "analysis.json").unlink(missing_ok=True)  # derived — now stale
     db.set_done(job_id, result)
     return {"ok": True, "court": court_info, "rallies_3d": rebuilt,
             "rally_statuses": statuses}
@@ -1243,6 +1286,13 @@ def gpu_artifact(job_id: str, name: str, token: str = ""):
 @app.exception_handler(500)
 async def err500(_, exc):
     return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@app.get("/architecture")
+def architecture_page():
+    """The live architecture board (TASK-039): pipeline boxes + algorithms +
+    a demo run view. Clean path so it can be linked as baddyai.com/architecture."""
+    return FileResponse(config.ROOT / "web" / "architecture.html")
 
 
 @app.middleware("http")
