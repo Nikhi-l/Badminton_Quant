@@ -874,40 +874,49 @@ def _trim_segments(result: dict) -> list[tuple[float, float]]:
 
 
 def _run_trim(job_id: str, src: Path, segments: list[tuple[float, float]]):
-    from .pipeline.media import FFMPEG
-    out = config.OUTPUTS / job_id / "trimmed.mp4"
-    tmp = config.OUTPUTS / job_id / "trimmed.part.mp4"
+    """Per-segment encode + lossless concat, ONE ffmpeg at a time.
 
-    def _cmd(with_audio: bool) -> list[str]:
-        parts, refs = [], []
-        for i, (s, e) in enumerate(segments):
-            parts.append(f"[0:v]trim={s:.3f}:{e:.3f},setpts=PTS-STARTPTS[v{i}]")
-            refs.append(f"[v{i}]")
-            if with_audio:
-                parts.append(f"[0:a]atrim={s:.3f}:{e:.3f},asetpts=PTS-STARTPTS[a{i}]")
-                refs[-1] += f"[a{i}]"
-        fc = (";".join(parts)
-              + f";{''.join(refs)}concat=n={len(segments)}:v=1:a={'1' if with_audio else '0'}"
-              + ("[v][a]" if with_audio else "[v]"))
-        cmd = [FFMPEG, "-y", "-v", "error", "-i", str(src), "-filter_complex", fc,
-               "-map", "[v]"]
-        if with_audio:
-            cmd += ["-map", "[a]", "-c:a", "aac", "-b:a", "128k"]
-        return cmd + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-                      "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(tmp)]
-
+    The first implementation built a single filter_complex with one
+    trim/atrim branch per rally: ffmpeg buffers the source per branch, and 29
+    branches on a real match OOM-killed a 32 GB VM (serial console,
+    2026-07-12 — ffmpeg at 32 GB RSS took the whole site down with it).
+    Sequential per-segment encodes bound memory to one decoder regardless of
+    how many rallies the match has.
+    """
     import subprocess
+    from .pipeline.media import FFMPEG
+    outdir = config.OUTPUTS / job_id
+    out = outdir / "trimmed.mp4"
+    tmp = outdir / "trimmed.part.mp4"
+    parts: list[Path] = []
     try:
-        try:
-            subprocess.run(_cmd(True), check=True, capture_output=True, timeout=3600)
-        except subprocess.CalledProcessError:
-            subprocess.run(_cmd(False), check=True, capture_output=True, timeout=3600)
+        for i, (s, e) in enumerate(segments):
+            part = outdir / f"trim_{i:03d}.part.mp4"
+            cmd = [FFMPEG, "-y", "-v", "error", "-ss", f"{s:.3f}", "-to", f"{e:.3f}",
+                   "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?",
+                   "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+                   "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                   "-movflags", "+faststart", str(part)]
+            subprocess.run(cmd, check=True, capture_output=True, timeout=1200)
+            parts.append(part)
+            _TRIM_JOBS[job_id] = {"status": "processing",
+                                  "message": f"segment {i + 1}/{len(segments)}"}
+        listing = outdir / "trim_concat.txt"
+        listing.write_text("".join(f"file '{p.name}'\n" for p in parts))
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "concat", "-safe", "0",
+                        "-i", str(listing), "-c", "copy", "-movflags", "+faststart",
+                        str(tmp)], cwd=outdir, check=True, capture_output=True,
+                       timeout=1200)
         tmp.rename(out)
         _TRIM_JOBS[job_id] = {"status": "ready"}
     except Exception as e:  # noqa: BLE001 - reported via the status endpoint
         tmp.unlink(missing_ok=True)
         _TRIM_JOBS[job_id] = {"status": "failed",
                               "message": f"{type(e).__name__}: {str(e)[:180]}"}
+    finally:
+        for p in parts:
+            p.unlink(missing_ok=True)
+        (outdir / "trim_concat.txt").unlink(missing_ok=True)
 
 
 @app.post("/api/jobs/{job_id}/trim")
