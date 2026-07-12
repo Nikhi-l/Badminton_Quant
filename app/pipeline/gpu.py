@@ -483,10 +483,16 @@ def _runpod_request(payload: dict, log=print) -> dict:
     run_id = data.get("id")
     if not run_id:
         raise RuntimeError(f"Runpod did not return a job id: {json.dumps(data)[:300]}")
-    deadline = time.time() + config.RUNPOD_TIMEOUT_SEC
+    # Two SEPARATE budgets: queue time must not eat the execution budget.
+    # A busy endpoint can hold a job IN_QUEUE for minutes (cold start, other
+    # jobs); the old single deadline (submission + TIMEOUT) let an 8-min queue
+    # + 13-min run blow past 20 min and abandon a job that then COMPLETED on
+    # the worker — silently downgrading the reel to the CPU camera. Now the
+    # execution clock starts only when the job goes RUNNING.
     queued_since = time.time()
+    exec_deadline: float | None = None
     last_status = ""
-    while time.time() < deadline:
+    while True:
         time.sleep(config.RUNPOD_POLL_SEC)
         s = requests.get(f"{endpoint}/status/{run_id}", headers=headers, timeout=60)
         s.raise_for_status()
@@ -499,10 +505,10 @@ def _runpod_request(payload: dict, log=print) -> dict:
             return status.get("output") or status.get("result") or {}
         if state in {"FAILED", "CANCELLED", "TIMED_OUT"}:
             raise RuntimeError(f"Runpod {run_id} {state}: {json.dumps(status)[:500]}")
-        # Fast-fail a stalled queue: if no worker ever picks the job up, the
-        # endpoint has no available workers (max-workers=0 or out of credits).
-        # Don't hang the whole reel for 20 min — fall back to the CPU camera.
         if state == "IN_QUEUE":
+            # Fast-fail only a TRULY stalled queue (no workers at all — max=0 or
+            # out of credits). A queue behind other jobs keeps waiting up to the
+            # queue cap; it does not consume the execution budget.
             if time.time() - queued_since > config.RUNPOD_QUEUE_STALL_SEC:
                 try:
                     h = requests.get(f"{endpoint}/health", headers=headers, timeout=20).json()
@@ -515,9 +521,16 @@ def _runpod_request(payload: dict, log=print) -> dict:
                         f"Runpod endpoint has no available workers after "
                         f"{config.RUNPOD_QUEUE_STALL_SEC:.0f}s (max-workers=0 or out of "
                         f"credits). Falling back to CPU camera.")
+            if time.time() - queued_since > config.RUNPOD_QUEUE_MAX_SEC:
+                raise TimeoutError(
+                    f"Runpod job stuck in queue >{config.RUNPOD_QUEUE_MAX_SEC:.0f}s")
         else:
-            queued_since = time.time()  # running/processing: reset the stall clock
-    raise TimeoutError(f"Runpod job timed out after {config.RUNPOD_TIMEOUT_SEC:.0f}s")
+            # RUNNING/IN_PROGRESS: start (once) the execution clock.
+            if exec_deadline is None:
+                exec_deadline = time.time() + config.RUNPOD_TIMEOUT_SEC
+            if time.time() > exec_deadline:
+                raise TimeoutError(
+                    f"Runpod job ran >{config.RUNPOD_TIMEOUT_SEC:.0f}s after starting")
 
 
 def analyze(proxy_path: str | Path, workdir: str | Path, sport: str,

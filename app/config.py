@@ -45,6 +45,11 @@ RUNPOD_POLL_SEC = float(os.environ.get("RUNPOD_POLL_SEC", "5"))
 # If a job sits IN_QUEUE this long with zero workers being provisioned, give up
 # and fall back to the CPU camera instead of hanging the whole reel.
 RUNPOD_QUEUE_STALL_SEC = float(os.environ.get("RUNPOD_QUEUE_STALL_SEC", "150"))
+# Absolute cap on time spent IN_QUEUE behind OTHER jobs (workers exist but are
+# busy). Separate from RUNPOD_TIMEOUT_SEC, which now covers only EXECUTION —
+# queue time must not steal from the run budget (TASK-041: an 8-min queue +
+# 13-min run abandoned a job that then completed on the worker).
+RUNPOD_QUEUE_MAX_SEC = float(os.environ.get("RUNPOD_QUEUE_MAX_SEC", "900"))
 GPU_ARTIFACT_TOKEN = os.environ.get("GPU_ARTIFACT_TOKEN", "")
 GPU_ARTIFACT_TTL_SEC = int(os.environ.get("GPU_ARTIFACT_TTL_SEC", "7200"))
 SHUTTLE_MASK_MIN_CONF = float(os.environ.get("SHUTTLE_MASK_MIN_CONF", "0.55"))
