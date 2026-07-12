@@ -35,6 +35,38 @@ def test_flight_segments_split_on_gaps_and_ignore_distrusted():
     assert abs(segs[1]["start"] - 3.0) < 0.05
 
 
+def test_in_play_index_speed_gates_carried_shuttle():
+    """User spec: in play = airborne AND fast. A rally exchange (~0.3 frame
+    units/s) is in play; a shuttle carried back to the service line (~0.03/s)
+    and a 3-point blip are not."""
+    def seg(t0, step):
+        return [{"t": round(t0 + i / 30, 3), "x": 0.2 + i * step, "y": 0.5,
+                 "confidence": 0.9} for i in range(45)]           # 1.5 s
+
+    segs = analysis.flight_segments(
+        seg(0.0, 0.01)            # 0.3/s — a real exchange
+        + seg(5.0, 0.001)         # 0.03/s — carried in hand
+        + [{"t": 9.0 + i / 30, "x": 0.4 + i * 0.01, "y": 0.5, "confidence": 0.9}
+           for i in range(3)])    # fast but 0.07 s — a blip, not an exchange
+
+    assert [s["in_play"] for s in segs] == [True, False, False]
+    assert segs[0]["median_speed"] > analysis.IN_PLAY_MIN_SPEED > segs[1]["median_speed"]
+
+
+def test_wrist_series_gates_confidence_and_ids():
+    kp = lambda x, y, c: {"x": x, "y": y, "confidence": c}
+    pose_track = [{"t": 2.0, "people": [
+        {"id": 0, "keypoints": [kp(0.5, 0.5, 0.9)] * 9
+                              + [kp(0.4, 0.6, 0.9), kp(0.6, 0.6, 0.05)]},  # r wrist too weak
+        {"keypoints": [kp(0.5, 0.5, 0.9)] * 11},                            # no id → skipped
+    ]}]
+
+    series = analysis.wrist_series(pose_track)
+
+    assert set(series) == {"0"}
+    assert series["0"] == [{"t": 2.0, "l": [0.4, 0.6]}]
+
+
 def test_rally_hits_only_from_accepted_3d():
     ok = {"status": "ok", "shots": [
         {"t0": 12.1, "speed_kmh": 140.2, "speed_at_net_kmh": 96.0},
@@ -110,7 +142,8 @@ def test_build_analysis_assembles_report():
     out = analysis.build_analysis(result, job_id="job1", per_rally_tracks=tracks,
                                   generated_at="2026-07-12T00:00:00Z")
 
-    assert out["schema"] == "baddy.analysis.v1" and out["job_id"] == "job1"
+    assert out["schema"] == analysis.SCHEMA and out["job_id"] == "job1"
+    assert "in_play" in out["rallies"][0] and "wrists" in out["rallies"][0]
     assert out["summary"]["rallies_found"] == 2 and out["summary"]["rallies_in_reel"] == 1
     assert out["court"]["calibrated"] is True
     r = out["rallies"][0]

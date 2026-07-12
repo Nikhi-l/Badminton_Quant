@@ -18,6 +18,7 @@ from typing import Any
 
 from . import court as court_mod
 
+SCHEMA = "baddy.analysis.v2"   # v2: in-play index on flight segments + wrist series
 NO_PLAY_MIN_S = 1.0        # a gap shorter than this is boundary noise, not rest
 FLIGHT_GAP_S = 0.25        # matches the public shuttle-track segment contract
 ANKLE_MIN_CONF = 0.15      # matches the pose smoother/render gate
@@ -67,21 +68,80 @@ def timeline_segments(all_rallies: list, selected: list, duration: float) -> lis
     return out
 
 
+# In-play speed gate (user spec 2026-07-12): the shuttle is IN PLAY when it is
+# airborne AND moving fast; a shuttle carried in a hand or drifting near a
+# body tracks slowly. Units are normalized-frame/s (the frame spans ~14 m of
+# court, so 0.15/s ≈ 2 m/s — well above carry/walk speed, well below any real
+# stroke). Court-plane m/s is deliberately NOT computed here: projecting an
+# AIRBORNE shuttle through the ground homography is parallax-wrong; accurate
+# speeds come from the 3D layer.
+IN_PLAY_MIN_SPEED = 0.15
+IN_PLAY_MIN_DUR_S = 0.4
+
+
 def flight_segments(shuttle_pts: list, gap_s: float = FLIGHT_GAP_S,
                     min_conf: float = 0.3) -> list[dict]:
-    """Contiguous observed-shuttle-flight windows — the strongest single
-    in-play signal we store (a flying shuttle IS play)."""
-    ts = sorted(_num(p.get("t")) for p in (shuttle_pts or [])
-                if isinstance(p, dict) and _num(p.get("confidence"), 1.0) >= min_conf)
-    segs: list[dict] = []
-    for t in ts:
-        if segs and t - segs[-1]["end"] <= gap_s:
-            segs[-1]["end"] = t
-            segs[-1]["points"] += 1
+    """Contiguous observed-shuttle-flight windows with kinematics — the
+    in-play index (user spec): each segment carries median/max speed and an
+    ``in_play`` verdict (fast enough to be a live shuttle, long enough to be
+    an exchange). Slow segments (shuttle carried to the service line) and
+    static ones (already removed upstream by the tracking filter) are the
+    false positives the speed gate exists to reject.
+    """
+    pts = sorted(((_num(p.get("t")), _num(p.get("x")), _num(p.get("y")))
+                  for p in (shuttle_pts or [])
+                  if isinstance(p, dict) and _num(p.get("confidence"), 1.0) >= min_conf),
+                 key=lambda r: r[0])
+    segs: list[list[tuple[float, float, float]]] = []
+    for pt in pts:
+        if segs and pt[0] - segs[-1][-1][0] <= gap_s:
+            segs[-1].append(pt)
         else:
-            segs.append({"start": t, "end": t, "points": 1})
-    return [{"start": round(s["start"], 2), "end": round(s["end"], 2),
-             "points": s["points"]} for s in segs if s["points"] >= 3]
+            segs.append([pt])
+    out = []
+    for seg in segs:
+        if len(seg) < 3:
+            continue
+        speeds = []
+        for (t0, x0, y0), (t1, x1, y1) in zip(seg, seg[1:]):
+            dt = t1 - t0
+            if dt > 1e-3:
+                speeds.append(((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5 / dt)
+        if not speeds:
+            continue
+        speeds.sort()
+        med = speeds[len(speeds) // 2]
+        dur = seg[-1][0] - seg[0][0]
+        out.append({
+            "start": round(seg[0][0], 2), "end": round(seg[-1][0], 2),
+            "points": len(seg),
+            "median_speed": round(med, 3),          # normalized-frame units /s
+            "max_speed": round(speeds[-1], 3),
+            "in_play": bool(med >= IN_PLAY_MIN_SPEED and dur >= IN_PLAY_MIN_DUR_S),
+        })
+    return out
+
+
+def wrist_series(pose_track: list, min_conf: float = ANKLE_MIN_CONF) -> dict[str, list[dict]]:
+    """Per-player wrist time series (COCO 9/10, image-normalized): the raw
+    signal for stroke/hit detection — a hit is a wrist-speed spike coinciding
+    with a shuttle direction change and an audio impact (user spec: save the
+    pose movement so the hit algorithm has data to run on)."""
+    out: dict[str, list[dict]] = {}
+    for frame in pose_track or []:
+        t = round(_num(frame.get("t")), 2)
+        for person in frame.get("people") or []:
+            kps = person.get("keypoints") or []
+            if len(kps) < 11 or person.get("id") is None:
+                continue
+            entry: dict = {"t": t}
+            for key, idx in (("l", 9), ("r", 10)):
+                kp = kps[idx]
+                if _num(kp.get("confidence")) >= min_conf:
+                    entry[key] = [round(_num(kp.get("x")), 4), round(_num(kp.get("y")), 4)]
+            if len(entry) > 1:
+                out.setdefault(str(int(person["id"])), []).append(entry)
+    return out
 
 
 def rally_hits(rally_3d: dict | None) -> list[dict]:
@@ -173,27 +233,34 @@ def build_analysis(result: dict, *, job_id: str, per_rally_tracks: list[dict],
         tracks = per_rally_tracks[i] if i < len(per_rally_tracks) else {}
         start = _num(rr.get("src_start", rr.get("start")))
         end = _num(rr.get("end"))
+        flight = flight_segments(vision.get("shuttle"))
         entry = {
             "index": i,
             "start": round(start, 2), "end": round(end, 2),
             "dur": _num(rr.get("dur")),
             "intensity": int(_num(rr.get("intensity"), 3)),
             "note": str(rr.get("note") or "")[:80],
+            # The in-play index (user spec 2026-07-12): shuttle observed
+            # flying AND fast. Everything else inside the rally window is
+            # walking, pickup, serve prep — measurable dead time.
+            "in_play": [{"start": s["start"], "end": s["end"]}
+                        for s in flight if s["in_play"]],
             "markers": {
                 "hits": rally_hits(rr.get("rally_3d")),
-                "shuttle_flight": flight_segments(vision.get("shuttle")),
+                "shuttle_flight": flight,
                 "audio_peaks": peaks_in_window(peaks, start - 1.0, end + 1.0),
             },
             "quality": {k: vision.get(k) for k in
                         ("shuttle_quality", "player_quality", "pose_quality") if k in vision},
             "players_court_m": court_movement(tracks.get("players_track") or [],
                                               tracks.get("pose_track") or [], homography),
+            "wrists": wrist_series(tracks.get("pose_track") or []),
         }
         out_rallies.append(entry)
 
     play_s = sum(r["dur"] for r in out_rallies)
     return {
-        "schema": "baddy.analysis.v1",
+        "schema": SCHEMA,
         "job_id": job_id,
         "generated_at": generated_at,
         "sport": result.get("sport"),

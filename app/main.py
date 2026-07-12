@@ -814,7 +814,9 @@ def job_analysis(job_id: str, refresh: int = 0):
         raise HTTPException(409, "job has no completed result to analyze")
     path = config.OUTPUTS / job_id / "analysis.json"
     if path.exists() and not refresh:
-        return JSONResponse(json.loads(path.read_text()))
+        cached = json.loads(path.read_text())
+        if cached.get("schema") == analysis_mod.SCHEMA:   # stale schema → rebuild
+            return JSONResponse(cached)
     result_path = config.OUTPUTS / job_id / "result.json"
     if result_path.exists():
         result = json.loads(result_path.read_text())

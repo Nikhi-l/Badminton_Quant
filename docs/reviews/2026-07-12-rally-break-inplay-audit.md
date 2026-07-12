@@ -47,35 +47,69 @@ All of these live in `result.json` / `analysis.json` — no re-runs needed:
 | Shuttle flight segments (gap-split, measured confidence) | `analysis.rallies[].markers.shuttle_flight` | a flying shuttle IS play — strongest single trigger |
 | Audio energy series (0.25s) + impact peaks | `result.audio`, `analysis.audio` | hits/smashes are sharp transients; rest is quiet — works when vision can't see |
 | Hit markers + speeds (impact & at-net) | `analysis.rallies[].markers.hits` | hit density ≈ exchange rate; speed ≈ spectacle |
-| Player court-space movement series (ankle/foot → meters) | `analysis.rallies[].players_court_m` | in-play players hold court halves and move fast; pickups drift to corners/net |
+| Player court-space movement series (ankle/foot → meters) | `analysis.rallies[].players_court_m` | in-play players hold court halves and move fast; pickups drift to corners/net — this is the top-down 2D court mapping |
+| Per-player wrist series (COCO 9/10, image coords) | `analysis.rallies[].wrists` | the raw signal for stroke/hit detection: wrist-speed spike + shuttle turn + audio impact = a hit |
+| Shuttle in-play index (speed-gated flight segments) | `analysis.rallies[].in_play` + `markers.shuttle_flight[].{median_speed,in_play}` | the owner-spec index: airborne AND fast = play; carried/slow = not play |
 | Camera-motion probe, rally intensity/notes | `result` | context/priors |
+
+Full pose data was already persisted (`result` rallies keep per-frame
+keypoints; `pose_track` is the id-stable public form) — what was missing was
+wrists and the in-play index as first-class exported signals; both now are.
 
 Known limitation: ankle-derived positions need the box↔pose shared identity
 map (queued with match_type work) — today pose ids and box ids are labeled
 independently, so movement falls back to box-foot (`src` field says which).
 
-## 4. Design: in-play mask v1 (queued as TASK-040)
+## 4. Design: in-play index + mask (TASK-040) — revised per owner review
 
-Deterministic fusion, evaluated before any model swap:
+Owner review (2026-07-12) reshaped the priority order: the **shuttle's own
+kinematics ARE the in-play index** — "the shuttle should be moving fast, and
+it should not touch the court". Audio and player kinetics are corroborators,
+not peers. And Gemini must not grade its own homework: extract the
+time-series first, then hand it to Gemini WITH the video to confirm and
+reason — signals first, model second.
 
-- Per 0.25s bin over each Gemini rally window (±2s margin), score:
-  `S = w_f·flight + w_a·audio + w_k·kinetics` where
-  `flight` = shuttle observed in bin (0/1, from flight segments),
-  `audio` = impact peak within 0.5s (0/1) or normalized energy,
-  `kinetics` = both players' court-speed above a walk threshold (~1.2 m/s).
-- Hysteresis: play turns ON at S ≥ on-threshold, OFF after ~1.5s below the
-  off-threshold (a hit's flight gap must not flap the mask).
-- Outputs per rally: `in_play` sub-segments; boundary refinement = snap
-  Gemini's start to the first serve impact (audio peak + flight start),
-  end to last landing; long-rally splitting when the mask opens ≥3s.
-- Consumers: render trims to the mask (keep the ±pad); highlight score v2:
-  `dur_in_play × (hit_density + max_shot_speed_z + audio_prominence_z +
-  intensity_prior)` replacing raw duration.
-- Eval: label play/no-play spans on the Phase-0 bench clips
-  (`docs/benchmarks/PHASE0_BENCH.md` gains a `play_spans` label);
-  gate: mask IoU ≥ 0.85 vs labels, boundary MAE ≤ 0.5s before it can trim
-  anything users see. The mask ships as analysis.json data FIRST, drives
-  rendering only after passing the gate.
+**v0 — shipped with this revision (data only).** `analysis.json` flight
+segments now carry `median_speed`/`max_speed` (normalized-frame units/s) and
+an `in_play` verdict: airborne AND median speed ≥ 0.15/s (≈2 m/s — above
+carried-in-hand drift, below any stroke) AND ≥ 0.4s long (a blip is not an
+exchange). Stationary shuttles never reach here (the tracking layer's
+static-run gate removes floor-resting/light false positives). Each rally
+exposes the resulting `in_play` spans. Known limit: normalized speed is a
+2D image quantity — accurate m/s lives in the 3D layer; the threshold is
+deliberately far from both classes so the unit choice doesn't matter.
+
+**v1 — corroborated mask.** Per 0.25s bin: shuttle in-play index (primary)
+OR-gated with audio impact within 0.5s and both-players court-speed above a
+walk threshold (~1.2 m/s) to bridge TrackNet dropouts mid-exchange;
+hysteresis (~1.5s) so a hit's brief occlusion doesn't flap the mask.
+Boundary refinement: snap rally start to first serve impact (audio peak +
+flight start), end to last landing; split a "rally" where the mask closes
+≥3s (that was two exchanges + a pickup).
+
+**v2 — signals→Gemini verification (owner direction).** Instead of asking
+Gemini to find rallies cold, pass the video PLUS a compact digest (in-play
+spans, audio peak times, hit markers with speeds, per-player movement) and
+ask it to confirm/adjust boundaries and REASON about which rallies are the
+top highlights from all signals. Gemini becomes the cross-checking judge of
+measured data, not the sole eyewitness.
+
+- Highlight score v2 (alongside v2): `dur_in_play × (hit_density +
+  max_shot_speed_z + audio_prominence_z + intensity_prior)` replacing raw
+  duration.
+- Eval: label `play_spans` on the Phase-0 bench clips; gate mask IoU ≥ 0.85,
+  boundary MAE ≤ 0.5s before anything is trimmed from a render. The index
+  ships as analysis data first (done), drives rendering only after the gate.
+
+## 4b. Canonical camera assumption (owner, 2026-07-12)
+
+Deployment rig: one camera **behind the players, ~10 ft high, whole court
+visible** (possibly tilted). That is close to TrackNetV3's broadcast training
+domain (good), and it is exactly the geometry our interpolation layer is
+built for: mark/detect the court once, homography + plane calibration give
+the top-down 2D court mapping (`players_court_m` already plots it) and the
+3D shuttle solver. Multi-view and per-segment calibration stay future work
+(`docs/roadmap/FUTURE_VISION.md`).
 
 ## 5. Shipped in TASK-039 (this audit's groundwork)
 

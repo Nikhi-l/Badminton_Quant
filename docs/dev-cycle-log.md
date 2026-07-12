@@ -5,7 +5,38 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
-## Cycle 21: Rally-break audit + analysis export + architecture board (TASK-039)
+## Cycle 22: Owner review intake — shuttle in-play index v0 + wrist signals + future vision (TASK-040 v0)
+**Date:** 2026-07-12
+**Goal:** Fold the owner's audit review into code and docs: the in-play index
+IS shuttle kinematics (fast + airborne; carried-shuttle false positives
+speed-gated); signals get extracted FIRST and Gemini verifies/reasons over
+them (never grades its own cold guess); wrist series saved for hit
+detection; canonical camera = behind players ~10 ft up, full court; school
+streaming end-state recorded.
+**PRD:** §16 TASK-040 row revised (v0 done, v1/v2 design); `docs/roadmap/FUTURE_VISION.md` new.
+**Branch:** `feat/TASK-039-inplay-audit-architecture` (continues).
+
+**What shipped**
+- `analysis.py` schema v2: flight segments carry `median_speed`/`max_speed`
+  (normalized-frame/s) + `in_play` verdict (median ≥0.15/s ≈ 2 m/s AND
+  ≥0.4 s); rallies expose `in_play` spans — the owner-spec index. Static
+  shuttles never reach here (tracking layer removes them); slow carries are
+  the speed gate's target.
+- `wrists` per player per rally (COCO 9/10, conf-gated ≥0.15): the raw
+  signal for wrist-speed-spike hit detection.
+- Analysis endpoint rebuilds cached files on schema mismatch.
+- Audit doc §4 rewritten (v0 shipped / v1 corroborated mask / v2
+  signals→Gemini verification), §4b canonical camera, signals table +
+  wrists/in-play rows; bench camera guidance re-aimed at the canonical rig
+  + `play_spans` labels; `FUTURE_VISION.md` (school streaming: multi-view
+  live cuts, shirt tracking, scoreboard, student app, hardware).
+
+**Verification**
+- `./scripts/check.sh` — 142 passed (new: in-play speed gating incl.
+  carried-shuttle and blip rejection; wrist confidence/id gating; schema).
+- Real artifact (uservid3, `?refresh` semantics exercised locally): rally0
+  3 flight segments → 2 in-play spans (one slow segment gated out).
+**Deploy:** VM only.
 **Date:** 2026-07-12
 **Goal:** Audit how rally boundaries/in-play are decided (user: long rallies
 keep shuttle-pickup dead time; "longest = best" unvalidated), export one

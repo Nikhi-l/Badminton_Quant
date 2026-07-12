@@ -12,12 +12,13 @@ tripod AND handheld, clean AND compressed uploads, at least one rally >45 s.
 Process each through the normal pipeline once and keep the job's
 `data/outputs/<job>/result.json` immutable (copy it into `bench/results/`).
 
-**Camera-angle diversity (TASK-035).** TrackNetV3's training data is broadcast
-footage (elevated behind-the-baseline). The smash-speed literature had to
-build a custom dataset because side-on/perpendicular views are out of that
-domain — expect the same gap here. Include at least one side-on/courtside
-amateur recording so any TrackNet fine-tune decision is made against the
-angles our users actually shoot.
+**Camera-angle diversity (TASK-035, revised 2026-07-12).** The canonical
+deployment rig is now owner-specified: **behind the players, ~10 ft high,
+whole court visible, possibly tilted** — close to TrackNetV3's broadcast
+training domain, so most bench clips should match it. Keep ONE
+side-on/courtside clip as an out-of-domain control (the smash-speed
+literature had to build a custom dataset for exactly that gap), and label
+`play_spans` on every clip for the TASK-040 in-play mask gate.
 
 `bench/manifest.json`:
 
