@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baddy — Architecture</title>
+<style>
+  :root{
+    --bg:#0b0d12; --panel:#12151d; --panel2:#171b25; --line:#232936;
+    --text:#e8ebf2; --muted:#8b93a7; --acc:#b7f542; --amber:#ffd166; --red:#ff4d6d;
+    --blue:#6aa5ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--acc);text-decoration:none}
+  header{display:flex;align-items:center;gap:14px;padding:16px 22px;border-bottom:1px solid var(--line)}
+  header h1{font-size:17px;margin:0;font-weight:650}
+  header .crumb{color:var(--muted);font-size:13px}
+  header nav{margin-left:auto;display:flex;gap:14px;font-size:13px}
+  main{max-width:1180px;margin:0 auto;padding:22px}
+  .intro{color:var(--muted);max-width:860px;margin:4px 0 18px}
+  h2{font-size:15px;margin:26px 0 10px;letter-spacing:.02em}
+  .flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;position:relative}
+  .box .n{position:absolute;top:10px;right:12px;color:var(--muted);font-size:11px}
+  .box h3{margin:0 0 2px;font-size:14px}
+  .box .algo{color:var(--acc);font-size:12px;margin-bottom:8px}
+  .box ul{margin:6px 0;padding-left:16px;color:#c6cddb;font-size:12.5px}
+  .box ul li{margin:3px 0}
+  .box .gaps{border-top:1px dashed var(--line);margin-top:8px;padding-top:7px}
+  .box .gaps b{color:var(--amber);font-weight:600;font-size:11.5px;letter-spacing:.04em}
+  .box .gaps ul{color:var(--muted)}
+  .box.iterate{border-color:#3b5a1f;box-shadow:0 0 0 1px #2c4217 inset}
+  .box.iterate .tag{display:inline-block;background:#1d2b10;color:var(--acc);border:1px solid #33501b;
+       border-radius:20px;padding:1px 9px;font-size:11px;margin-bottom:6px}
+  .strip{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 4px}
+  .chip{background:var(--panel2);border:1px solid var(--line);border-radius:20px;padding:3px 11px;
+        font-size:12px;color:#c6cddb}
+  .chip.planned{border-style:dashed;color:var(--amber)}
+  .demo{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:10px}
+  .demo .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .btn{background:var(--acc);color:#0c1206;border:0;border-radius:8px;padding:8px 16px;font-weight:650;cursor:pointer}
+  .btn.sec{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
+  input[type=text]{background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);
+        padding:8px 10px;min-width:200px}
+  .stages{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 6px}
+  .stg{border:1px solid var(--line);border-radius:20px;padding:2px 11px;font-size:12px;color:var(--muted)}
+  .stg.active{border-color:var(--acc);color:var(--acc)}
+  .stg.done{border-color:#33501b;color:#9ed36a}
+  .stg.failed{border-color:var(--red);color:var(--red)}
+  #liveMsg{color:var(--muted);font-size:12.5px;min-height:18px}
+  .results{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px;margin-top:14px}
+  .panel{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .panel h4{margin:0 0 8px;font-size:13px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:3px 6px;border-bottom:1px solid var(--line);color:#c6cddb}
+  th{color:var(--muted);font-weight:600}
+  .bar{display:flex;height:16px;border-radius:6px;overflow:hidden;border:1px solid var(--line);margin:6px 0}
+  .bar i{display:block;height:100%}
+  .k{color:var(--muted)} .v{color:var(--text);font-weight:600}
+  canvas{background:#0e1118;border:1px solid var(--line);border-radius:8px;max-width:100%}
+  .mono{font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
+  footer{color:var(--muted);font-size:12px;padding:26px 22px;text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <h1>Baddy · Architecture</h1><span class="crumb">the live board — how a game becomes analytics</span>
+  <nav><a href="/">App</a><a href="/architecture">Architecture</a></nav>
+</header>
+<main>
+  <p class="intro">Every box is a real pipeline stage (module names in the corner). Solid chips are shipped;
+  dashed amber chips are the improvement queue. Run a demo at the bottom to watch a video move through the
+  chain and inspect what each model produced — all model outputs are persisted per job, so inspecting never
+  re-runs anything.</p>
+
+  <h2>Pipeline</h2>
+  <div class="flow">
+    <div class="box"><span class="n">media.py · court.py · audio.py</span>
+      <h3>1 · Ingest, proxy &amp; court geometry</h3>
+      <div class="algo">ffmpeg · classical line/corner detection · Gemini corner fallback · RMS audio energy</div>
+      <ul>
+        <li>Multi-clip uploads ordered by recording time, normalized, joined</li>
+        <li>480p/12fps analysis proxy (keeps ambient audio) + 1080p vision proxy for detection</li>
+        <li>Court corners: detected → Gemini fallback → user-drawn; homography = image ↔ court meters</li>
+        <li><b>New:</b> ambient-audio energy series + impact-like peaks stored per job</li>
+      </ul>
+      <div class="gaps"><b>GAPS → NEXT</b><ul>
+        <li>One calibration per job — camera motion/zoom breaks it (per-segment calibration queued)</li>
+      </ul></div>
+    </div>
+
+    <div class="box"><span class="n">rally.py · gemini.py</span>
+      <h3>2 · Rally segmentation &amp; selection</h3>
+      <div class="algo">Gemini video understanding (structured JSON), fallback model ladder</div>
+      <ul>
+        <li>Prompt: rally = serve struck → point clearly over; “strictly exclude dead time”; intensity 1–5 + note</li>
+        <li>Clean: clamp to video, drop &lt; min length, merge overlaps</li>
+        <li>Reel pick: rank by (duration, intensity), cap count + total seconds; pad ±</li>
+      </ul>
+      <div class="gaps"><b>GAPS → NEXT (2026-07-12 audit)</b><ul>
+        <li>Boundaries are whole-second and model-judged only — no fused signal check</li>
+        <li>No in-play/no-play sub-segmentation INSIDE a rally (shuttle pickup survives in long rallies)</li>
+        <li>“Longest = best highlight” is unvalidated → highlight score v2 (audio peaks + shot speed + length)</li>
+      </ul></div>
+    </div>
+
+    <div class="box"><span class="n">runpod_worker · vision_local.py</span>
+      <h3>3 · Vision workers (GPU / CPU)</h3>
+      <div class="algo">TrackNetV3 shuttle · YOLO26L-pose · BoT-SORT + ReID ids · racquet chain</div>
+      <ul>
+        <li>Per-rally 30fps clip → TrackNetV3 points; players+17 keypoints at 6 Hz, imgsz 1920</li>
+        <li>Tracker persists across the rally, resets between rallies; court-polygon gating kills spectators</li>
+        <li>Honest per-rally quality: coverage × longest-gap × teleport penalties</li>
+        <li><b>New:</b> verbatim worker output persisted (<span class="mono">vision_raw.json</span>)</li>
+      </ul>
+      <div class="gaps"><b>GAPS → NEXT</b><ul>
+        <li>180-frame cap → long rallies sample below 6 Hz</li>
+        <li>Whole-frame pose is weak on far players → per-player crop pose (queued)</li>
+        <li>No singles/doubles contract yet (match_type, queued)</li>
+      </ul></div>
+    </div>
+
+    <div class="box"><span class="n">track.py · smooth.py</span>
+      <h3>4 · Tracking &amp; filtering (honest-data layer)</h3>
+      <div class="algo">innovation-scored confidence · Hampel outliers · One-Euro pose smoothing</div>
+      <ul>
+        <li>Measured shuttle confidence: fwd+bwd constant-velocity innovation, static-run + &gt;500 km/h gates, provenance</li>
+        <li>ONE filtered track feeds camera, Studio, baked marker and 3D (no divergence)</li>
+        <li>Stable player ids: fragment merge, near player = P1; One-Euro keypoint smoothing</li>
+        <li>Public contracts: gap-preserving 12.5 Hz shuttle track; dropouts stay visible gaps</li>
+      </ul>
+      <div class="gaps"><b>GAPS → NEXT</b><ul>
+        <li>No predicted/inpainted gap-fill provenance yet (consumers would need to trust-tier it)</li>
+      </ul></div>
+    </div>
+
+    <div class="box iterate"><span class="n">court.py · rally3d.py</span>
+      <h3>5 · Interpolation layer — 2D → 3D court space</h3>
+      <span class="tag">isolated module — iterate models here freely</span>
+      <div class="algo">plane calibration (Zhang) · ray casting · drag-ballistic LM fit · physical gates</div>
+      <ul>
+        <li>Known court dims (6.1×13.4 m) + homography → camera focal, rotation, position</li>
+        <li>Players: ankle/foot pixel → ground-plane meters (movement series, heatmaps)</li>
+        <li>Shuttle: per-shot ballistic fit (a = g − k·|v|·v), multi-start, gated on floor/bounds/net/contact/speed/continuity</li>
+        <li>Speeds: at impact (|v0|) + radar-comparable at-net</li>
+      </ul>
+      <div class="gaps"><b>GAPS → NEXT</b><ul>
+        <li>Hits inferred from 2D direction turns only → fuse audio peaks + wrist/racquet proximity</li>
+        <li>Player “3D” is a 2.5D billboard, not lifted pose</li>
+      </ul></div>
+    </div>
+
+    <div class="box"><span class="n">track.py · render.py · validate.py</span>
+      <h3>6 · Virtual camera &amp; render</h3>
+      <div class="algo">FocusPath planning · keep-in-frame containment · validation ladder</div>
+      <ul>
+        <li>Camera path from player tracks + filtered shuttle (POV clips: gentle motion fallback)</li>
+        <li>9:16 crop per frame; camera_path exported so the Studio can invert the bake</li>
+        <li>Validate motion/framing → trim → safe re-render → drop (never ship a broken clip)</li>
+      </ul>
+    </div>
+
+    <div class="box"><span class="n">stitch.py · coach.py · analysis.py</span>
+      <h3>7 · Outputs &amp; analytics</h3>
+      <div class="algo">xfade stitch + music bed · Gemini coach notes · analysis.json export</div>
+      <ul>
+        <li>Reel (beat-synced, ambient audio under music), thumbnail, gallery, Studio editor</li>
+        <li><b>New — <span class="mono">analysis.json</span>:</b> play/no-play timeline, hit markers with speeds,
+            shuttle-flight segments, audio peaks, per-player court-space movement series</li>
+        <li>Built once from stored results, cached; <span class="mono">?refresh=1</span> after Studio edits</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Stored per job (nothing gets re-run to answer a question)</h2>
+  <div class="strip">
+    <span class="chip mono">result.json</span><span class="chip mono">analysis.json</span>
+    <span class="chip mono">gemini_rallies_raw.json</span><span class="chip mono">vision_raw.json</span>
+    <span class="chip mono">proxy.mp4 / vision_proxy.mp4</span><span class="chip mono">reel.mp4 · thumb.jpg</span>
+  </div>
+
+  <h2>Improvement queue (from the rally-break / in-play audit)</h2>
+  <div class="strip">
+    <span class="chip planned">in-play mask v1: shuttle-flight ∪ audio peaks ∪ player kinetics</span>
+    <span class="chip planned">highlight score v2 (audio + shot speed + length)</span>
+    <span class="chip planned">match_type singles|doubles</span>
+    <span class="chip planned">per-player crop pose</span>
+    <span class="chip planned">TrackNet A/B + fine-tune on labelled bench</span>
+    <span class="chip planned">per-segment camera calibration</span>
+  </div>
+
+  <h2>Run a demo</h2>
+  <div class="demo">
+    <div class="row">
+      <input type="file" id="file" accept="video/*">
+      <button class="btn" id="runBtn">Upload &amp; run</button>
+      <span class="k">or inspect an existing job:</span>
+      <input type="text" id="jobId" placeholder="job id (from the gallery URL)">
+      <button class="btn sec" id="inspectBtn">Inspect</button>
+    </div>
+    <div class="stages" id="stages"></div>
+    <div id="liveMsg"></div>
+    <div class="results" id="results" hidden></div>
+  </div>
+</main>
+<footer>Baddy · architecture board · updated with each deploy</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const STAGE_LABELS = {combine:"combine", probe:"probe", proxy:"proxy+audio", rallies:"rallies (Gemini)",
+  vision:"vision (GPU)", tracking:"tracking", render:"render", validate:"validate", coach:"coach", stitch:"stitch"};
+let pollTimer = null;
+
+function setMsg(m, bad){ const el=$("liveMsg"); el.textContent=m||""; el.style.color=bad?"var(--red)":"var(--muted)"; }
+
+function drawStages(stages){
+  $("stages").innerHTML = (stages||[]).map(s =>
+    `<span class="stg ${s.state}">${STAGE_LABELS[s.key]||s.key}</span>`).join("");
+}
+
+/* ---------- chunked upload (same protocol as the main app) ---------- */
+async function uploadAndRun(file){
+  setMsg(`uploading ${file.name} (${(file.size/1e6).toFixed(0)} MB)…`);
+  const init = await fetch("/api/upload/init", {method:"POST", headers:{"content-type":"application/json"},
+    body: JSON.stringify({filename:file.name, size:file.size})});
+  if (!init.ok) throw new Error((await init.json()).detail || "upload init failed");
+  const {id, chunk_size} = await init.json();
+  for (let off=0, i=0; off<file.size; off+=chunk_size, i++){
+    const r = await fetch(`/api/upload/${id}/chunk/${i}`, {method:"PUT", body:file.slice(off, off+chunk_size)});
+    if (!r.ok) throw new Error("chunk upload failed");
+    setMsg(`uploading… ${Math.min(100, Math.round((off+chunk_size)/file.size*100))}%`);
+  }
+  const fin = await fetch(`/api/upload/${id}/finish`, {method:"POST", headers:{"content-type":"application/json"},
+    body:"{}"});
+  if (!fin.ok) throw new Error("upload finish failed");
+  return id;
+}
+
+/* ------------------------------ polling ------------------------------ */
+function watch(jobId){
+  clearInterval(pollTimer);
+  $("results").hidden = true;
+  const tick = async () => {
+    let j;
+    try { j = await fetch(`/api/jobs/${jobId}`).then(r => { if(!r.ok) throw 0; return r.json(); }); }
+    catch { setMsg("job not found", true); clearInterval(pollTimer); return; }
+    drawStages(j.stages);
+    setMsg(`[${j.stage}] ${j.message||j.status}`, j.status==="failed");
+    if (j.status === "done"){ clearInterval(pollTimer); renderResults(jobId, j); }
+    if (j.status === "failed"){ clearInterval(pollTimer); setMsg(`failed at ${j.stage}: ${j.error||j.message}`, true); }
+  };
+  tick();
+  pollTimer = setInterval(tick, 2500);
+}
+
+/* --------------------------- results board --------------------------- */
+const fmt = (v, d=1) => (v==null||isNaN(v)) ? "–" : Number(v).toFixed(d);
+const fmtT = s => `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,"0")}`;
+
+async function renderResults(jobId, job){
+  setMsg("done — building analysis view…");
+  let a = null;
+  try { a = await fetch(`/api/jobs/${jobId}/analysis`).then(r => r.ok ? r.json() : null); } catch {}
+  const res = job.result || {};
+  const box = $("results");
+  box.hidden = false;
+  box.innerHTML = "";
+
+  /* timeline: play vs no-play */
+  if (a && a.timeline){
+    const dur = a.duration_s || 1;
+    const segs = a.timeline.map(s => {
+      const c = s.kind === "no_play" ? "#1c2130" : (s.in_reel ? "var(--acc)" : "#4b7c22");
+      return `<i title="${s.kind} ${fmtT(s.start)}–${fmtT(s.end)}" style="width:${(s.dur/dur*100).toFixed(2)}%;background:${c}"></i>`;
+    }).join("");
+    box.insertAdjacentHTML("beforeend", `<div class="panel" style="grid-column:1/-1">
+      <h4>Play / no-play timeline · ${fmtT(dur)} total · play ${fmt(a.summary.play_time_s,0)}s · dead ${fmt(a.summary.no_play_time_s,0)}s</h4>
+      <div class="bar">${segs}</div>
+      <span class="k">bright green = in the reel · dark green = detected rally, not selected · dark = no play (labelled, not implied)</span></div>`);
+  }
+
+  /* rallies table */
+  const all = (res.all_rallies||[]);
+  box.insertAdjacentHTML("beforeend", `<div class="panel"><h4>Rally segmentation (Gemini) · ${all.length} found</h4>
+    <table><tr><th>start</th><th>end</th><th>dur</th><th>int.</th><th>note</th><th>reel</th></tr>
+    ${all.map(r=>`<tr><td>${fmtT(r.start)}</td><td>${fmtT(r.end)}</td><td>${fmt(r.dur,1)}s</td>
+      <td>${r.intensity}</td><td>${(r.note||"").slice(0,32)}</td><td>${r.used?"✓":""}</td></tr>`).join("")}
+    </table></div>`);
+
+  /* vision metrics per rally */
+  const rallies = res.rallies || [];
+  box.insertAdjacentHTML("beforeend", `<div class="panel"><h4>Vision model output · ${res.vision?.worker_version||res.vision?.backend||""}</h4>
+    <table><tr><th>#</th><th>shuttle q</th><th>coverage</th><th>gap</th><th>teleports</th><th>players q</th><th>pose q</th></tr>
+    ${rallies.map((r,i)=>{const v=r.vision||{}; const tn=v.tracknet||{};
+      return `<tr><td>${i+1}</td><td>${fmt(v.shuttle_quality,2)}</td><td>${fmt(tn.coverage,2)}</td>
+      <td>${fmt(tn.longest_gap_sec,1)}s</td><td>${tn.teleports??"–"}</td>
+      <td>${fmt(v.player_quality,2)}</td><td>${fmt(v.pose_quality,2)}</td></tr>`;}).join("")}
+    </table></div>`);
+
+  /* shots & speeds */
+  const shots = [];
+  rallies.forEach((r,i)=>((r.rally_3d&&r.rally_3d.shots)||[]).forEach(s=>shots.push({i:i+1,...s})));
+  box.insertAdjacentHTML("beforeend", `<div class="panel"><h4>3D shots (interpolation layer) · ${shots.length} accepted</h4>
+    ${shots.length?`<table><tr><th>rally</th><th>t</th><th>impact</th><th>at net</th><th>peak</th></tr>
+    ${shots.slice(0,14).map(s=>`<tr><td>${s.i}</td><td>${fmtT(s.t0)}</td><td>${s.speed_kmh} km/h</td>
+      <td>${s.speed_at_net_kmh?s.speed_at_net_kmh+" km/h":"–"}</td><td>${s.peak_z} m</td></tr>`).join("")}</table>`
+    :`<span class="k">no accepted 3D — usually the court isn’t calibrated (draw corners in the Studio)</span>`}</div>`);
+
+  /* audio */
+  if (a && a.audio){
+    const peaks = a.audio.peaks||[];
+    box.insertAdjacentHTML("beforeend", `<div class="panel"><h4>Audio energy · ${a.audio.status} · ${peaks.length} impact peaks</h4>
+      <canvas id="audioCv" width="560" height="90"></canvas>
+      <table><tr><th>t</th><th>level</th><th>prominence</th></tr>
+      ${peaks.slice().sort((x,y)=>y.prominence_db-x.prominence_db).slice(0,6)
+        .map(p=>`<tr><td>${fmtT(p.t)}</td><td>${p.db} dB</td><td>+${p.prominence_db} dB</td></tr>`).join("")}
+      </table></div>`);
+    drawAudio(a.audio, a.duration_s);
+  }
+
+  /* movement mini-court */
+  if (a){
+    box.insertAdjacentHTML("beforeend", `<div class="panel"><h4>Player movement (court meters, ankle/foot projected)</h4>
+      <canvas id="courtCv" width="240" height="470"></canvas>
+      <div class="k" id="moveNote"></div></div>`);
+    drawCourt(a);
+  }
+
+  /* artifacts */
+  box.insertAdjacentHTML("beforeend", `<div class="panel"><h4>Stored artifacts</h4><ul style="padding-left:16px">
+    <li><a href="/media/${jobId}/reel.mp4">reel.mp4</a> · <a href="/media/${jobId}/thumb.jpg">thumb</a></li>
+    <li><a href="/api/jobs/${jobId}/analysis" target="_blank">analysis.json</a> (match report — this page’s data)</li>
+    <li><a href="/media/${jobId}/gemini_rallies_raw.json" target="_blank">gemini_rallies_raw.json</a> ·
+        <a href="/media/${jobId}/vision_raw.json" target="_blank">vision_raw.json</a> (verbatim model outputs)</li>
+    <li>Open the reel in the <a href="/">Studio</a> (gallery → this job) for overlays &amp; 3D replay</li>
+  </ul></div>`);
+  setMsg(`job ${jobId} — done`);
+}
+
+function drawAudio(audio, dur){
+  const cv = $("audioCv"); if (!cv) return;
+  const g = cv.getContext("2d"); g.clearRect(0,0,cv.width,cv.height);
+  const series = audio.series||[]; if (!series.length) return;
+  const dbs = series.map(s=>s[1]);
+  const lo = Math.min(...dbs), hi = Math.max(...dbs), span = Math.max(1, hi-lo);
+  g.strokeStyle = "#3d4a63"; g.beginPath();
+  series.forEach((s,i)=>{ const x = s[0]/(dur||1)*cv.width, y = cv.height-6-((s[1]-lo)/span)*(cv.height-14);
+    i?g.lineTo(x,y):g.moveTo(x,y); });
+  g.stroke();
+  g.fillStyle = "#b7f542";
+  (audio.peaks||[]).forEach(p=>{ const x = p.t/(dur||1)*cv.width; g.fillRect(x-1, 4, 2, cv.height-8); });
+}
+
+function drawCourt(a){
+  const cv = $("courtCv"); if (!cv) return;
+  const g = cv.getContext("2d");
+  const W = a.court.width_m||6.1, L = a.court.length_m||13.4;
+  const px = x => 20 + x/W*(cv.width-40), py = y => 15 + y/L*(cv.height-30);
+  g.clearRect(0,0,cv.width,cv.height);
+  g.strokeStyle = "#31435e"; g.lineWidth = 1.5;
+  g.strokeRect(px(0), py(0), px(W)-px(0), py(L)-py(0));
+  g.beginPath(); g.moveTo(px(0), py(L/2)); g.lineTo(px(W), py(L/2)); g.stroke(); // net
+  const colors = ["#b7f542", "#6aa5ff", "#ffd166", "#ff7d9c"];
+  let total = 0, ankles = 0;
+  (a.rallies||[]).forEach(r => Object.entries(r.players_court_m||{}).forEach(([pid, pts])=>{
+    g.fillStyle = colors[Number(pid)%4];
+    pts.forEach(p=>{ if (p.x<-1||p.x>W+1||p.y<-1||p.y>L+1) return;
+      g.globalAlpha = .5; g.fillRect(px(p.x)-1.5, py(p.y)-1.5, 3, 3); g.globalAlpha = 1;
+      total++; if (p.src==="ankles") ankles++; });
+  }));
+  const note = $("moveNote");
+  if (note) note.textContent = total
+    ? `${total} positions · ${Math.round(ankles/Math.max(total,1)*100)}% ankle-derived (rest: box foot) · P1 green, P2 blue`
+    : "no calibrated court — draw corners in the Studio, then refresh analysis";
+}
+
+/* ------------------------------ wiring ------------------------------ */
+$("runBtn").onclick = async () => {
+  const f = $("file").files[0];
+  if (!f) return setMsg("choose a video first", true);
+  try { const id = await uploadAndRun(f); setMsg(`queued as ${id}`); watch(id); }
+  catch(e){ setMsg(e.message||"upload failed", true); }
+};
+$("inspectBtn").onclick = () => {
+  const id = $("jobId").value.trim();
+  if (!id) return setMsg("enter a job id", true);
+  watch(id);
+};
+const qs = new URLSearchParams(location.search);
+if (qs.get("job")) { $("jobId").value = qs.get("job"); watch(qs.get("job")); }
+</script>
+</body>
+</html>
