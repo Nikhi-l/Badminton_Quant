@@ -5,6 +5,38 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 23: Upload-review batch — pose visibility, evaluator, court gate, trim button (TASK-041)
+**Date:** 2026-07-12
+**Goal:** Owner upload review (job `adda60dbf93e`): no skeletons visible,
+"only 3 rallies", shuttle marker lag, background court polluting shuttle +
+player tracks, plus the one-button whole-match trim.
+**PRD:** §16 TASK-041. **Branch:** `feat/TASK-041-review-batch`.
+
+**Diagnosis before code** (all recorded in the task file): pose data on the
+job is healthy (132 frames, q 0.79–0.83; node run of the real payload drew
+29 limbs) — skeletons were only ever live Studio overlays, never pixels;
+TOP_RALLIES was already 5 but MAX_REEL_SEC=59 capped the reel at the 3
+longest rallies; shuttle_quality 0.0 on 183 points was the teleport
+penalty honestly flagging background-court re-locking.
+
+**Shipped**
+- `annotate.py` → `annotated.mp4` ("Analysis video" in Studio): shuttle +
+  players + pose baked at exact frame times from stored tracks.
+- `evaluate.py` (PRO_MODEL, fail-open): annotated frames → main-court player
+  count + keep ids + box QA; prunes stored tracks BEFORE camera planning.
+- `track.court_shuttle_gate`: flight segments mostly outside the expanded
+  court quad drop wholesale (geometry is the only court separator).
+- MAX_REEL_SEC 59→90 (5 rallies actually fit); ANNOTATED_PREVIEW/GEMINI_EVAL
+  config flags.
+- Trim dead time: `/api/jobs/{id}/trim` background ffmpeg trim+concat of ALL
+  detected rallies → `trimmed.mp4`, one-button Studio flow.
+- Frame-exact overlays: requestVideoFrameCallback drives repaints on the
+  presented frame's mediaTime (rAF ran a frame ahead). v=38.
+
+**Verification:** ./scripts/check.sh — 147 passed (verdict pruning incl.
+fail-open, annotate drawing incl. stale-track blank, court-gate segments);
+node --check; owner job reprocessed post-deploy (see ledger).
+
 ## Cycle 22: Owner review intake — shuttle in-play index v0 + wrist signals + future vision (TASK-040 v0)
 **Date:** 2026-07-12
 **Goal:** Fold the owner's audit review into code and docs: the in-play index
