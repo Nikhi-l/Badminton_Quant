@@ -33,9 +33,26 @@ penalty honestly flagging background-court re-locking.
 - Frame-exact overlays: requestVideoFrameCallback drives repaints on the
   presented frame's mediaTime (rAF ran a frame ahead). v=38.
 
-**Verification:** ./scripts/check.sh — 147 passed (verdict pruning incl.
-fail-open, annotate drawing incl. stale-track blank, court-gate segments);
-node --check; owner job reprocessed post-deploy (see ledger).
+**Verification:** ./scripts/check.sh — 149 passed (verdict pruning incl.
+fail-open, annotate drawing incl. stale-track blank, court-gate segments,
+iter_frames pair contract, post-gate quality); node --check; owner job
+reprocessed post-deploy (see ledger).
+
+**Follow-ups landed same day (owner review continued):**
+- Camera follow (Studio): resolveTargetCenter fed SOURCE-normalized track
+  coords into centerFraming as if they were coords of the DISPLAYED reel —
+  which is the baked camera's moving crop — so "follow shuttle" panned to a
+  phantom region. All targets now map through toDisplayNorm (the overlays'
+  inverse-crop); legacy reels fall back to manual framing. Node-verified on
+  the extracted function. v=39.
+- First reprocess of `adda60dbf93e` proved the evaluator (Gemini: "singles,
+  P1+P4; P2/P6 on adjacent courts" → 737 background boxes pruned, 2
+  players/frame) and the 5-rally reel, and exposed two bugs fixed here:
+  render_annotated wrapped media.iter_frames (yields (i, frame) pairs) in
+  enumerate → numpy tuple crash; and shuttle_quality was the WORKER's
+  raw-track number, still 0.0 after the court gate cleaned the track —
+  now recomputed post-gate at canonicalization (self-calibrated cadence),
+  worker number kept in the tracknet payload.
 
 ## Cycle 22: Owner review intake — shuttle in-play index v0 + wrist signals + future vision (TASK-040 v0)
 **Date:** 2026-07-12
