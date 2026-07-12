@@ -2,6 +2,7 @@
 import json
 import math
 import shutil
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -18,7 +19,8 @@ from .pipeline.run import STAGES
 
 ALLOWED_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
 MEDIA_WHITELIST = {"reel.mp4", "thumb.jpg", "proxy.mp4", "vision_proxy.mp4",
-                   "analysis.json", "gemini_rallies_raw.json", "vision_raw.json"}
+                   "analysis.json", "gemini_rallies_raw.json", "vision_raw.json",
+                   "annotated.mp4", "trimmed.mp4"}
 CHUNK_SIZE = 8 * 1024 * 1024
 MAX_UPLOAD = 3 * 1024 ** 3
 
@@ -697,6 +699,8 @@ def _public_result(job: dict, light: bool = False) -> dict | None:
         return out
     out["stitch"] = r.get("stitch")
     out["court"] = r.get("court")
+    out["annotated"] = bool(r.get("annotated"))
+    out["evaluation"] = r.get("evaluation")
     out["rallies"] = [_public_rally(rr) for rr in r.get("rallies", [])]
     out["all_rallies"] = r.get("all_rallies", [])
     out["rally_pool"] = ([_public_rally(rr) for rr in r.get("rally_pool", [])]
@@ -839,6 +843,113 @@ def job_analysis(job_id: str, refresh: int = 0):
     except OSError:
         pass
     return JSONResponse(out)
+
+
+_TRIM_JOBS: dict[str, dict] = {}   # job_id -> {"status": "processing"|"failed", "message": str}
+
+
+def _trim_segments(result: dict) -> list[tuple[float, float]]:
+    """Every detected rally (reel-selected or not) padded and merged: the
+    'whole match, dead time removed' cut list, on the source clock."""
+    duration = float((result.get("source") or {}).get("duration")
+                     or result.get("duration") or 0.0)
+    pad = 0.4
+    wins = []
+    for r in result.get("all_rallies") or []:
+        try:
+            s, e = float(r["start"]) - pad, float(r["end"]) + pad
+        except (KeyError, TypeError, ValueError):
+            continue
+        if e - s >= 1.0:
+            wins.append((max(0.0, s), min(duration, e) if duration else e))
+    wins.sort()
+    merged: list[list[float]] = []
+    for s, e in wins:
+        if merged and s <= merged[-1][1] + 0.2:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    return [(s, e) for s, e in merged if e - s >= 1.0]
+
+
+def _run_trim(job_id: str, src: Path, segments: list[tuple[float, float]]):
+    from .pipeline.media import FFMPEG
+    out = config.OUTPUTS / job_id / "trimmed.mp4"
+    tmp = config.OUTPUTS / job_id / "trimmed.part.mp4"
+
+    def _cmd(with_audio: bool) -> list[str]:
+        parts, refs = [], []
+        for i, (s, e) in enumerate(segments):
+            parts.append(f"[0:v]trim={s:.3f}:{e:.3f},setpts=PTS-STARTPTS[v{i}]")
+            refs.append(f"[v{i}]")
+            if with_audio:
+                parts.append(f"[0:a]atrim={s:.3f}:{e:.3f},asetpts=PTS-STARTPTS[a{i}]")
+                refs[-1] += f"[a{i}]"
+        fc = (";".join(parts)
+              + f";{''.join(refs)}concat=n={len(segments)}:v=1:a={'1' if with_audio else '0'}"
+              + ("[v][a]" if with_audio else "[v]"))
+        cmd = [FFMPEG, "-y", "-v", "error", "-i", str(src), "-filter_complex", fc,
+               "-map", "[v]"]
+        if with_audio:
+            cmd += ["-map", "[a]", "-c:a", "aac", "-b:a", "128k"]
+        return cmd + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+                      "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(tmp)]
+
+    import subprocess
+    try:
+        try:
+            subprocess.run(_cmd(True), check=True, capture_output=True, timeout=3600)
+        except subprocess.CalledProcessError:
+            subprocess.run(_cmd(False), check=True, capture_output=True, timeout=3600)
+        tmp.rename(out)
+        _TRIM_JOBS[job_id] = {"status": "ready"}
+    except Exception as e:  # noqa: BLE001 - reported via the status endpoint
+        tmp.unlink(missing_ok=True)
+        _TRIM_JOBS[job_id] = {"status": "failed",
+                              "message": f"{type(e).__name__}: {str(e)[:180]}"}
+
+
+@app.post("/api/jobs/{job_id}/trim")
+def job_trim(job_id: str):
+    """One-button 'trim the dead time' (TASK-041): every DETECTED rally —
+    reel-selected or not — cut from the source in chronological order,
+    shuttle-pickup gaps removed. Renders in the background; poll GET."""
+    job = db.get_job(job_id)
+    if not job or job["status"] != "done":
+        raise HTTPException(409, "job has no completed result")
+    if (config.OUTPUTS / job_id / "trimmed.mp4").exists():
+        return {"status": "ready", "url": f"/media/{job_id}/trimmed.mp4"}
+    if _TRIM_JOBS.get(job_id, {}).get("status") == "processing":
+        return {"status": "processing"}
+    result_path = config.OUTPUTS / job_id / "result.json"
+    if not result_path.exists():
+        raise HTTPException(409, "job result is not on disk")
+    result = json.loads(result_path.read_text())
+    segments = _trim_segments(result)
+    if not segments:
+        raise HTTPException(409, "no detected rallies to keep")
+    src = None
+    combined = config.OUTPUTS / job_id / "combined.mp4"
+    if combined.exists():
+        src = combined
+    else:
+        inputs = worker._find_input(job_id)
+        if inputs:
+            src = Path(inputs[0]) if isinstance(inputs, (list, tuple)) else Path(inputs)
+    if src is None or not src.exists():
+        src = config.OUTPUTS / job_id / "proxy.mp4"   # 480p fallback beats nothing
+    if not src.exists():
+        raise HTTPException(409, "no source video on the server for this job")
+    _TRIM_JOBS[job_id] = {"status": "processing"}
+    threading.Thread(target=_run_trim, args=(job_id, src, segments), daemon=True).start()
+    return {"status": "processing", "segments": len(segments)}
+
+
+@app.get("/api/jobs/{job_id}/trim")
+def job_trim_status(job_id: str):
+    if (config.OUTPUTS / job_id / "trimmed.mp4").exists():
+        return {"status": "ready", "url": f"/media/{job_id}/trimmed.mp4"}
+    return _TRIM_JOBS.get(job_id) or {"status": "none"}
 
 
 @app.post("/api/jobs/{job_id}/retry")

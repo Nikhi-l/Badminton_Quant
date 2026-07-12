@@ -621,6 +621,8 @@ function openStudio(item) {
   $("studio").hidden = false;
   $("studioFile").textContent = [item.filename, item.sport].filter(Boolean).join(" · ");
   $("studioDownload").href = item.video;
+  wireStudioExports(item);
+  armFrameClock();
   // Landscape needs the un-cropped source proxy; grey the toggle out (instead of
   // a silent no-op) when this reel doesn't have one.
   const lsBtn = $("aspectToggle").querySelector('[data-aspect="landscape"]');
@@ -1410,6 +1412,59 @@ function studioTick() {
   studio.raf = requestAnimationFrame(studioTick);
 }
 
+/* ---------- TASK-041: analysis video + trim-dead-time + frame clock ---------- */
+
+// "Analysis video" (annotated.mp4: shuttle+pose baked into pixels) and the
+// one-button whole-match trim (every detected rally, gaps removed).
+function wireStudioExports(item) {
+  const ann = $("stAnnotated"), trim = $("stTrim"), link = $("stTrimLink");
+  if (!ann || !trim || !link) return;
+  ann.hidden = !item.annotated;
+  ann.href = `/media/${item.id}/annotated.mp4`;
+  trim.hidden = false; trim.disabled = false; trim.textContent = "✂ Trim dead time";
+  link.hidden = true;
+  const ready = (url) => { trim.hidden = true; link.href = url; link.hidden = false; };
+  // a previously-built trim is instant
+  fetch(`/api/jobs/${item.id}/trim`).then(r => r.json())
+    .then(st => { if (st.status === "ready") ready(st.url); }).catch(() => {});
+  trim.onclick = async () => {
+    trim.disabled = true;
+    trim.textContent = "Trimming…";
+    try {
+      let st = await fetch(`/api/jobs/${item.id}/trim`, { method: "POST" }).then(r => r.json());
+      while (st.status === "processing") {
+        await new Promise(res => setTimeout(res, 3000));
+        st = await fetch(`/api/jobs/${item.id}/trim`).then(r => r.json());
+      }
+      if (st.status === "ready") return ready(st.url);
+      throw new Error(st.message || st.detail || "trim failed");
+    } catch (e) {
+      trim.disabled = false;
+      trim.textContent = "✂ Trim failed — retry";
+    }
+  };
+}
+
+// Frame-exact overlay clock (TASK-041): on an rAF tick, v.currentTime can sit
+// a frame AHEAD of the pixels being shown — the "marker lags the shuttle"
+// review. requestVideoFrameCallback hands us the mediaTime of the frame that
+// is actually presented; overlays repaint on that clock when available.
+function stageTime(v) {
+  const t = studio.vfcTime;
+  return (t != null && Math.abs(t - v.currentTime) < 0.3) ? t : v.currentTime;
+}
+function armFrameClock() {
+  const v = $("stVideo");
+  if (studio.vfcArmed || !v || !("requestVideoFrameCallback" in HTMLVideoElement.prototype)) return;
+  studio.vfcArmed = true;
+  const onFrame = (_now, meta) => {
+    studio.vfcTime = meta.mediaTime;
+    if (!$("studio").hidden) updateOverlayPreview();
+    v.requestVideoFrameCallback(onFrame);   // same element across src swaps
+  };
+  v.requestVideoFrameCallback(onFrame);
+}
+
 // TASK-025: 3D replay panel visibility + render. Called from the rAF tick via
 // updateOverlayPreview so explicit repaints (seeks, occluded windows) stay in
 // sync; render() itself is gated to the low-fps sim clock (repaints only when
@@ -2114,15 +2169,15 @@ function trackContext() {
   const v = $("stVideo");
   if (!studio.item || !v.duration || !studio.editorState) return null;
   const segs = reelSegments();
+  const now = stageTime(v);   // presented-frame clock when available (TASK-041)
   if (displayedKind() === "source") {
-    const t = v.currentTime;
-    const seg = segs.find(s => t >= s.sourceStart - 0.3
-                            && t <= s.sourceStart + (s.t1 - s.t0) + 0.3) || null;
-    return { kind: "source", sourceT: t, seg, segs };
+    const seg = segs.find(s => now >= s.sourceStart - 0.3
+                            && now <= s.sourceStart + (s.t1 - s.t0) + 0.3) || null;
+    return { kind: "source", sourceT: now, seg, segs };
   }
-  const seg = segs.find(s => v.currentTime >= s.t0 && v.currentTime <= s.t1);
+  const seg = segs.find(s => now >= s.t0 && now <= s.t1);
   if (!seg) return null;
-  return { kind: "reel", sourceT: seg.sourceStart + (v.currentTime - seg.t0), seg, segs };
+  return { kind: "reel", sourceT: seg.sourceStart + (now - seg.t0), seg, segs };
 }
 
 // The render crop window (normalized source rect) at source time t, lerped

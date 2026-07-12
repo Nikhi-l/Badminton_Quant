@@ -171,6 +171,9 @@
         <button data-mode="source" id="modeSource">Source rallies</button>
         <button data-mode="compose" id="modeCompose">Compose</button>
       </div>
+      <a class="btn btn-small" id="stAnnotated" target="_blank" hidden>Analysis video</a>
+      <button class="btn btn-small" id="stTrim" title="Every detected rally back-to-back — shuttle pickups and gaps removed">✂ Trim dead time</button>
+      <a class="btn btn-small" id="stTrimLink" download="baddy-trimmed.mp4" hidden>Download trimmed match</a>
       <a class="btn btn-small" id="studioDownload" download="baddy-reel.mp4">Export</a>
       <button class="studio-x" id="studioX" title="Close">×</button>
     </div>
@@ -282,7 +285,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=37"></script>
+<script src="/app.js?v=38"></script>
 <script src="/replay3d.js?v=32"></script>
 </body>
 </html>
