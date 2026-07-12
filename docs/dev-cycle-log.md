@@ -5,6 +5,57 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 24: Court player gate, action camera, audio rally veto, glow CSS (TASK-042)
+**Date:** 2026-07-12
+**Goal:** Owner upload review (job `1faaa5e4a02f`, doubles): pose invisible in
+the default "Glow" style (visible in heat/velocity/minimal), final reel
+completely static ("not even tracking the shuttle"), fake rally detections,
+adjacent-court players tracked again — owner proposed court-area masking.
+**PRD:** §16 TASK-042. **Branch:** `feat/TASK-042-cycle24`.
+
+**Diagnosis before code** (replayed the job's real `vision_raw.json` +
+`proxy.mp4` audio locally):
+- Glow: `style.css .glow` is the landing page's decorative blob
+  (position:fixed, blur(120px), opacity .16) — the pose SVG's
+  `class="pose-figure glow"` inherited it and blurred into invisibility.
+- Static reel: TWO mechanisms — auto zoom capped at Z_MAX=1.40 while the
+  court filled a third of the frame, AND `_contain_targets` hard-required
+  player+shuttle in frame every frame, unzooming to 1.0x on every far-half
+  crossing (a 9:16 slice cannot contain both at action zoom).
+- Background players: 39–48% of stored boxes in rallies 1–2 sat on the LEFT
+  court (x<0.25 vs court quad x 0.31–0.99). The Gemini evaluator itself kept
+  two left-court ids, and its exact-id prune under BoT-SORT id churn
+  collapsed a 4-player match to 1 box/frame (its own notes flagged the churn).
+- Fake rallies: Gemini tiled the video as 18 back-to-back windows (91%
+  coverage); real impact peaks showed 7–9.6s silent stretches inside the
+  "32s rallies" (merged rallies + dead time) and single-impact windows.
+
+**Shipped**
+- `track.court_player_gate` (owner-proposed): keep boxes/poses whose FEET
+  stand inside the expanded court quad; full-quad test is safe for players
+  (feet live on the floor, unlike the airborne shuttle). Fail-open without
+  corners or when the quad contradicts >65% of detections. Wired into
+  `gpu._frames_from` (both backends); collection caps 4→6 pre-gate.
+- `evaluate._prune_rally`: follows players THROUGH id churn (new id adopted
+  when its box IoU≥0.30-continues a kept player within 0.8s); per-rally
+  revert guard when a prune leaves median boxes/frame < count/2.
+- Action camera: `track._action_zoom` — whole-rally vertical action band →
+  ONE court-aware zoom (≤2.25); pan = 0.62·shuttle + 0.38·near-player blend;
+  soft shuttle containment. Replay on the job's real tracks: zoom 1.0–1.25 →
+  constant 1.86, pan span 0.41–0.45, smoothness audit 10x margin.
+- `REEL_SHUTTLE_MASK` (default off): final reel is clean footage.
+- `rally.refine_with_audio` + peaks in the segmentation prompt
+  (signals-first): wall-to-wall windows shrink to impact clusters, split at
+  >5s silent gaps, 1-impact windows drop. Replay: 18 windows → 19 real
+  rallies at 52% coverage; reel picks 5 (76s) instead of 3 monsters.
+  `audio.find_peaks` cap 60→160.
+- Studio pose style classes namespaced `ps-*` (glow collision); v=40.
+
+**Verification:** 168 passed (new: court gate ×5, churn/revert ×2, action
+camera ×3, audio refine ×5; regression contract updated: shuttle leads,
+player may trail to the edge, camera must actually move). Deploy + GPU
+reprocess below.
+
 ## Cycle 23: Upload-review batch — pose visibility, evaluator, court gate, trim button (TASK-041)
 **Date:** 2026-07-12
 **Goal:** Owner upload review (job `adda60dbf93e`): no skeletons visible,
