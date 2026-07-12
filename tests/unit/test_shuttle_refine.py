@@ -76,25 +76,32 @@ def test_garbage_and_empty_inputs():
     assert refine_shuttle_track([{"x": 0.5}, {"t": 1.0, "x": -2, "y": 0.5}]) == []
 
 
-def test_court_gate_drops_background_court_segments():
-    """TASK-041: a background court's rally is smooth plausible flight — only
-    geometry separates it. Segments mostly outside the (expanded) main-court
-    quad drop wholesale; a main-court clear whose apex arcs above the far
-    line survives on its majority-inside points."""
+def test_court_gate_cuts_side_courts_only_never_flight():
+    """TASK-041 (redesigned on owner footage): the court quad is the FLOOR —
+    the shuttle flies in the air ABOVE it in image space, so only a LATERAL
+    (x-range) cut is safe. Side-by-side court segments drop; high clears are
+    untouchable; and when the quad spans the frame (low camera), the gate has
+    no opinion rather than deleting real flight."""
     from app.pipeline.track import court_shuttle_gate
-    corners = [[0.3, 0.3], [0.7, 0.3], [0.9, 0.9], [0.1, 0.9]]
+    corners = [[0.35, 0.35], [0.65, 0.35], [0.8, 0.85], [0.2, 0.85]]
 
-    main = [{"t": i / 30, "x": 0.4 + i * 0.004,
-             "y": 0.65 - (0.5 if 12 <= i <= 20 else 0.0) * 0.02 * (i - 12),
-             "confidence": 0.9} for i in range(40)]           # inside, apex dips high
-    clear_apex = [{"t": 1.5 + i / 30, "x": 0.5, "y": 0.16 + 0.01 * i,
-                   "confidence": 0.9} for i in range(8)]      # brief excursion above far line
-    background = [{"t": 4.0 + i / 30, "x": 0.45 + i * 0.005, "y": 0.08,
-                   "confidence": 0.9} for i in range(30)]     # other court, above ours
+    main = [{"t": i / 30, "x": 0.4 + i * 0.004, "y": 0.6,
+             "confidence": 0.9} for i in range(40)]
+    high_clear = [{"t": 1.5 + i / 30, "x": 0.5, "y": 0.10 + 0.01 * i,
+                   "confidence": 0.9} for i in range(8)]      # way above the floor quad
+    side_court = [{"t": 4.0 + i / 30, "x": 0.965 + 0.001 * (i % 4), "y": 0.5,
+                   "confidence": 0.9} for i in range(30)]     # laterally off-court
 
-    kept = court_shuttle_gate(main + clear_apex + background, corners)
+    kept = court_shuttle_gate(main + high_clear + side_court, corners)
     ts = [p["t"] for p in kept]
-    assert any(t < 1.4 for t in ts)                # main rally kept
-    assert not any(t >= 4.0 for t in ts)           # background rally gone
+    assert sum(1 for t in ts if t < 1.4) == 40      # main rally intact
+    assert sum(1 for t in ts if 1.4 < t < 2.0) == 8  # high clear NEVER cut
+    assert not any(t >= 4.0 for t in ts)             # side court gone
+
+    # Owner regression: low-angle court fills the frame width → no opinion,
+    # nothing deleted (the first quad-gate emptied every rally here).
+    low_angle = [[0.064, 0.751], [0.323, 0.758], [0.996, 0.817], [0.994, 0.947]]
+    flight = [{"t": i / 30, "x": 0.5, "y": 0.3, "confidence": 0.9} for i in range(60)]
+    assert len(court_shuttle_gate(flight, low_angle)) == 60
     # no corners → no opinion
-    assert len(court_shuttle_gate(background, None)) == len(background)
+    assert len(court_shuttle_gate(side_court, None)) == len(side_court)

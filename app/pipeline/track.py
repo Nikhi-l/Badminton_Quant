@@ -687,18 +687,23 @@ def shuttle_track_quality(points: list, dur: float, fps: float | None = None) ->
 
 
 def court_shuttle_gate(points: list, corners: list | None, expand: float = 1.35,
-                       min_inside_frac: float = 0.5, gap_s: float = 0.35) -> list:
-    """Drop shuttle flight SEGMENTS that belong to a background court (TASK-041).
+                       min_inside_frac: float = 0.5, gap_s: float = 0.35,
+                       no_opinion_span: float = 0.9) -> list:
+    """Drop shuttle flight SEGMENTS that are laterally off the main court
+    (TASK-041, redesigned after owner footage).
 
-    A neighbouring court's rally is smooth, fast, perfectly plausible flight —
-    every kinematic filter passes it; only geometry tells the courts apart.
-    Points are split into flight segments (a dt above ``gap_s`` separates
-    them) and a segment survives only if ≥ ``min_inside_frac`` of its points
-    fall inside the court quad expanded ``expand``× from its centroid.
-    Segment-level, not per-point: a main-court clear ARCS above the far line
-    (outside any reasonable quad at its apex) and survives on its
-    majority-inside points, while a background rally — mostly outside — drops
-    wholesale. No corners → no opinion (returns points unchanged).
+    A neighbouring court's rally is smooth, plausible flight — only geometry
+    separates courts. But the court quad is the FLOOR: in image space the
+    shuttle flies in the air ABOVE it, sweeping the same regions where
+    background courts sit, and the first quad-based gate deleted real tracks
+    wholesale on a low camera (owner corners y∈[0.75,0.95] — flight lives at
+    y 0.2–0.7). The ONLY cut image geometry makes safely is LATERAL: a
+    segment mostly outside the expanded quad's x-range (± margin) belongs to
+    a side-by-side court. Vertical separation needs player-anchored context
+    (queued — evaluator keep-ids give the main players' region).
+    No-opinion outs (points returned unchanged): no corners, or an x-range
+    spanning ≥``no_opinion_span`` of the frame — deleting real flight is
+    strictly worse than keeping noise the quality metric already exposes.
     """
     if not isinstance(corners, (list, tuple)) or len(corners) != 4 or not points:
         return points
@@ -709,15 +714,10 @@ def court_shuttle_gate(points: list, corners: list | None, expand: float = 1.35,
     cx = sum(p[0] for p in quad) / 4.0
     cy = sum(p[1] for p in quad) / 4.0
     poly = [(cx + (px - cx) * expand, cy + (py - cy) * expand) for px, py in quad]
-
-    def _inside(x: float, y: float) -> bool:
-        hit = False
-        for i in range(4):
-            x1, y1 = poly[i]
-            x2, y2 = poly[(i + 1) % 4]
-            if (y1 > y) != (y2 > y) and x < x1 + (y - y1) / (y2 - y1) * (x2 - x1):
-                hit = not hit
-        return hit
+    x_lo = max(0.0, min(p[0] for p in poly) - 0.03)
+    x_hi = min(1.0, max(p[0] for p in poly) + 0.03)
+    if x_hi - x_lo >= no_opinion_span:
+        return points
 
     ordered = sorted((p for p in points if isinstance(p, dict)),
                      key=lambda p: float(p.get("t", 0.0)))
@@ -727,7 +727,7 @@ def court_shuttle_gate(points: list, corners: list | None, expand: float = 1.35,
     def _flush():
         if not seg:
             return
-        inside = sum(1 for q in seg if _inside(float(q.get("x", 0)), float(q.get("y", 0))))
+        inside = sum(1 for q in seg if x_lo <= float(q.get("x", 0)) <= x_hi)
         if inside / len(seg) >= min_inside_frac:
             out.extend(seg)
 
