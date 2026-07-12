@@ -161,8 +161,14 @@ PROXY_FPS = 30
 
 # Output reel: vertical story format.
 OUT_W, OUT_H, OUT_FPS = 1080, 1920, 30
-MAX_REEL_SEC = float(os.environ.get("MAX_REEL_SEC", "59"))
+# 90s fits TOP_RALLIES long rallies with pads: 59s silently capped real games
+# at 3 rallies while TOP_RALLIES promised 5 (owner review 2026-07-12).
+MAX_REEL_SEC = float(os.environ.get("MAX_REEL_SEC", "90"))
 TOP_RALLIES = int(os.environ.get("TOP_RALLIES", "5"))
+# Bake an analysis preview (shuttle + pose burned into pixels) after the reel.
+ANNOTATED_PREVIEW = os.environ.get("ANNOTATED_PREVIEW", "1") == "1"
+# Gemini frame evaluator: count main-court players, verify box placement.
+GEMINI_EVAL = os.environ.get("GEMINI_EVAL", "1") == "1"
 MIN_RALLY_SEC = 3.0
 PAD_BEFORE, PAD_AFTER = 1.0, 1.6
 

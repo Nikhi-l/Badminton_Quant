@@ -74,3 +74,27 @@ def test_impossible_speed_hard_gate():
 def test_garbage_and_empty_inputs():
     assert refine_shuttle_track([]) == []
     assert refine_shuttle_track([{"x": 0.5}, {"t": 1.0, "x": -2, "y": 0.5}]) == []
+
+
+def test_court_gate_drops_background_court_segments():
+    """TASK-041: a background court's rally is smooth plausible flight — only
+    geometry separates it. Segments mostly outside the (expanded) main-court
+    quad drop wholesale; a main-court clear whose apex arcs above the far
+    line survives on its majority-inside points."""
+    from app.pipeline.track import court_shuttle_gate
+    corners = [[0.3, 0.3], [0.7, 0.3], [0.9, 0.9], [0.1, 0.9]]
+
+    main = [{"t": i / 30, "x": 0.4 + i * 0.004,
+             "y": 0.65 - (0.5 if 12 <= i <= 20 else 0.0) * 0.02 * (i - 12),
+             "confidence": 0.9} for i in range(40)]           # inside, apex dips high
+    clear_apex = [{"t": 1.5 + i / 30, "x": 0.5, "y": 0.16 + 0.01 * i,
+                   "confidence": 0.9} for i in range(8)]      # brief excursion above far line
+    background = [{"t": 4.0 + i / 30, "x": 0.45 + i * 0.005, "y": 0.08,
+                   "confidence": 0.9} for i in range(30)]     # other court, above ours
+
+    kept = court_shuttle_gate(main + clear_apex + background, corners)
+    ts = [p["t"] for p in kept]
+    assert any(t < 1.4 for t in ts)                # main rally kept
+    assert not any(t >= 4.0 for t in ts)           # background rally gone
+    # no corners → no opinion
+    assert len(court_shuttle_gate(background, None)) == len(background)

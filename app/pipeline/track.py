@@ -646,6 +646,60 @@ def _innovation_scores(seq: list[tuple[float, float, float]]) -> list[float | No
     return out
 
 
+def court_shuttle_gate(points: list, corners: list | None, expand: float = 1.35,
+                       min_inside_frac: float = 0.5, gap_s: float = 0.35) -> list:
+    """Drop shuttle flight SEGMENTS that belong to a background court (TASK-041).
+
+    A neighbouring court's rally is smooth, fast, perfectly plausible flight —
+    every kinematic filter passes it; only geometry tells the courts apart.
+    Points are split into flight segments (a dt above ``gap_s`` separates
+    them) and a segment survives only if ≥ ``min_inside_frac`` of its points
+    fall inside the court quad expanded ``expand``× from its centroid.
+    Segment-level, not per-point: a main-court clear ARCS above the far line
+    (outside any reasonable quad at its apex) and survives on its
+    majority-inside points, while a background rally — mostly outside — drops
+    wholesale. No corners → no opinion (returns points unchanged).
+    """
+    if not isinstance(corners, (list, tuple)) or len(corners) != 4 or not points:
+        return points
+    try:
+        quad = [(float(c[0]), float(c[1])) for c in corners]
+    except (TypeError, ValueError, IndexError):
+        return points
+    cx = sum(p[0] for p in quad) / 4.0
+    cy = sum(p[1] for p in quad) / 4.0
+    poly = [(cx + (px - cx) * expand, cy + (py - cy) * expand) for px, py in quad]
+
+    def _inside(x: float, y: float) -> bool:
+        hit = False
+        for i in range(4):
+            x1, y1 = poly[i]
+            x2, y2 = poly[(i + 1) % 4]
+            if (y1 > y) != (y2 > y) and x < x1 + (y - y1) / (y2 - y1) * (x2 - x1):
+                hit = not hit
+        return hit
+
+    ordered = sorted((p for p in points if isinstance(p, dict)),
+                     key=lambda p: float(p.get("t", 0.0)))
+    out: list = []
+    seg: list = []
+
+    def _flush():
+        if not seg:
+            return
+        inside = sum(1 for q in seg if _inside(float(q.get("x", 0)), float(q.get("y", 0))))
+        if inside / len(seg) >= min_inside_frac:
+            out.extend(seg)
+
+    for p in ordered:
+        if seg and float(p.get("t", 0.0)) - float(seg[-1].get("t", 0.0)) > gap_s:
+            _flush()
+            seg = []
+        seg.append(p)
+    _flush()
+    return out
+
+
 def refine_shuttle_track(points: list) -> list:
     """Replace placeholder shuttle confidence with MEASURED plausibility
     (TASK-035, adapted from smartphone smash-speed tracking pipelines).

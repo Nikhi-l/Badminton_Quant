@@ -29,7 +29,7 @@ def _local(proxy_path, rallies, tasks, log, court_corners=None):
         return gpu._disabled(f"on-device vision unavailable: {why}")
     raw = vision_local.analyze_raw(proxy_path, "", rallies, tasks=tasks, log=log,
                                    court_corners=court_corners)
-    out = gpu._canonicalize(raw, rallies)
+    out = gpu._canonicalize(raw, rallies, court_corners=court_corners)
     out["backend"] = "local"
     return out
 

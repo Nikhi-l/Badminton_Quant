@@ -246,7 +246,8 @@ def _conf(raw: Any, default: float = 1.0) -> float:
     return _clamp01(default, default)
 
 
-def _frames_from(raw_rally: dict, rally: dict) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict]]:
+def _frames_from(raw_rally: dict, rally: dict,
+                 court_corners: list | None = None) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict]]:
     shuttle: list[dict] = []
     players: list[dict] = []
     poses: list[dict] = []
@@ -330,6 +331,9 @@ def _frames_from(raw_rally: dict, rally: dict) -> tuple[list[dict], list[dict], 
     # (vision.py routes the CPU path into _canonicalize too).
     from . import track as _track
     shuttle = _track.refine_shuttle_track(shuttle)
+    # TASK-041: a background court's rally passes every kinematic filter —
+    # only geometry separates the courts. Segment-level main-court gate.
+    shuttle = _track.court_shuttle_gate(shuttle, court_corners)
     players.sort(key=lambda x: x["t"])
     poses.sort(key=lambda x: x["t"])
     racquets.sort(key=lambda x: x["t"])
@@ -354,7 +358,8 @@ def _match(raw_rallies: list, idx: int) -> dict:
     return {}
 
 
-def _canonicalize(raw: Any, rallies: list[dict]) -> dict:
+def _canonicalize(raw: Any, rallies: list[dict],
+                  court_corners: list | None = None) -> dict:
     if isinstance(raw, str):
         raw = json.loads(raw)
     raw = raw if isinstance(raw, dict) else {}
@@ -362,7 +367,7 @@ def _canonicalize(raw: Any, rallies: list[dict]) -> dict:
     out_rallies = []
     for idx, rally in enumerate(rallies, 1):
         rr = _match(raw_rallies, idx)
-        shuttle, players, poses, racquets, racquet_candidates = _frames_from(rr, rally)
+        shuttle, players, poses, racquets, racquet_candidates = _frames_from(rr, rally, court_corners)
         dur = _num(rally.get("dur"), _num(rally.get("end")) - _num(rally.get("start")))
         shuttle_quality = _clamp01(
             rr.get("shuttle_quality", rr.get("shuttle_track_quality", _score_samples(shuttle, dur))),
@@ -562,7 +567,7 @@ def analyze(proxy_path: str | Path, workdir: str | Path, sport: str,
             (workdir / "vision_raw.json").write_text(json.dumps(raw))
         except (OSError, TypeError):
             pass
-        return _canonicalize(raw, rallies)
+        return _canonicalize(raw, rallies, court_corners=court_corners)
     except Exception as e:  # noqa: BLE001 - GPU enrichment must not kill CPU reel generation.
         log(f"Runpod vision failed, continuing with CPU tracking: {type(e).__name__}: {e}")
         return _failed(f"{type(e).__name__}: {e}")
