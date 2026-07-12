@@ -740,6 +740,130 @@ def court_shuttle_gate(points: list, corners: list | None, expand: float = 1.35,
     return out
 
 
+def _ordered_expanded_quad(corners: list | None, expand: float, pad: float) -> list | None:
+    """Court corners → convex polygon vertices ordered around the centroid,
+    scaled outward by ``expand`` plus an additive ``pad`` (normalized units).
+    None when the corners are unusable."""
+    if not isinstance(corners, (list, tuple)) or len(corners) != 4:
+        return None
+    try:
+        quad = [(float(c[0]), float(c[1])) for c in corners]
+    except (TypeError, ValueError, IndexError):
+        return None
+    cx = sum(p[0] for p in quad) / 4.0
+    cy = sum(p[1] for p in quad) / 4.0
+    out = []
+    for px, py in quad:
+        dx, dy = px - cx, py - cy
+        norm = math.hypot(dx, dy) or 1.0
+        out.append((cx + dx * expand + dx / norm * pad,
+                    cy + dy * expand + dy / norm * pad))
+    # user-drawn corners arrive in click order — sort by angle so the
+    # half-plane test below sees a proper convex ring
+    out.sort(key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
+    return out
+
+
+def _inside_convex(poly: list, x: float, y: float) -> bool:
+    sign = 0
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        cross = (x2 - x1) * (y - y1) - (y2 - y1) * (x - x1)
+        if abs(cross) < 1e-12:
+            continue
+        s = 1 if cross > 0 else -1
+        if sign == 0:
+            sign = s
+        elif s != sign:
+            return False
+    return True
+
+
+def _person_foot(person: dict) -> tuple[float, float] | None:
+    """Image-space foot point of a pose person: ankle mean, else bbox bottom,
+    else the lowest confident keypoint."""
+    kps = person.get("keypoints") or []
+    ankles = []
+    for idx in (15, 16):   # COCO left/right ankle
+        if idx < len(kps):
+            kp = kps[idx]
+            try:
+                if float(kp.get("confidence", 0.0)) >= 0.08:
+                    ankles.append((float(kp["x"]), float(kp["y"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+    if ankles:
+        return (sum(a[0] for a in ankles) / len(ankles),
+                sum(a[1] for a in ankles) / len(ankles))
+    bbox = person.get("bbox")
+    if isinstance(bbox, dict):
+        try:
+            return (float(bbox["x1"]) + float(bbox["x2"])) / 2.0, float(bbox["y2"])
+        except (KeyError, TypeError, ValueError):
+            pass
+    best = None
+    for kp in kps:
+        try:
+            if float(kp.get("confidence", 0.0)) >= 0.08:
+                if best is None or float(kp["y"]) > best[1]:
+                    best = (float(kp["x"]), float(kp["y"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return best
+
+
+def court_player_gate(players: list, poses: list, corners: list | None,
+                      expand: float = 1.30, pad: float = 0.035,
+                      min_keep_frac: float = 0.35, cap: int = 4) -> tuple[list, list]:
+    """Keep only people whose FEET stand on the (expanded) main-court floor.
+
+    Unlike the shuttle — which flies in image-air above the floor quad and
+    only tolerates a lateral cut — player feet genuinely live on the court
+    plane, so the full quad is a safe gate (TASK-042, owner-proposed: "if we
+    have the court dimensions, we only track people inside that court").
+    ``expand``+``pad`` cover baseline lunges outside the lines. Fail-open:
+    no/degenerate corners returns the tracks unchanged, and if the gate would
+    keep under ``min_keep_frac`` of all boxes the geometry is presumed wrong
+    (corners drawn on a different framing) and nothing is touched.
+    """
+    poly = _ordered_expanded_quad(corners, expand, pad)
+    if poly is None or not (players or poses):
+        return players, poses
+
+    kept_players: list = []
+    total = kept = 0
+    for f in players or []:
+        boxes = f.get("boxes") or []
+        total += len(boxes)
+        inside = []
+        for b in boxes:
+            try:
+                fx = (float(b["x1"]) + float(b["x2"])) / 2.0
+                fy = float(b["y2"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if _inside_convex(poly, fx, fy):
+                inside.append(b)
+        kept += len(inside)
+        if inside:
+            inside.sort(key=lambda b: -float(b.get("confidence", 0.0)))
+            kept_players.append({**f, "boxes": inside[:cap]})
+    if total and kept / total < min_keep_frac:
+        return players, poses   # gate disagrees with most detections → distrust the quad
+
+    kept_poses: list = []
+    for f in poses or []:
+        people = [p for p in (f.get("people") or [])
+                  if (foot := _person_foot(p)) and _inside_convex(poly, *foot)]
+        if people:
+            people.sort(key=lambda p: -float(p.get("confidence", 0.0)))
+            people = people[:cap]
+            kept_poses.append({**f, "people": people, "count": len(people)})
+    return kept_players, kept_poses
+
+
 def refine_shuttle_track(points: list) -> list:
     """Replace placeholder shuttle confidence with MEASURED plausibility
     (TASK-035, adapted from smartphone smash-speed tracking pipelines).

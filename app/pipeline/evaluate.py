@@ -67,35 +67,85 @@ def _persistence(vision_rally: dict) -> dict[int, int]:
     return seen
 
 
-def _prune_rally(vision_rally: dict, allowed: set[int]) -> int:
-    """Drop boxes/poses whose track_id is not allowed. Id-less detections drop
-    too — with a confirmed player list, an unidentified box is noise. Returns
-    the number of removed boxes."""
+def _iou(a: dict, b: dict) -> float:
+    try:
+        ax1, ay1, ax2, ay2 = float(a["x1"]), float(a["y1"]), float(a["x2"]), float(a["y2"])
+        bx1, by1, bx2, by2 = float(b["x1"]), float(b["y1"]), float(b["x2"]), float(b["y2"])
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+    ix = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+    iy = max(0.0, min(ay2, by2) - max(ay1, by1))
+    inter = ix * iy
+    if inter <= 0:
+        return 0.0
+    union = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _tid(obj: dict) -> int | None:
+    tid = obj.get("track_id")
+    return int(tid) if isinstance(tid, (int, float)) else None
+
+
+def _prune_rally(vision_rally: dict, allowed: set[int], count: int,
+                 iou_min: float = 0.30, max_gap_s: float = 0.8) -> int:
+    """Keep the confirmed players' boxes/poses, following them THROUGH tracker
+    id churn: when a kept player's id disappears and a new id's box overlaps
+    their last kept box (IoU >= ``iou_min`` within ``max_gap_s``), the new id
+    is adopted into the keep set — BoT-SORT re-identified the same player
+    (TASK-042: the old exact-id filter deleted far doubles players wholesale,
+    the evaluator's own notes flagged the churn). Kept boxes are capped at
+    ``count`` per frame. Returns the number of removed boxes."""
+    allowed = set(allowed)
     removed = 0
+    prev_kept: list[dict] = []
+    prev_t = None
     for f in vision_rally.get("players") or []:
         boxes = f.get("boxes") or []
-        kept = [b for b in boxes if isinstance(b.get("track_id"), (int, float))
-                and int(b["track_id"]) in allowed]
+        try:
+            t = float(f.get("t", 0.0))
+        except (TypeError, ValueError):
+            t = 0.0
+        kept = [b for b in boxes if _tid(b) in allowed]
+        kept_ids = {_tid(b) for b in kept}
+        if prev_kept and prev_t is not None and t - prev_t <= max_gap_s:
+            # boxes whose (old) id vanished this frame are adoption anchors
+            anchors = [pb for pb in prev_kept if _tid(pb) not in kept_ids]
+            for b in boxes:
+                if _tid(b) in allowed or b in kept:
+                    continue
+                best = max(anchors, key=lambda pb: _iou(pb, b), default=None)
+                if best is not None and _iou(best, b) >= iou_min:
+                    kept.append(b)
+                    anchors.remove(best)
+                    if (tid := _tid(b)) is not None:
+                        allowed.add(tid)
+        if len(kept) > count:
+            kept = sorted(kept, key=lambda b: -float(b.get("confidence", 0.0)))[:count]
         removed += len(boxes) - len(kept)
         f["boxes"] = kept
+        if kept:
+            prev_kept, prev_t = kept, t
     for f in vision_rally.get("poses") or []:
         people = f.get("people") or []
-        f["people"] = [p for p in people if isinstance(p.get("track_id"), (int, float))
-                       and int(p["track_id"]) in allowed]
+        f["people"] = [p for p in people if _tid(p) in allowed]
     return removed
 
 
 def apply_verdict(vision: dict, verdict: dict, judged_index: int | None) -> dict:
     """Prune every rally's tracks to the confirmed main-court players.
 
-    The judged rally keeps exactly ``keep_track_ids``. Track ids reset per
-    rally (fresh tracker), so OTHER rallies keep their ``main_court_players``
-    most-persistent ids — the main-court players are on court the whole rally;
-    background leakage is intermittent. Pure + unit-tested.
+    The judged rally seeds from exactly ``keep_track_ids``. Track ids reset
+    per rally (fresh tracker), so OTHER rallies seed their
+    ``main_court_players`` most-persistent ids; id churn is bridged by IoU
+    continuation inside :func:`_prune_rally`. Per-rally fail-open guard: a
+    prune that leaves under half the confirmed players on court (median
+    boxes/frame < count/2 while dropping >50% of boxes) contradicts the
+    verdict itself and is reverted. Pure + unit-tested.
     """
     count = int(verdict.get("main_court_players") or 0)
     keep = {int(v) for v in (verdict.get("keep_track_ids") or [])}
-    stats = {"applied": False, "removed_boxes": 0}
+    stats = {"applied": False, "removed_boxes": 0, "reverted_rallies": 0}
     if not verdict.get("boxes_correct") or not 2 <= count <= 4 or not keep:
         return stats
     removed = 0
@@ -107,8 +157,23 @@ def apply_verdict(vision: dict, verdict: dict, judged_index: int | None) -> dict
         else:
             pers = _persistence(rr)
             allowed = set(sorted(pers, key=lambda k: -pers[k])[:count])
-        if allowed:
-            removed += _prune_rally(rr, allowed)
+        if not allowed:
+            continue
+        pframes = rr.get("players") or []
+        snap_boxes = [list(f.get("boxes") or []) for f in pframes]
+        snap_people = [list(f.get("people") or []) for f in (rr.get("poses") or [])]
+        total = sum(len(b) for b in snap_boxes)
+        r = _prune_rally(rr, allowed, count)
+        kept_counts = sorted(len(f.get("boxes") or []) for f in pframes)
+        median_kept = kept_counts[len(kept_counts) // 2] if kept_counts else 0
+        if total and r / total > 0.5 and median_kept < count / 2:
+            for f, b in zip(pframes, snap_boxes):
+                f["boxes"] = b
+            for f, ppl in zip(rr.get("poses") or [], snap_people):
+                f["people"] = ppl
+            stats["reverted_rallies"] += 1
+            continue
+        removed += r
     stats.update(applied=True, removed_boxes=removed)
     return stats
 

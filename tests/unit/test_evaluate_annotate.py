@@ -42,6 +42,67 @@ def test_apply_verdict_prunes_judged_and_other_rallies():
     assert kept_other == {3, 4}
 
 
+def test_apply_verdict_survives_tracker_id_churn():
+    """TASK-042 regression: on the owner's doubles video BoT-SORT re-issued
+    new ids to the far players mid-rally; the exact-id prune deleted them
+    (stored tracks collapsed to 1 box/frame in a 4-player match). New ids
+    whose boxes continue a kept player's box must be ADOPTED, not removed."""
+    frames = []
+    for i in range(12):
+        t = i / 6
+        boxes = [
+            {"x1": 0.10, "y1": 0.2, "x2": 0.18, "y2": 0.5, "confidence": 0.8,
+             "track_id": 1},
+            # far player: id 7 for the first half, then re-identified as 9 at
+            # nearly the same spot (drifting slowly)
+            {"x1": 0.60 + 0.004 * i, "y1": 0.2, "x2": 0.68 + 0.004 * i,
+             "y2": 0.5, "confidence": 0.8, "track_id": 7 if i < 6 else 9},
+        ]
+        frames.append({"t": t, "boxes": boxes})
+    poses = [{"t": f["t"], "people": [
+        {"track_id": b["track_id"], "confidence": 0.8,
+         "keypoints": [{"x": 0.5, "y": 0.5, "confidence": 0.9}] * 17}
+        for b in f["boxes"]]} for f in frames]
+    rally = {"players": frames, "poses": poses, "player_quality": 0.8}
+
+    stats = evaluate.apply_verdict({"rallies": [rally]}, {
+        "main_court_players": 2, "keep_track_ids": [1, 7], "boxes_correct": True,
+    }, judged_index=0)
+
+    assert stats["applied"] and stats["removed_boxes"] == 0
+    assert all(len(f["boxes"]) == 2 for f in frames)          # far player survives
+    assert all(len(f["people"]) == 2 for f in poses)          # id 9 adopted for poses
+
+
+def test_apply_verdict_reverts_prune_that_empties_the_court():
+    """TASK-042 guard: when the keep-ids only exist in the opening frames and
+    nothing chains (teleporting ids elsewhere), pruning would leave under half
+    the confirmed players on court — contradicting the verdict itself. Revert."""
+    frames = []
+    for i in range(20):
+        if i < 2:      # keep ids visible only at the very start
+            boxes = [{"x1": 0.1, "y1": 0.2, "x2": 0.2, "y2": 0.5,
+                      "confidence": 0.8, "track_id": 1},
+                     {"x1": 0.6, "y1": 0.2, "x2": 0.7, "y2": 0.5,
+                      "confidence": 0.8, "track_id": 2}]
+        else:          # far-apart boxes with fresh ids every frame: no IoU chain
+            boxes = [{"x1": 0.05 * (i % 3), "y1": 0.75, "x2": 0.05 * (i % 3) + 0.06,
+                      "y2": 0.95, "confidence": 0.8, "track_id": 100 + i},
+                     {"x1": 0.9 - 0.05 * (i % 3), "y1": 0.05,
+                      "x2": 0.96 - 0.05 * (i % 3), "y2": 0.25,
+                      "confidence": 0.8, "track_id": 200 + i}]
+        frames.append({"t": i / 6, "boxes": boxes})
+    rally = {"players": frames, "poses": [], "player_quality": 0.8}
+    before = sum(len(f["boxes"]) for f in frames)
+
+    stats = evaluate.apply_verdict({"rallies": [rally]}, {
+        "main_court_players": 4, "keep_track_ids": [1, 2], "boxes_correct": True,
+    }, judged_index=0)
+
+    assert stats["applied"] and stats["reverted_rallies"] == 1
+    assert sum(len(f["boxes"]) for f in frames) == before      # untouched
+
+
 def test_apply_verdict_fails_open():
     rally = _rally([[1, 2, 7]] * 4)
     before = sum(len(f["boxes"]) for f in rally["players"])

@@ -213,7 +213,7 @@ def _pose_people(raw_poses: Any, boxes: list[dict]) -> list[dict]:
     if raw_poses and isinstance(raw_poses[0], dict) and {"x", "y"} <= raw_poses[0].keys():
         raw_poses = [{"keypoints": raw_poses}]
     people = []
-    for i, raw_pose in enumerate(raw_poses[:4]):
+    for i, raw_pose in enumerate(raw_poses[:6]):   # gate trims back to 4 (TASK-042)
         pts = _keypoints(raw_pose)
         if not pts:
             continue
@@ -276,7 +276,10 @@ def _frames_from(raw_rally: dict, rally: dict,
         boxes = [_box(b) for b in raw_players]
         boxes = [b for b in boxes if b and b["confidence"] >= 0.05]
         if boxes:
-            players.append({"t": t, "boxes": boxes[:4]})   # doubles = 4 players
+            # collect 6 so the court gate below sees background players before
+            # the doubles cap — [:4] here let a background box evict a real
+            # far player from storage entirely (TASK-042)
+            players.append({"t": t, "boxes": boxes[:6]})
         raw_poses = frame.get("poses") or frame.get("pose_tracks") or frame.get("keypoints") or []
         people = _pose_people(raw_poses, boxes)
         if people:
@@ -321,7 +324,7 @@ def _frames_from(raw_rally: dict, rally: dict,
         boxes = [_box(b) for b in raw_boxes]
         boxes = [b for b in boxes if b and b["confidence"] >= 0.05]
         if boxes:
-            players.append({"t": t, "boxes": boxes[:4]})
+            players.append({"t": t, "boxes": boxes[:6]})
 
     shuttle.sort(key=lambda x: x["t"])
     # TASK-035: replace the workers' placeholder confidence (flat 0.82 —
@@ -336,6 +339,10 @@ def _frames_from(raw_rally: dict, rally: dict,
     shuttle = _track.court_shuttle_gate(shuttle, court_corners)
     players.sort(key=lambda x: x["t"])
     poses.sort(key=lambda x: x["t"])
+    # TASK-042: player feet live ON the floor quad (unlike the airborne
+    # shuttle), so the full expanded quad gates people deterministically —
+    # neighbouring-court players never reach the camera, evaluator, or Studio.
+    players, poses = _track.court_player_gate(players, poses, court_corners)
     racquets.sort(key=lambda x: x["t"])
     racquet_candidates.sort(key=lambda x: x["t"])
     return shuttle, players, poses, racquets, racquet_candidates
