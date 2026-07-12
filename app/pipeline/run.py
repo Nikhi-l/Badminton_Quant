@@ -154,7 +154,14 @@ def process(input_path, workdir: str | Path, cb=None, options=None) -> dict:
 
     note("rallies", "Gemini is watching the game")
     sport, all_rallies = rally.segment(proxy, pinfo.duration, log=lambda m: note("rallies", m),
-                                       save_raw=workdir / "gemini_rallies_raw.json")
+                                       save_raw=workdir / "gemini_rallies_raw.json",
+                                       audio_peaks=audio_info.get("peaks"))
+    # TASK-042: measured impacts veto implausible segmentation — wall-to-wall
+    # "rallies" get shrunk to their impact clusters, split at silent stretches,
+    # and dropped when no impact evidence exists. Shrink-only + fail-open.
+    all_rallies = rally.refine_with_audio(all_rallies, audio_info.get("peaks"),
+                                          pinfo.duration,
+                                          log=lambda m: note("rallies", m))
     picked = rally.select_for_reel(all_rallies)
     picked.sort(key=lambda r: r["dur"], reverse=True)  # longest first in the reel
     if not picked:

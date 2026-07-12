@@ -89,23 +89,50 @@ def _clean(raw: list, duration: float) -> list[dict]:
     return merged
 
 
+def _audio_evidence(peaks: list | None, limit: int = 120) -> str:
+    """Impact-peak timestamps as prompt evidence (TASK-042, owner architecture:
+    signals extracted first, the model reasons WITH them). Empty string when
+    the signal is too thin to be worth anchoring on."""
+    ts = []
+    for p in peaks or []:
+        try:
+            ts.append(float(p["t"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if len(ts) < 10:
+        return ""
+    shown = ", ".join(f"{t:.0f}" for t in sorted(ts)[:limit])
+    return (
+        "\nMicrophone analysis of this exact video found racket-impact-like "
+        f"sound transients at these times (seconds): {shown}.\n"
+        "Real rallies contain clusters of these impacts; a stretch of several "
+        "seconds with none is almost always dead time (walking, retrieving the "
+        "shuttle, preparing to serve). Anchor your rally boundaries on this "
+        "evidence — do NOT return rallies that tile the whole video back-to-back.\n"
+    )
+
+
 def segment(proxy_path: str | Path, duration: float, log=print,
-            save_raw: Path | None = None) -> tuple[str, list[dict]]:
+            save_raw: Path | None = None,
+            audio_peaks: list | None = None) -> tuple[str, list[dict]]:
     """Returns (sport, rallies sorted by start time).
 
     ``save_raw`` persists the model's verbatim parsed response next to the
     job's other artifacts (TASK-039): rally boundaries are model output paid
     for once — audits and boundary-algorithm work must never need a re-run.
+    ``audio_peaks`` (TASK-042) are measured impact transients passed to the
+    model as boundary evidence.
     """
     log(f"uploading proxy to Gemini Files API ({Path(proxy_path).stat().st_size // 1_000_000} MB)")
     file = gemini.upload_file(proxy_path, mime="video/mp4")
     file = gemini.wait_active(file)
     part_video = {"fileData": {"fileUri": file["uri"], "mimeType": "video/mp4"}}
+    prompt = PROMPT + _audio_evidence(audio_peaks)
 
     for model in (config.SEGMENT_MODEL, config.PRO_MODEL):
         try:
             log(f"asking {model} for rally boundaries")
-            text = gemini.generate(model, [part_video, {"text": PROMPT}], json_schema=SCHEMA)
+            text = gemini.generate(model, [part_video, {"text": prompt}], json_schema=SCHEMA)
             data = gemini.parse_json(text)
             if save_raw is not None:
                 try:
@@ -121,6 +148,71 @@ def segment(proxy_path: str | Path, duration: float, log=print,
         except gemini.GeminiError as e:
             log(f"{model} failed: {e}")
     raise gemini.GeminiError("rally segmentation failed on all models")
+
+
+def refine_with_audio(rallies: list[dict], peaks: list | None, duration: float,
+                      log=print, coverage_max: float = 0.70, min_peaks: int = 2,
+                      split_gap_s: float = 5.0, pad_before: float = 2.0,
+                      pad_after: float = 2.0) -> list[dict]:
+    """Deterministic audio cross-check of Gemini rally boundaries (TASK-042).
+
+    Owner architecture: signals first, the model's output verified against
+    them. On owner footage Gemini tiled the whole video as 18 back-to-back
+    "rallies" (257s of a 270s video marked as play) — badminton always has
+    dead time between rallies. Racket impacts are loud transients, so when
+    the segmentation is implausibly wall-to-wall (play coverage above
+    ``coverage_max``), each rally window is shrunk to its impact cluster,
+    windows without ``min_peaks`` impacts are dropped as fake, and windows
+    whose cluster contains a silent stretch over ``split_gap_s`` are SPLIT —
+    they are several real rallies merged with their dead time.
+
+    Shrink-only: refined windows always lie inside the original ones. Fail
+    open (input returned unchanged) when audio is too thin to judge
+    (under 10 peaks) or the segmentation already looks healthy.
+    """
+    ts = []
+    for p in peaks or []:
+        try:
+            ts.append(float(p["t"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    ts.sort()
+    if len(ts) < 10 or not rallies or duration <= 0:
+        return rallies
+    coverage = sum(r["end"] - r["start"] for r in rallies) / duration
+    if coverage <= coverage_max:
+        return rallies
+
+    refined: list[dict] = []
+    dropped = 0
+    for r in rallies:
+        inside = [t for t in ts if r["start"] - 0.5 <= t <= r["end"] + 0.5]
+        if len(inside) < min_peaks:
+            dropped += 1
+            continue
+        clusters: list[list[float]] = [[inside[0]]]
+        for t in inside[1:]:
+            if t - clusters[-1][-1] > split_gap_s:
+                clusters.append([t])
+            else:
+                clusters[-1].append(t)
+        for c in clusters:
+            if len(c) < min_peaks:
+                continue
+            s = max(r["start"], c[0] - pad_before)
+            e = min(r["end"], c[-1] + pad_after)
+            if e - s < config.MIN_RALLY_SEC:
+                continue
+            refined.append({**r, "start": round(s, 2), "end": round(e, 2),
+                            "dur": round(e - s, 2), "audio_hits": len(c)})
+    if not refined:      # audio contradicting EVERY window means the audio is wrong
+        return rallies
+    refined.sort(key=lambda r: r["start"])
+    kept_cov = sum(r["dur"] for r in refined) / duration
+    log(f"audio check: segmentation covered {coverage:.0%} of the video "
+        f"(implausible) — refined to {len(refined)} rallies at {kept_cov:.0%} "
+        f"coverage, {dropped} window(s) had no impact evidence")
+    return refined
 
 
 def select_for_reel(rallies: list[dict]) -> list[dict]:

@@ -106,7 +106,9 @@ def analyze_file(video: str | Path, log=print) -> dict:
         return {"status": "no_audio", "hop_s": STORE_HOP_S, "series": [], "peaks": []}
     try:
         fine = rms_series(pcm)
-        peaks = find_peaks(fine)
+        # 160: the default 60 visibly truncated a 4.5-min game (TASK-042) and
+        # the peaks now feed rally-boundary refinement, not just display
+        peaks = find_peaks(fine, top_n=160)
         stride = max(1, int(round(STORE_HOP_S / HOP_S)))
         pooled = []
         for i in range(0, len(fine), stride):
