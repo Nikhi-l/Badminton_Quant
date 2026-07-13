@@ -115,7 +115,9 @@ def test_public_rally_exposes_player_track_with_stable_ids():
     })
 
     ptrack = out["vision"]["players_track"]
-    assert 0 < len(ptrack) <= 120
+    # TASK-044: below the 1080-frame ceiling the public track passes through
+    # undecimated — public sampling never drops below the worker cadence.
+    assert len(ptrack) == 240
     box = ptrack[0]["boxes"][0]
     assert set(box) == {"id", "x", "y", "w", "h", "confidence"}
     # Exactly two stable player identities across the whole track (no id churn).
@@ -185,7 +187,8 @@ def test_public_rally_exposes_bounded_pose_track_with_stable_ids():
     })
 
     track = out["vision"]["pose_track"]
-    assert 0 < len(track) <= 120
+    # TASK-044: undecimated below the 1080-frame ceiling (matches the worker).
+    assert len(track) == 240
     person = track[0]["people"][0]
     assert set(person) == {"id", "confidence", "keypoints", "bbox"}
     assert len(person["keypoints"]) == 17

@@ -189,7 +189,7 @@ def _compact_vision(v: dict | None) -> dict | None:
         "status", "camera_mode", "shuttle_quality", "player_quality",
         "pose_quality", "racquet_quality", "pose_samples", "racquet_samples",
         "racquet_candidate_quality", "racquet_candidate_samples",
-        "mask_enabled", "shuttle_engine",
+        "mask_enabled", "shuttle_engine", "sampling",
     ) if k in v}
     shuttle = v.get("shuttle") or []
     players = v.get("players") or []
@@ -458,10 +458,11 @@ def _ids_from_worker(worker_ids: list[list[int | None]]) -> list[list[int]] | No
     return out
 
 
-# 180 matches the worker's MAX_FRAMES_PER_RALLY: the public track never
-# decimates BELOW the worker's own sampling (a second 120-frame cut pushed
-# long-rally spacing past what Studio's interpolation bridges — TASK-034).
-PUBLIC_TRACK_MAX_FRAMES = 180
+# Matches the worker's MAX_FRAMES_PER_RALLY safety ceiling (TASK-044: 1080 ≈
+# 3 min at true 6 Hz): the public track never decimates BELOW the worker's own
+# sampling (a second cut pushed long-rally spacing past what Studio's
+# interpolation bridges — TASK-034).
+PUBLIC_TRACK_MAX_FRAMES = 1080
 
 
 def _sample_player_track(players: list | None,

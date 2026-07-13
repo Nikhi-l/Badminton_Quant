@@ -348,6 +348,90 @@ def _frames_from(raw_rally: dict, rally: dict,
     return shuttle, players, poses, racquets, racquet_candidates
 
 
+def _sampling_meta(rr: dict, dur: float) -> dict:
+    """Per-rally sampling telemetry (TASK-044 Slice 0).
+
+    Worker-reported when present (new workers emit a ``sampling`` block);
+    always augmented with a MEASURED cadence from the raw frame timestamps so
+    old stored raws and the CPU path gain effective-cadence visibility on
+    reprocess. Fail-open: absent data yields nulls, never an error.
+    """
+    raw = rr.get("sampling") if isinstance(rr.get("sampling"), dict) else {}
+    ts = sorted({round(_num(f.get("t")), 3)
+                 for f in (rr.get("frames") or []) if isinstance(f, dict)})
+    measured = None
+    if len(ts) >= 2:
+        dts = sorted(b - a for a, b in zip(ts, ts[1:]) if b - a > 1e-4)
+        if dts:
+            measured = round(1.0 / dts[len(dts) // 2], 3)   # median spacing
+    out = {
+        "requested_sample_fps": _num(raw.get("requested_sample_fps")) or None,
+        "effective_sample_fps": _num(raw.get("effective_sample_fps")) or None,
+        "measured_sample_fps": measured,
+        "sample_count": int(_num(raw.get("sample_count"), len(ts))),
+        "degraded": str(raw.get("degraded") or ""),
+    }
+    if raw.get("frame_cap") is not None:
+        out["frame_cap"] = int(_num(raw.get("frame_cap")))
+    return out
+
+
+def _track_health(players: list[dict], poses: list[dict],
+                  cadence_fps: float) -> dict:
+    """Per-worker-track-id health vectors (TASK-044 Slice 0).
+
+    The aggregate player/pose qualities average confidence×coverage over the
+    whole rally — they cannot say WHICH track went unhealthy or when. This
+    records, per BoT-SORT track id: samples seen, observed span, longest
+    unobserved gap inside the span, coverage against the sampling cadence, and
+    mean confidence. It is telemetry for the labelled bench and the future
+    selective-reprocessing router; nothing downstream steers on it yet.
+    """
+    def per_track(frames: list[dict], key: str, conf_of) -> dict:
+        tracks: dict[int, dict] = {}
+        for f in frames or []:
+            if not isinstance(f, dict):
+                continue
+            t = _num(f.get("t"))
+            for item in f.get(key) or []:
+                tid = item.get("track_id") if isinstance(item, dict) else None
+                if not isinstance(tid, (int, float)):
+                    continue
+                st = tracks.setdefault(int(tid), {
+                    "n": 0, "t0": t, "t1": t, "gap": 0.0, "conf": 0.0, "_last": None})
+                if st["_last"] is not None:
+                    st["gap"] = max(st["gap"], t - st["_last"])
+                st["_last"] = t
+                st["n"] += 1
+                st["t0"] = min(st["t0"], t)
+                st["t1"] = max(st["t1"], t)
+                st["conf"] += _clamp01(conf_of(item))
+        out = {}
+        # top 8 by sample count: doubles + a couple of transient ids, bounded
+        for tid in sorted(tracks, key=lambda k: -tracks[k]["n"])[:8]:
+            st = tracks[tid]
+            span = max(st["t1"] - st["t0"], 0.0)
+            expected = max(1.0, span * max(cadence_fps, 0.1) + 1.0)
+            out[str(tid)] = {
+                "samples": st["n"],
+                "t0": round(st["t0"], 3),
+                "t1": round(st["t1"], 3),
+                "longest_gap_sec": round(st["gap"], 3),
+                "coverage": round(min(1.0, st["n"] / expected), 3),
+                "mean_conf": round(st["conf"] / max(st["n"], 1), 3),
+            }
+        return out
+
+    health = {}
+    p = per_track(players, "boxes", lambda b: b.get("confidence", 0.0))
+    if p:
+        health["players"] = p
+    q = per_track(poses, "people", lambda pp: pp.get("confidence", 0.0))
+    if q:
+        health["poses"] = q
+    return health
+
+
 def _score_samples(samples: list[dict], dur: float, fps_goal: float = 5.0) -> float:
     if not samples:
         return 0.0
@@ -412,6 +496,11 @@ def _canonicalize(raw: Any, rallies: list[dict],
             _score_samples(candidate_boxes, dur, 2.0),
         )
         mask_enabled = bool(shuttle_quality >= config.SHUTTLE_MASK_MIN_QUALITY)
+        sampling = _sampling_meta(rr, dur)
+        cadence = (sampling.get("effective_sample_fps")
+                   or sampling.get("measured_sample_fps")
+                   or sampling.get("requested_sample_fps") or 6.0)
+        track_health = _track_health(players, poses, cadence)
         raw_tracknet = rr.get("tracknet") if isinstance(rr.get("tracknet"), dict) else {}
         shuttle_engine = "tracknetv3" if (
             raw_tracknet.get("status") == "ok"
@@ -440,6 +529,8 @@ def _canonicalize(raw: Any, rallies: list[dict],
             "pose_samples": len(poses),
             "racquet_samples": len(racquets),
             "racquet_candidate_samples": len(racquet_candidates),
+            "sampling": sampling,
+            **({"track_health": track_health} if track_health else {}),
             "shuttle": shuttle,
             "players": players,
             "poses": poses,

@@ -26,7 +26,14 @@ import runpod
 CONTRACT = "baddy.vision.v1"
 WORKER_VERSION = os.environ.get("BADDY_WORKER_VERSION", "phase0-20260711")
 SAMPLE_FPS = float(os.environ.get("BADDY_SAMPLE_FPS", "6"))
-MAX_FRAMES_PER_RALLY = int(os.environ.get("BADDY_MAX_FRAMES_PER_RALLY", "180"))
+# TASK-044: a SAFETY CEILING, not the routine budget. The old 180 default
+# silently spread long rallies (a 3-min rally sampled at ~1 Hz while BoT-SORT
+# is tuned for 6 Hz — missed far players, id switches, false Studio glides).
+# 1080 keeps true cadence up to 3 min of rally; only a pathological window
+# (mis-segmented wall-to-wall "rally") degrades, and then explicitly, with the
+# reason recorded in the rally's `sampling` metadata. Rollback lever without an
+# image rollback: endpoint env BADDY_MAX_FRAMES_PER_RALLY=180.
+MAX_FRAMES_PER_RALLY = int(os.environ.get("BADDY_MAX_FRAMES_PER_RALLY", "1080"))
 YOLO_POSE_MODEL = os.environ.get("YOLO_POSE_MODEL",
                                  os.environ.get("POSE_MODEL_GPU", "yolo26l-pose.pt"))
 YOLO_POSE_FALLBACK = os.environ.get("YOLO_POSE_FALLBACK",
@@ -630,10 +637,24 @@ def _track_metrics(points: list[dict], duration: float, fps: float) -> dict:
     return out
 
 
-def _sample_times(start: float, end: float) -> list[float]:
+def _sample_times(start: float, end: float) -> tuple[list[float], dict]:
+    """Sample instants for one rally plus the sampling metadata contract
+    (TASK-044 Slice 0): consumers must be able to tell REQUESTED cadence from
+    what the rally actually got, and why they differ. Degradation (uniform
+    spread past the ceiling) is explicit — never silent."""
     dur = max(0.01, end - start)
-    n = min(MAX_FRAMES_PER_RALLY, max(2, int(math.ceil(dur * SAMPLE_FPS))))
-    return [start + i * dur / max(n - 1, 1) for i in range(n)]
+    want = max(2, int(math.ceil(dur * SAMPLE_FPS)))
+    n = min(MAX_FRAMES_PER_RALLY, want)
+    meta = {
+        "requested_sample_fps": SAMPLE_FPS,
+        # endpoints inclusive: n samples span dur with n-1 intervals
+        "effective_sample_fps": round(max(n - 1, 1) / dur, 3),
+        "requested_frames": want,
+        "sample_count": n,
+        "frame_cap": MAX_FRAMES_PER_RALLY,
+        "degraded": "frame_cap" if want > n else "",
+    }
+    return [start + i * dur / max(n - 1, 1) for i in range(n)], meta
 
 
 def _quality(values: list[float], expected: int) -> float:
@@ -653,7 +674,7 @@ def _process_rally(cap, meta: dict, rally: dict, video_path: Path, workdir: Path
     fps = meta["fps"]
     start = max(0.0, _num(rally.get("start")))
     end = min(meta["duration"], _num(rally.get("end"), start))
-    times = _sample_times(start, end)
+    times, sampling = _sample_times(start, end)
     tracknet_points: list[dict] = []
     tracknet_metrics = dict(_EMPTY_TRACK_METRICS)
     tracknet_status = "skipped" if not want_shuttle else "not_configured"
@@ -717,6 +738,7 @@ def _process_rally(cap, meta: dict, rally: dict, video_path: Path, workdir: Path
         "start": start,
         "end": end,
         "dur": round(end - start, 3),
+        "sampling": sampling,
         "player_quality": _quality(player_confs, expected * 2),
         "pose_quality": _quality(pose_confs, expected),
         "racquet_quality": _quality(racquet_confs, expected),
