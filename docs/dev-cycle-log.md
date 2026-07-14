@@ -5,6 +5,60 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 26: Broadcast-job pose triage — id coherence guard + retro court gate (TASK-045)
+**Date:** 2026-07-14
+**Goal:** Owner report (baddyai.com/#studio/713a86e5db5a, Prannoy vs Weng,
+SINGLES broadcast): four tracked "players" (P2–P4 on line judges/staff, the
+real far player unboxed) and pose keypoints "juggling" between them.
+**PRD:** §16 TASK-045 row. **Branch:** `feat/TASK-045-retro-track-hygiene`
+(stacked on 044 @ dff2380; merge order 044 → 045).
+
+**Diagnosis before code** (from the job's stored data via the public API —
+no GPU spent):
+- Job created 2026-07-10 18:36 UTC on worker `doubles-20260708` — BEFORE the
+  07-11 tracker-persist fix, the 07-12 evaluator (`evaluation: null`), and the
+  07-13 court player gate deploy. Three known-fixed bugs, one stored result.
+- Rebirth-era worker ids degrade to confidence-rank aliases: public ids 1–3
+  each spanned x_range ≈ 0.63 with 31–49% physically impossible same-id steps
+  (the one real track: 4%). "P2" = "2nd most confident detection this frame".
+- 48% of stored boxes have feet outside even the expanded court quad — staff,
+  stored pre-gate, displayed forever. The far player WAS detected: gating the
+  stored boxes leaves exactly the two players on 177/180 frames.
+- One 73s wall-to-wall rally (audio `not_analyzed`, predates TASK-039 — the
+  TASK-042 audio veto had nothing to work with) → 180-frame cap → 2.45 Hz.
+
+**Shipped**
+- `_ids_from_worker(worker_ids, frames=None)`: same-id step plausibility via
+  the `_stable_ids` motion gate; >15% implausible steps (min 10) → ids
+  rejected → motion+size heuristic. Coverage alone can't see rebirth.
+- Court gate retro-applied at the public samplers: `corners` threaded from
+  `result.court` through `_public_result`/`job_analysis`/`_movement_stats`
+  into `_sample_player_track`/`_sample_pose_track`. Pre-TASK-042 jobs stop
+  displaying staff without a reprocess; idempotent for gated-at-storage jobs.
+- `court_player_gate`: pose gating by bbox bottom (`_person_gate_foot`) —
+  YOLO hallucinates board-cut spectators' ankles INSIDE the quad (pose gate
+  kept 3–4 people/frame while the box gate kept 2); pose-only calls now get
+  the min_keep_frac fail-open (basis switches to pose counts).
+
+**Tests/verification performed**
+- `./scripts/check.sh` → **201 passed** (+9).
+- `tests/unit/test_retro_track_hygiene.py` on the real-job fixture
+  (`tests/fixtures/job713_tracks.json`): alias ids rejected / coherent ids
+  kept / legacy signature unchanged; sampler recovers non-teleporting ids
+  (max id x-span 0.2, was 0.63); retro gate keeps only the two players (box
+  and pose agree ≥90% of frames, 690→359 boxes); no-corners path unchanged;
+  pose-only fail-open on a wrong quad; line-judge box provably gone.
+
+**Docs updated:** this log, ledger, PRD §16 row, TASK-045 task file.
+
+**Open risks / next steps**
+- The baked reel/render of the job can't be fixed by display-layer code:
+  **Reprocess** (`?reprocess=1`) re-runs segmentation with audio (splits the
+  73s window), current worker ids, evaluator, gates, camera — recommend after
+  deploy. Requires the original upload still on the VM.
+- Far-player recall + singles cardinality remain TASK-036/037 + plan Slice B;
+  long-rally cadence remains TASK-044 (worker rebuild).
+
 ## Cycle 25: Tracking foundations — cadence, track health, pose sanitizer (TASK-044)
 **Date:** 2026-07-14
 **Goal:** Land Slices 0+A of the accepted tracking/quantification plan
