@@ -1,7 +1,8 @@
 """TASK-031: identity plumbing — softer worker-id acceptance and the spatial
 guard on fragment merging (height-only merging fused same-height doubles
-partners into one id)."""
-from app.main import _ids_from_worker, _relabel_merged
+partners into one id). TASK-044 adds the slot-reuse distance gate: a
+similarly sized detection must not inherit an old id across the court."""
+from app.main import _ids_from_worker, _relabel_merged, _stable_ids
 
 
 def test_worker_ids_accepted_at_70_percent_coverage():
@@ -44,3 +45,31 @@ def test_fragments_stay_separate_across_the_court():
     out = _relabel_merged(frames, ids)
     flat = {i for row in out for i in row}
     assert len(flat) == 2
+
+
+def test_sized_slot_reuse_requires_spatial_plausibility():
+    """TASK-044: the fallback that reuses a same-height slot must not hand a
+    cross-court detection the old id — that smuggled an identity switch past
+    every consumer. A distant same-height detection gets a fresh id."""
+    frames = []
+    for i in range(6):                       # one player, bottom-left
+        frames.append((i / 6.0, [(0.20, 0.70, 0.30)]))
+    for i in range(6, 12):                   # same height, opposite corner
+        frames.append((i / 6.0, [(0.88, 0.25, 0.30)]))
+    ids = _stable_ids(frames)
+    flat = [row[0] for row in ids]
+    assert len(set(flat)) == 2, f"cross-court inheritance: {flat}"
+    assert flat[5] != flat[6]                # the switch happens at the jump
+
+
+def test_sized_slot_reuse_still_covers_a_fast_lunge():
+    """The reuse path exists for real lunges that outrun the match gate —
+    those must keep their id (TASK-021 churn regression, now with the gate)."""
+    frames = []
+    x = 0.30
+    for i in range(12):
+        x = 0.30 if (i // 3) % 2 == 0 else 0.66   # 0.36 jumps between samples
+        frames.append((i / 6.0, [(x, 0.70, 0.30)]))
+    ids = _stable_ids(frames)
+    flat = {row[0] for row in ids}
+    assert flat == {0}, f"lunge churned ids: {sorted(flat)}"
