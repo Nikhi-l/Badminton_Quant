@@ -97,8 +97,13 @@ def runpod_ready() -> bool:
 
 
 def court_corners_option(raw) -> list[list[float]] | None:
-    """Validate user-drawn court corners (TASK-027): exactly four [x, y] pairs,
-    normalized 0..1, spanning a plausible quad. None when absent/malformed."""
+    """Validate user-drawn court corners (TASK-027): exactly four [x, y] pairs
+    normalized to the source frame, spanning a plausible quad. None when
+    absent/malformed. Corners MAY fall outside 0..1 (TASK-046): a side-angle
+    camera cuts a court endpoint off-frame, so both pickers let the user place
+    a corner in the out-of-frame margin — the homography and every court gate
+    are pure plane geometry and don't care. ±0.75 rejects garbage while
+    covering any realistic extrapolation."""
     if not isinstance(raw, (list, tuple)) or len(raw) != 4:
         return None
     out = []
@@ -109,7 +114,7 @@ def court_corners_option(raw) -> list[list[float]] | None:
             x, y = float(pt[0]), float(pt[1])
         except (TypeError, ValueError):
             return None
-        if not (-0.05 <= x <= 1.05 and -0.05 <= y <= 1.05):
+        if not (-0.75 <= x <= 1.75 and -0.75 <= y <= 1.75):
             return None
         out.append([round(x, 4), round(y, 4)])
     xs = [p[0] for p in out]

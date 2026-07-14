@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=35">
+<link rel="stylesheet" href="/style.css?v=36">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🏸</text></svg>">
 </head>
 <body>
@@ -75,10 +75,15 @@
     </div>
     <div class="vopts-note muted" id="voptsNote">Defaults use the free CPU camera. Shuttle tracking runs on GPU.</div>
     <div class="vopts-court" id="voptCourt" hidden>
-      <div class="vopts-head">Mark the court <span class="muted">— optional: click its 4 corners so heatmaps &amp; 3D replay work even when auto-detect can't see the full court</span></div>
+      <div class="vopts-head">Mark the court <span class="muted">— optional: click its 4 corners so heatmaps &amp; 3D replay work even when auto-detect can't see the full court. Corners cut off by the camera can be placed in the dark margin.</span></div>
       <div class="court-pick-wrap">
-        <canvas id="courtPickCanvas" width="640" height="360"></canvas>
+        <canvas id="courtPickCanvas" width="640" height="400"></canvas>
         <div class="court-pick-hint" id="courtPickHint">Click the FAR-LEFT corner (1/4)</div>
+      </div>
+      <div class="court-pick-scrub">
+        <span class="muted">frame</span>
+        <input type="range" id="courtPickScrub" min="0" max="1000" value="0" step="1" title="Pick a frame where the court is not blocked">
+        <span class="muted" id="courtPickTime">0.0s</span>
       </div>
       <div class="court-pick-actions">
         <span class="muted" id="courtPickStatus"></span>
@@ -285,7 +290,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=40"></script>
+<script src="/app.js?v=41"></script>
 <script src="/replay3d.js?v=32"></script>
 </body>
 </html>

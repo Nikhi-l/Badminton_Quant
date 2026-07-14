@@ -318,6 +318,9 @@ footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-wi
 .court-pick-hint{position:absolute;left:10px;top:10px;font-size:11px;font-weight:700;color:#0a0c08;background:var(--lime);padding:3px 10px;border-radius:99px;pointer-events:none}
 .court-pick-hint.done{background:var(--cyan)}
 .court-pick-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;font-size:11px}
+.court-pick-scrub{display:flex;align-items:center;gap:10px;margin-top:8px;font-size:11px}
+.court-pick-scrub input[type=range]{flex:1;accent-color:var(--lime);height:4px}
+.court-pick-scrub #courtPickTime{min-width:38px;text-align:right;font-variant-numeric:tabular-nums}
 .court-draw-layer{position:absolute;inset:0;pointer-events:none;z-index:6}
 .court-draw-dot{position:absolute;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;background:var(--lime);color:#0a0c08;font:800 9px/16px Inter;text-align:center;box-shadow:0 0 8px rgba(183,245,66,.7);border:1px solid #0a0c08}
 .coachbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 14px;border-top:1px solid #17191f;font-size:12px;color:var(--muted);background:#171920;max-height:74px;overflow:auto}

@@ -17,19 +17,68 @@ A frame is grabbed CLIENT-SIDE from the selected file (no round trip); the user
 clicks the four outer corners in the guided order the backend expects. Corners
 ride along in options at upload-finish; drawing can continue while chunks
 upload — anything short of 4 corners is simply dropped by validation, and the
-Studio's "Draw court" covers jobs submitted without them. */
+Studio's "Draw court" covers jobs submitted without them.
+TASK-046: the frame is drawn with a dark MARGIN around it so corners a
+side-angle camera cuts off can be placed outside the image (normalized coords
+past 0..1 — the homography doesn't care), and a scrubber picks a different
+frame when the default one has the court blocked by a player. */
+const COURT_PICK_PAD = 0.14;   // canvas fraction kept as out-of-frame margin
+// Server accepts corners in [-0.75, 1.75] (config.court_corners_option);
+// expressed here as max distance from the frame centre (0.5) on either axis.
+const COURT_CORNER_LIMIT = 1.25;
 const courtPick = {
   corners: [],           // [[x, y] * 4] normalized to the source frame
   video: { x: 0, y: 0, w: 1, h: 1 },   // drawn video box within the canvas
   ready: false,
+  v: null,               // kept alive for re-seeking (frame scrubber)
+  url: null,
 };
+
 const COURT_PICK_ORDER = ["FAR-LEFT", "FAR-RIGHT", "NEAR-RIGHT", "NEAR-LEFT"];
+
+function courtPickCaptureFrame() {
+  // Draw the current video frame inside the padded box + margin chrome,
+  // snapshot it, then repaint corners on top.
+  const canvas = $("courtPickCanvas"), v = courtPick.v;
+  if (!canvas || !v) return;
+  const g = canvas.getContext("2d");
+  const vw = v.videoWidth || 16, vh = v.videoHeight || 9;
+  const availW = canvas.width * (1 - 2 * COURT_PICK_PAD);
+  const availH = canvas.height * (1 - 2 * COURT_PICK_PAD);
+  const scale = Math.min(availW / vw, availH / vh);
+  const w = vw * scale, h = vh * scale;
+  const x = (canvas.width - w) / 2, y = (canvas.height - h) / 2;
+  g.fillStyle = "#07090d";
+  g.fillRect(0, 0, canvas.width, canvas.height);
+  g.drawImage(v, x, y, w, h);
+  g.strokeStyle = "rgba(255,255,255,.22)";
+  g.setLineDash([4, 4]);
+  g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  g.setLineDash([]);
+  g.fillStyle = "rgba(255,255,255,.38)";
+  g.font = "600 9px Inter";
+  g.fillText("outside camera — corners can land here", x, y - 5);
+  courtPick.video = { x, y, w, h };
+  courtPick.frame = g.getImageData(0, 0, canvas.width, canvas.height);
+  courtPickRedraw();
+}
+
+function courtPickSeek(t) {
+  const v = courtPick.v;
+  if (!v || !courtPick.ready) return;
+  const label = $("courtPickTime");
+  if (label) label.textContent = `${t.toFixed(1)}s`;
+  v.onseeked = () => courtPickCaptureFrame();
+  try { v.currentTime = Math.min(Math.max(0, t), Math.max(0, (v.duration || 1) - 0.05)); }
+  catch { /* seek races are cosmetic */ }
+}
 
 async function courtPickLoad(file) {
   const wrap = $("voptCourt");
   if (!wrap) return;
   courtPick.corners = [];
   courtPick.ready = false;
+  if (courtPick.url) URL.revokeObjectURL(courtPick.url);   // previous file
   wrap.hidden = false;
   courtPickHint();
   const url = URL.createObjectURL(file);
@@ -40,27 +89,27 @@ async function courtPickLoad(file) {
   v.src = url;
   try {
     await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = rej; setTimeout(rej, 8000); });
+    const start = Math.min((v.duration || 4) * 0.25, (v.duration || 4) - 0.1);
     await new Promise((res) => {
       v.onseeked = res;
-      v.currentTime = Math.min((v.duration || 4) * 0.25, (v.duration || 4) - 0.1);
+      v.currentTime = start;
       setTimeout(res, 3000);
     });
-    const canvas = $("courtPickCanvas");
-    const g = canvas.getContext("2d");
-    const vw = v.videoWidth || 16, vh = v.videoHeight || 9;
-    const scale = Math.min(canvas.width / vw, canvas.height / vh);
-    const w = vw * scale, h = vh * scale;
-    const x = (canvas.width - w) / 2, y = (canvas.height - h) / 2;
-    g.fillStyle = "#0b0d12";
-    g.fillRect(0, 0, canvas.width, canvas.height);
-    g.drawImage(v, x, y, w, h);
-    courtPick.video = { x, y, w, h };
-    courtPick.frame = g.getImageData(0, 0, canvas.width, canvas.height);
+    // kept alive (NOT revoked) so the scrubber can re-seek to a clear frame
+    courtPick.v = v;
+    courtPick.url = url;
     courtPick.ready = true;
+    courtPickCaptureFrame();
+    const scrub = $("courtPickScrub"), label = $("courtPickTime");
+    if (scrub) {
+      scrub.max = Math.max(1, Math.floor((v.duration || 1) * 10));
+      scrub.value = Math.floor(start * 10);
+      scrub.oninput = () => courtPickSeek(scrub.value / 10);
+    }
+    if (label) label.textContent = `${start.toFixed(1)}s`;
   } catch {
-    wrap.hidden = true;   // unreadable codec etc. — picker is optional
-  } finally {
     URL.revokeObjectURL(url);
+    wrap.hidden = true;   // unreadable codec etc. — picker is optional
   }
 }
 
@@ -80,7 +129,7 @@ function courtPickHint() {
   const n = courtPick.corners.length;
   const ok = n === 4 && courtPickValid();
   hint.textContent = n < 4
-    ? `Click the ${COURT_PICK_ORDER[n]} corner (${n + 1}/4) — far = the baseline away from the camera`
+    ? `Click the ${COURT_PICK_ORDER[n]} corner (${n + 1}/4) — far = away from camera; use the dark margin if it's off-screen`
     : (ok ? "Court marked ✓ — it will be used for heatmaps & 3D replay"
           : "Those corners span too little of the frame to be a court — press Clear and try again");
   hint.classList.toggle("done", ok);
@@ -129,10 +178,11 @@ function courtPickRedraw() {
     const cx = (e.clientX - r.left) * (canvas.width / r.width);
     const cy = (e.clientY - r.top) * (canvas.height / r.height);
     const vb = courtPick.video;
+    // TASK-046: no clamp to the image — the margin IS clickable, a corner the
+    // camera cut off lands outside 0..1 (limit mirrors server validation).
     const nx = (cx - vb.x) / vb.w, ny = (cy - vb.y) / vb.h;
-    if (nx < -0.02 || nx > 1.02 || ny < -0.02 || ny > 1.02) return;   // letterbox click
-    courtPick.corners.push([Math.min(1, Math.max(0, +nx.toFixed(4))),
-                            Math.min(1, Math.max(0, +ny.toFixed(4)))]);
+    if (Math.abs(nx - 0.5) > COURT_CORNER_LIMIT || Math.abs(ny - 0.5) > COURT_CORNER_LIMIT) return;
+    courtPick.corners.push([+nx.toFixed(4), +ny.toFixed(4)]);
     courtPickRedraw();
     courtPickHint();
   });
@@ -1705,7 +1755,7 @@ function renderInspector() {
             ? `The detector found a court-like shape but isn't confident (${fmtPct(courtRawOf().confidence)}). Rather than risk warped heatmaps and 3D, it's ignored — draw the four corners below and everything recomputes instantly.`
             : "No court boundary detected in this video (POV or occluded footage skips it). Draw it yourself below — heatmaps and 3D replay recompute instantly."}</div>`}
       <button class="btn btn-small" id="courtDrawBtn">${courtDraw.active ? "Cancel drawing" : (c ? "Redraw court corners" : "✏️ Draw court corners")}</button>
-      ${courtDraw.active ? `<div class="control-hint muted">Click the four OUTER corners on the video in order: far-left, far-right, near-right, near-left.</div>` : ""}
+      ${courtDraw.active ? `<div class="control-hint muted">Click the four OUTER corners in order: far-left, far-right, near-right, near-left. Scrub the timeline first if the court is blocked; a corner the camera cuts off can be clicked in the dark margin around the zoomed-out video.</div>` : ""}
       </div>`;
     if (c) {
       $("courtEnabled").onchange = (e) => { co.enabled = e.target.checked; stateChanged(); };
@@ -2518,6 +2568,10 @@ function renderPoseOverlay(pose, po, ctx) {
 // Landscape + reset framing makes the stage a pure contain-box of the SOURCE
 // frame, so a click inverts to source-normalized coordinates with no crop math.
 const courtDraw = { active: false, pts: [] };
+// Zoomed-out draw mode (TASK-046): the video shrinks inside the stage so a
+// corner the camera cut off can be clicked in the dark margin around it.
+// videoFitPoint already accounts for framing zoom, so the dots line up.
+const COURT_DRAW_ZOOM = 0.72;
 
 function startCourtDraw() {
   courtDraw.active = true;
@@ -2528,7 +2582,7 @@ function startCourtDraw() {
   const v = $("stVideo");
   if (v && !v.paused) v.pause();
   setPreviewAspect("landscape");
-  studio.editorState.framing = { fit: "fit", zoom: 1, x: 0, y: 0 };
+  studio.editorState.framing = { fit: "fit", zoom: COURT_DRAW_ZOOM, x: 0, y: 0 };
   applyFraming();
   const frame = $("stageFrame");
   frame.style.cursor = "crosshair";
@@ -2544,6 +2598,8 @@ function endCourtDraw(cancelled = false) {
   frame.removeEventListener("pointerdown", courtDrawClick, true);
   const layer = $("courtDrawLayer");
   if (layer) layer.remove();
+  studio.editorState.framing = { fit: "fit", zoom: 1, x: 0, y: 0 };
+  applyFraming();
   if (cancelled) $("tpHint").textContent = "";
   renderInspector();
 }
@@ -2552,6 +2608,7 @@ function courtDrawHint() {
   const n = courtDraw.pts.length;
   $("tpHint").textContent = n < 4
     ? `court: click the ${COURT_PICK_ORDER[n]} corner (${n + 1}/4)`
+      + (n === 0 ? " — scrub to a frame where the court is clear; off-screen corners go in the dark margin" : "")
     : "court: saving…";
 }
 
@@ -2562,17 +2619,22 @@ function courtDrawClick(e) {
   const frame = $("stageFrame"), v = $("stVideo");
   const r = frame.getBoundingClientRect();
   const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
-  // invert the contain box (fit, zoom 1, no pan — enforced by startCourtDraw)
+  // invert the contain box (fit, zoom COURT_DRAW_ZOOM, no pan — enforced by
+  // startCourtDraw): undo the scale-about-centre first, then the contain box.
   const fw = frame.clientWidth || 1, fh = frame.clientHeight || 1;
   const vw = v.videoWidth || 16, vh = v.videoHeight || 9;
   const frameAspect = fw / fh, videoAspect = vw / vh;
   let w = fw, h = fh, ox = 0, oy = 0;
   if (videoAspect > frameAspect) { h = fw / videoAspect; oy = (fh - h) / 2; }
   else { w = fh * videoAspect; ox = (fw - w) / 2; }
-  const nx = (fx * fw - ox) / w, ny = (fy * fh - oy) / h;
-  if (nx < -0.02 || nx > 1.02 || ny < -0.02 || ny > 1.02) return;
-  courtDraw.pts.push([Math.min(1, Math.max(0, +nx.toFixed(4))),
-                      Math.min(1, Math.max(0, +ny.toFixed(4)))]);
+  const s = (framingState().zoom || 1);
+  const px = (fx * fw - fw / 2) / s + fw / 2;
+  const py = (fy * fh - fh / 2) / s + fh / 2;
+  const nx = (px - ox) / w, ny = (py - oy) / h;
+  // TASK-046: corners may land OUTSIDE the frame (side-angle cameras cut the
+  // court off); bounds mirror server validation, no clamp to 0..1.
+  if (nx < -0.75 || nx > 1.75 || ny < -0.75 || ny > 1.75) return;
+  courtDraw.pts.push([+nx.toFixed(4), +ny.toFixed(4)]);
   courtDrawRender();
   courtDrawHint();
   if (courtDraw.pts.length === 4) submitCourtDraw();
