@@ -5,6 +5,50 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 27: Court drawing — out-of-frame corners + frame scrubbing (TASK-046)
+**Date:** 2026-07-14
+**Goal:** Owner request: (1) allow court-corner extrapolation when the camera
+doesn't cover the whole court (side angles put endpoints off-image); (2) let
+the user pick a different frame for corner drawing when the default frame has
+the court blocked by a player.
+**PRD:** §16 TASK-046 row. **Branch:** `feat/TASK-046-court-draw-flex`
+(stacked: 044 → 045 → 046).
+
+**Shipped**
+- `config.court_corners_option` accepts corners in **[-0.75, 1.75]** —
+  homography and court gates are plane geometry; an extrapolated corner is as
+  usable as an in-frame one. Degenerate-span rejection unchanged.
+- Upload picker: frame drawn inside a dark 14% margin (dashed outline,
+  "outside camera" label); margin clicks record coords past 0..1 unclamped;
+  **frame scrubber** (0.1s steps + time label) re-seeks the kept-alive
+  client-side video; corners survive frame changes.
+- Studio draw mode: video zooms out to 0.72 during drawing (same margin
+  affordance); `courtDrawClick` inverts the scale-about-centre before the
+  contain box (`videoFitPoint` was already zoom-aware, so dots align);
+  framing restored on end/cancel; hints point at timeline scrubbing.
+- Assets: `app.js?v=41`, `style.css?v=36`.
+
+**Tests/verification performed**
+- `./scripts/check.sh` → **209 passed** (+8 in
+  `tests/unit/test_court_corner_extrapolation.py`: option bounds + round-trip,
+  manual_result homography on extrapolated corners projects onto the exact
+  court rectangle, player gate with an off-frame quad, worker `_court_polygon`
+  acceptance, in-frame behavior pinned).
+- Browser (static preview, real click handler, synthetic video): out-of-frame
+  corners recorded unclamped (x=1.129 / x=-0.121), validity +
+  `currentOptions().court_corners` intact, scrubber sought 7.5s and updated
+  the label. `node --check web/app.js` OK.
+- Studio inversion round-trip vs the forward mapping: worst error 2.2e-16
+  across landscape/portrait/4:3 stages and out-of-frame points.
+
+**Docs updated:** this log, ledger, PRD §16 row, TASK-046 task file.
+
+**Open risks / next steps**
+- Reachable extrapolation is bounded by the margin (~±0.25 upload, ~±0.27
+  Studio) — enough for realistic side angles; a pan/zoom picker is the
+  escalation if someone films half a court.
+- Merge 044 → 045 → 046 to main + deploy; owner runs fresh-video tests.
+
 ## Cycle 26: Broadcast-job pose triage — id coherence guard + retro court gate (TASK-045)
 **Date:** 2026-07-14
 **Goal:** Owner report (baddyai.com/#studio/713a86e5db5a, Prannoy vs Weng,
