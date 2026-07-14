@@ -5,6 +5,86 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 25: Tracking foundations — cadence, track health, pose sanitizer (TASK-044)
+**Date:** 2026-07-14
+**Goal:** Land Slices 0+A of the accepted tracking/quantification plan
+(`docs/reviews/2026-07-14-tracking-pose-segmentation-plan.md`): true 6 Hz on
+long rallies with explicit sampling telemetry, per-track health vectors, and
+identity/kinematic rejection BEFORE One-Euro (model quality and temporal
+tracking quality are separate problems; the smoother is not an outlier
+detector).
+**PRD:** §16 TASK-044 row (+ Slice B/C/D/E rows queued).
+**Branch:** `feat/TASK-044-tracking-foundations` (base `c3a9ec1` on `main`).
+**Task file:** `.agent/tasks/active/TASK-044-tracking-foundations.md`
+
+**Confirmed failure modes driving the slice**
+- 180-frame rally cap silently degraded cadence (60s → 3 Hz, 180s → 1 Hz)
+  while BoT-SORT is tuned for 6 Hz.
+- A same-id, high-confidence wrist teleport `x 0.10→0.90→0.12` One-Euro'd to
+  `0.10→0.7645→0.317`: softened, never rejected, contaminating the next frame.
+- `_stable_ids` same-height slot reuse had no distance gate: a cross-court
+  detection could inherit an old id (invisible identity switch).
+- Studio interpolated the same id across ≤0.9s pose gaps — an identity error
+  became a smooth false glide.
+
+**Shipped**
+- Worker (`runpod_worker/handler.py`): frame cap 180 → **1080 safety ceiling**
+  (env `BADDY_MAX_FRAMES_PER_RALLY`); per-rally `sampling` block
+  (requested/effective fps, counts, cap, `degraded` reason). Needs a worker
+  image rebuild to take effect; app reads old payloads fail-open.
+- Canonicalization (`app/pipeline/gpu.py`): `sampling` surfaced fail-open +
+  measured cadence from raw frame timestamps (old raws gain visibility on
+  reprocess); `track_health` per BoT-SORT id (samples, span, longest gap,
+  coverage vs cadence, mean conf) for players and poses.
+- `PUBLIC_TRACK_MAX_FRAMES` 180 → 1080 (public tracks never decimate below the
+  worker cadence — TASK-034 rule preserved at the new ceiling).
+- **`app/pipeline/sanitize.py` (new)** on the public pose track after id
+  assignment, before One-Euro: whole-person displacement gate → same-id
+  identity transitions start a new `seg` (joints re-seed; nothing deleted);
+  per-joint body-relative gates (torso 3.0 / elbow-knee 4.5 / wrist-ankle 7.0
+  body-heights/s + noise floor) → rejected joints become missing data
+  (`confidence: 0`, `rejected: true` provenance) and never update state;
+  3 consecutive rejections re-seed; bone-surge gate (a limb exceeding its
+  rolling max length ×1.75 is a wrong attachment — 2D can only foreshorten).
+  Zero-velocity gating by design at 6 Hz (CV prediction overshoots at hit
+  reversals; see plan §4.2 note).
+- `smooth.py`: One-Euro state keyed `(id, seg, joint)` — smoothing never drags
+  across an identity transition.
+- `main.py _stable_ids`: same-height slot reuse now requires dt-scaled spatial
+  plausibility (`≤ min(0.65, 0.45 + 0.30·dt)`); lunge reuse survives.
+- Studio (`web/app.js`): pose interp `maxGap` 0.9 → 0.45s; a person whose
+  `seg` changed between samples is handed off via the hold rule, never lerped.
+
+**Tests/verification performed**
+- `./scripts/check.sh` → compile OK, **192 passed** (+17 new).
+- New: `tests/unit/test_pose_sanitize.py` (11 fixtures from plan §11: teleport
+  rejected + state uncontaminated, smash wrist retained, real jump retained,
+  whole-skeleton teleport → seg not rejection, body-relative far gates, bone
+  surge vs foreshortening, consec-reject re-seed, low-conf passthrough,
+  long-gap re-entry, smoothing never bridges a break);
+  `tests/unit/test_worker_sampling.py` (60s rally keeps ~6 Hz — the 3 Hz
+  regression; explicit `frame_cap` degradation at the ceiling);
+  `tests/unit/test_gpu_track_health.py` (worker block + measured cadence
+  fail-open; per-id gap/coverage vectors); `_stable_ids` reuse-gate pair in
+  `test_track_identity.py`.
+- Updated: `test_public_editor_tracks.py` (public tracks undecimated below the
+  1080 ceiling). `node --check web/app.js` OK; Studio loads in preview.
+
+**Docs updated:** this log, `docs/progress-ledger.md`, PRD §16 queue rows,
+plan doc status + §4.2/§4.3 implementation notes, TASK-044 task file.
+
+**Open risks / next steps**
+- Worker cadence needs an image rebuild + bounce before it's live; watch
+  result.json/vision_raw.json payload sizes on a long-rally job (grows with
+  cadence; rollback lever `BADDY_MAX_FRAMES_PER_RALLY=180`).
+- Sanitizer thresholds are code-tuned, not label-tuned: run the Phase-0 bench
+  + a fresh real upload before deploy; false-rejection rate on real smashes is
+  the number to watch (fixtures encode the intent, labels prove it).
+- Slice B (burst windows, per-player crops, racquet microtracking), Slice C
+  (RF-DETR shadow), Slice D (fused hits, segmented forward/backward smoothing,
+  qualified analytics), Slice E (canonical-track consumer rollout) queued in
+  the PRD; shared box↔pose identity map remains TASK-036.
+
 ## Cycle 24: Court player gate, action camera, audio rally veto, glow CSS (TASK-042)
 **Date:** 2026-07-12
 **Goal:** Owner upload review (job `1faaa5e4a02f`, doubles): pose invisible in
