@@ -182,7 +182,16 @@ async def upload(file: UploadFile):
     return {"id": job_id}
 
 
-def _compact_vision(v: dict | None) -> dict | None:
+def _court_gate_corners(result: dict | None) -> list | None:
+    """Court corners for the retroactive player/pose gate (TASK-045) — only a
+    healthy detected/drawn court gates; anything else means no gating."""
+    court_info = (result or {}).get("court")
+    if isinstance(court_info, dict) and court_info.get("status") == "ok":
+        return court_info.get("corners")
+    return None
+
+
+def _compact_vision(v: dict | None, corners: list | None = None) -> dict | None:
     if not isinstance(v, dict):
         return None
     out = {k: v.get(k) for k in (
@@ -210,10 +219,10 @@ def _compact_vision(v: dict | None) -> dict | None:
     track = _sample_shuttle_track(shuttle)
     if track:
         out["shuttle_track"] = track
-    ptrack = _sample_player_track(players)
+    ptrack = _sample_player_track(players, corners=corners)
     if ptrack:
         out["players_track"] = ptrack
-    pose_track = _sample_pose_track(poses)
+    pose_track = _sample_pose_track(poses, corners=corners)
     if pose_track:
         out["pose_track"] = pose_track
     rtrack = _sample_racquet_track(v.get("racquets"))
@@ -436,7 +445,9 @@ def _relabel_merged(frames: list[tuple[float, list[tuple[float, float, float]]]]
     return [[remap[group[sid]] for sid in ids] for ids in raw_ids]
 
 
-def _ids_from_worker(worker_ids: list[list[int | None]]) -> list[list[int]] | None:
+def _ids_from_worker(worker_ids: list[list[int | None]],
+                     frames: list[tuple[float, list[tuple[float, float, float]]]] | None = None,
+                     ) -> list[list[int]] | None:
     """Densified per-frame ids from the worker's tracker track_ids (TASK-024),
     or None when coverage is too thin to trust (falls back to the heuristic).
     Rare id-less detections get isolated one-off ids; the fragment merge folds
@@ -445,7 +456,15 @@ def _ids_from_worker(worker_ids: list[list[int | None]]) -> list[list[int]] | No
     ALL tracker ids for a rally whenever one low-coverage stretch (a tracker
     warmup, a brief occlusion cluster) dipped coverage below 90%, silently
     reverting to the weaker heuristic; the fragment merge cleans up the orphan
-    ids that motivated the strict cliff."""
+    ids that motivated the strict cliff.
+    TASK-045: coverage alone was fooled by the tracker-rebirth bug (pre
+    `phase0-20260711` workers rebuilt the tracker every frame): ids present on
+    100% of boxes but reborn each frame degrade to confidence-rank aliases —
+    "id 1" chains DIFFERENT humans into one track that teleports across the
+    frame (job 713a86e5db5a: 31% of same-id steps physically impossible vs 4%
+    for the one real track). When ``frames`` geometry is provided, same-id
+    steps are checked against the `_stable_ids` motion gate; incoherent ids
+    are worse than no ids, so the motion+size heuristic takes over."""
     total = have = 0
     for row in worker_ids:
         for wid in row:
@@ -465,6 +484,24 @@ def _ids_from_worker(worker_ids: list[list[int | None]]) -> list[list[int]] | No
             else:
                 ids.append(dense.setdefault(int(wid), len(dense)))
         out.append(ids)
+    if frames is not None:
+        last: dict[int, tuple[float, float, float]] = {}
+        ok = bad = 0
+        for (t, dets), ids in zip(frames, out):
+            for (cx, cy, _h), sid in zip(dets, ids):
+                if sid >= 1000:      # orphan filler, not a tracker claim
+                    continue
+                prev = last.get(sid)
+                if prev is not None:
+                    dt = max(t - prev[0], 1e-3)
+                    gate = min(0.6, 0.22 + 0.28 * max(0.0, dt - 0.25))
+                    if math.hypot(cx - prev[1], cy - prev[2]) > gate:
+                        bad += 1
+                    else:
+                        ok += 1
+                last[sid] = (t, cx, cy)
+        if ok + bad >= 10 and bad / (ok + bad) > 0.15:
+            return None
     return out
 
 
@@ -476,7 +513,8 @@ PUBLIC_TRACK_MAX_FRAMES = 1080
 
 
 def _sample_player_track(players: list | None,
-                         max_frames: int = PUBLIC_TRACK_MAX_FRAMES) -> list[dict]:
+                         max_frames: int = PUBLIC_TRACK_MAX_FRAMES,
+                         corners: list | None = None) -> list[dict]:
     """Public, bounded per-frame player boxes with stable track ids for the editor.
 
     Vision stores dense per-frame player detections as boxes only. The editor needs
@@ -485,9 +523,20 @@ def _sample_player_track(players: list | None,
     prefer the worker's ByteTrack track_ids (TASK-024) and fall back to
     :func:`_stable_ids` (bounded pool, motion+size-aware matching); both paths
     share the fragment merge + near-player-first relabel.
+
+    ``corners`` (TASK-045) retro-applies the court player gate at sampling
+    time: results stored BEFORE the TASK-042 canonicalization gate kept line
+    judges and umpires in the track forever — gating what consumers actually
+    see fixes those jobs without a reprocess. Gated-at-storage jobs are
+    unaffected (the gate is idempotent) and it fails open like the original.
     """
     if not isinstance(players, list) or not players:
         return []
+    if corners:
+        from .pipeline import track as _track
+        players, _ = _track.court_player_gate(players, [], corners)
+        if not players:
+            return []
     step = max(1, math.ceil(len(players) / max_frames))
     sampled: list[tuple[float, list[dict]]] = []
     worker_ids: list[list[int | None]] = []
@@ -517,7 +566,7 @@ def _sample_player_track(players: list | None,
         sampled.append((t, norm_boxes))
         worker_ids.append(wids)
     frames = [(t, [(b["x"], b["y"], b["h"]) for b in boxes]) for t, boxes in sampled]
-    raw = _ids_from_worker(worker_ids)
+    raw = _ids_from_worker(worker_ids, frames)
     ids = _relabel_merged(frames, raw) if raw else _stable_ids(frames)
     out: list[dict] = []
     for (t, boxes), frame_ids in zip(sampled, ids):
@@ -568,16 +617,24 @@ def _pose_height(person: dict, keypoints: list[dict]) -> float:
 
 
 def _sample_pose_track(poses: list | None,
-                       max_frames: int = PUBLIC_TRACK_MAX_FRAMES) -> list[dict]:
+                       max_frames: int = PUBLIC_TRACK_MAX_FRAMES,
+                       corners: list | None = None) -> list[dict]:
     """Public, bounded COCO-17 pose track for Studio skeleton overlays.
 
     Canonical vision stores per-frame people with normalized keypoints. This keeps
     the full job payload useful without letting gallery/list responses inherit the
     dense raw arrays. Person ids come from :func:`_stable_ids`, the same bounded
     motion+size-aware tracker as the player boxes, so skeleton and box colors agree.
+    ``corners`` retro-applies the court gate at sampling time (TASK-045) — same
+    contract as :func:`_sample_player_track`.
     """
     if not isinstance(poses, list) or not poses:
         return []
+    if corners:
+        from .pipeline import track as _track
+        _, poses = _track.court_player_gate([], poses, corners)
+        if not poses:
+            return []
     step = max(1, math.ceil(len(poses) / max_frames))
     sampled: list[tuple[float, list[dict], list[tuple[float, float, float]]]] = []
     worker_ids: list[list[int | None]] = []
@@ -625,7 +682,7 @@ def _sample_pose_track(poses: list | None,
         sampled.append((t, people, dets))
         worker_ids.append(wids)
     frames = [(t, dets) for t, _, dets in sampled]
-    raw = _ids_from_worker(worker_ids)
+    raw = _ids_from_worker(worker_ids, frames)
     ids = _relabel_merged(frames, raw) if raw else _stable_ids(frames)
     out: list[dict] = []
     for (t, people, _), frame_ids in zip(sampled, ids):
@@ -658,7 +715,7 @@ def _sample_camera_path(path: list | None, max_points: int = 240) -> list[dict]:
     return out
 
 
-def _public_rally(rr: dict) -> dict:
+def _public_rally(rr: dict, corners: list | None = None) -> dict:
     out = {k: rr.get(k) for k in ("start", "end", "dur", "clip_dur", "src_start",
                                   "intensity", "note", "trimmed", "render_window")}
     cam = _sample_camera_path(rr.get("camera_path"))
@@ -677,7 +734,7 @@ def _public_rally(rr: dict) -> dict:
                 # Which physical gates killed the fits (TASK-034): floor/net/
                 # bounds/speed/… — the Studio turns this into actionable copy.
                 out["rally_3d"]["rejected"] = r3["rejected"]
-    vision = _compact_vision(rr.get("vision"))
+    vision = _compact_vision(rr.get("vision"), corners=corners)
     if vision:
         out["vision"] = vision
     return out
@@ -717,9 +774,10 @@ def _public_result(job: dict, light: bool = False) -> dict | None:
     out["court"] = r.get("court")
     out["annotated"] = bool(r.get("annotated"))
     out["evaluation"] = r.get("evaluation")
-    out["rallies"] = [_public_rally(rr) for rr in r.get("rallies", [])]
+    corners = _court_gate_corners(r)
+    out["rallies"] = [_public_rally(rr, corners) for rr in r.get("rallies", [])]
     out["all_rallies"] = r.get("all_rallies", [])
-    out["rally_pool"] = ([_public_rally(rr) for rr in r.get("rally_pool", [])]
+    out["rally_pool"] = ([_public_rally(rr, corners) for rr in r.get("rally_pool", [])]
                          if isinstance(r.get("rally_pool"), list) else None)
     return out
 
@@ -845,11 +903,12 @@ def job_analysis(job_id: str, refresh: int = 0):
     else:
         raise HTTPException(409, "job result is not on disk")
     per_rally_tracks = []
+    corners = _court_gate_corners(result)
     for rr in result.get("rallies") or []:
         vision = rr.get("vision") if isinstance(rr.get("vision"), dict) else {}
         per_rally_tracks.append({
-            "players_track": _sample_player_track(vision.get("players")),
-            "pose_track": _sample_pose_track(vision.get("poses")),
+            "players_track": _sample_player_track(vision.get("players"), corners=corners),
+            "pose_track": _sample_pose_track(vision.get("poses"), corners=corners),
         })
     out = analysis_mod.build_analysis(
         result, job_id=job_id, per_rally_tracks=per_rally_tracks,
@@ -1324,13 +1383,14 @@ def _movement_stats(result: dict, player_id: int | None) -> dict:
     reports coverage only. Bounded by the same samplers the Studio uses."""
     court_info = result.get("court") or {}
     H = court_info.get("homography") if court_info.get("status") == "ok" else None
+    corners = _court_gate_corners(result)
     cells: set[tuple[int, int]] = set()
     dist = 0.0
     prev = None
     n_pts = 0
     for rr in result.get("rallies") or []:
         players = ((rr.get("vision") or {}).get("players")) or []
-        for f in _sample_player_track(players):
+        for f in _sample_player_track(players, corners=corners):
             for b in f["boxes"]:
                 if player_id is not None and b["id"] != player_id:
                     continue

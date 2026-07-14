@@ -814,6 +814,23 @@ def _person_foot(person: dict) -> tuple[float, float] | None:
     return best
 
 
+def _person_gate_foot(person: dict) -> tuple[float, float] | None:
+    """Foot point for COURT GATING: bbox bottom first, ankles as fallback —
+    the opposite preference from :func:`_person_foot` (movement analytics).
+    A spectator cut off by the boards gets HALLUCINATED ankles extrapolated
+    below the visible crop, often landing inside the court quad (TASK-045:
+    broadcast job kept 3–4 pose people/frame while the box gate kept 2); the
+    detector's box bottom is the honest visible extent, and for a real
+    standing/jumping player box bottom and ankles agree anyway."""
+    bbox = person.get("bbox")
+    if isinstance(bbox, dict):
+        try:
+            return (float(bbox["x1"]) + float(bbox["x2"])) / 2.0, float(bbox["y2"])
+        except (KeyError, TypeError, ValueError):
+            pass
+    return _person_foot(person)
+
+
 def court_player_gate(players: list, poses: list, corners: list | None,
                       expand: float = 1.30, pad: float = 0.035,
                       min_keep_frac: float = 0.35, cap: int = 4) -> tuple[list, list]:
@@ -850,17 +867,26 @@ def court_player_gate(players: list, poses: list, corners: list | None,
         if inside:
             inside.sort(key=lambda b: -float(b.get("confidence", 0.0)))
             kept_players.append({**f, "boxes": inside[:cap]})
-    if total and kept / total < min_keep_frac:
-        return players, poses   # gate disagrees with most detections → distrust the quad
 
     kept_poses: list = []
+    p_total = p_kept = 0
     for f in poses or []:
-        people = [p for p in (f.get("people") or [])
-                  if (foot := _person_foot(p)) and _inside_convex(poly, *foot)]
+        all_people = f.get("people") or []
+        p_total += len(all_people)
+        people = [p for p in all_people
+                  if (foot := _person_gate_foot(p)) and _inside_convex(poly, *foot)]
+        p_kept += len(people)
         if people:
             people.sort(key=lambda p: -float(p.get("confidence", 0.0)))
             people = people[:cap]
             kept_poses.append({**f, "people": people, "count": len(people)})
+
+    # Fail-open basis: player boxes when present, else the poses themselves —
+    # gating a pose-only call used to skip this check entirely (TASK-045), so
+    # a wrong quad could silently blank every skeleton.
+    basis_total, basis_kept = (total, kept) if total else (p_total, p_kept)
+    if basis_total and basis_kept / basis_total < min_keep_frac:
+        return players, poses   # gate disagrees with most detections → distrust the quad
     return kept_players, kept_poses
 
 
