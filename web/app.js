@@ -2113,7 +2113,11 @@ function interpPlayerBoxes(frames, t, window = 0.6, maxGap = 0.9) {
 // hold rule as interpPlayerBoxes: an id observed on only one side of the
 // bracket renders only within BOX_HOLD_SEC of that observation — no union of
 // relabeled ids, no skeleton parked on empty court.
-function interpPoseFrame(frames, t, window = 0.6, maxGap = 0.9) {
+// TASK-044: maxGap dropped 0.9 → 0.45s (a real 6 Hz stream never needs more;
+// a longer gap is a dropout to show honestly, not to glide across), and a
+// person whose sanitizer segment (`seg`) changed between the samples is an
+// identity transition — hand off via the hold rule, NEVER lerp across it.
+function interpPoseFrame(frames, t, window = 0.6, maxGap = 0.45) {
   if (!frames || !frames.length) return null;
   const [i, j] = _bracket(frames, t);
   const A = frames[i], B = frames[j];
@@ -2130,6 +2134,12 @@ function interpPoseFrame(frames, t, window = 0.6, maxGap = 0.9) {
   for (const pa of (A.people || [])) {
     const pb = after.get(pa.id);
     if (!pb) {
+      if (hold.a) people.push(pa);
+      continue;
+    }
+    if ((pa.seg || 0) !== (pb.seg || 0)) {
+      // Identity transition between the samples (TASK-044): pa holds on its
+      // side, pb stays in `after` and holds on its own side — a clean handoff.
       if (hold.a) people.push(pa);
       continue;
     }

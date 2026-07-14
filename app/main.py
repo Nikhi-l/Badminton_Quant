@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from . import artifacts, auth, config, db, worker
 from .pipeline import court as court_geo
 from .pipeline import gpu as gpu_pipeline
-from .pipeline import smooth
+from .pipeline import sanitize, smooth
 from .pipeline.run import STAGES
 
 ALLOWED_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
@@ -350,7 +350,17 @@ def _stable_ids(frames: list[tuple[float, list[tuple[float, float, float]]]],
             # motion or a detector dropout — apparent height separates near from
             # far court in a fixed camera, and players don't teleport. Reusing it
             # beats minting a new id every time a lunge outruns the gate.
-            sized = [s for s in slots if s not in used_s and abs(slots[s][2] - h) < 0.12]
+            # TASK-044: reuse also requires spatial plausibility for the elapsed
+            # time — size alone let a fresh far-side detection inherit a
+            # cross-court slot, smuggling an identity switch past every
+            # downstream consumer. The reuse gate is looser than the match gate
+            # (this is the last resort before churn) but finite.
+            def _reusable(s: int) -> bool:
+                px, py, _, pt = slots[s]
+                dt = max(0.0, t - pt)
+                return math.hypot(cx - px, cy - py) <= min(0.65, 0.45 + 0.30 * dt)
+            sized = [s for s in slots
+                     if s not in used_s and abs(slots[s][2] - h) < 0.12 and _reusable(s)]
             free = [i for i in range(max_ids) if i not in slots and i not in used_s]
             if sized:
                 sid = min(sized, key=lambda s: math.hypot(cx - slots[s][0], cy - slots[s][1]))
@@ -622,8 +632,12 @@ def _sample_pose_track(poses: list | None,
         for person, sid in zip(people, frame_ids):
             person["id"] = sid
         out.append({"t": t, "people": people})
-    # One-Euro smoothing per (person id, keypoint): kills the 6 Hz keypoint
-    # jitter without lagging fast racquet swings (TASK-031).
+    # Rejection BEFORE smoothing (TASK-044): identity transitions become `seg`
+    # breaks and physically impossible joints become missing data, so the
+    # One-Euro pass below never sees (and never softens) a teleport.
+    sanitize.sanitize_pose_track(out)
+    # One-Euro smoothing per (person id, seg, keypoint): kills the 6 Hz
+    # keypoint jitter without lagging fast racquet swings (TASK-031).
     return smooth.smooth_pose_track(out)
 
 

@@ -58,9 +58,11 @@ def smooth_pose_track(track: list[dict]) -> list[dict]:
     confidence}]}]}]. Low-confidence keypoints (<0.15) pass through untouched
     and don't feed the filter — a garbage detection must not drag the smoothed
     joint. Ids without a filter yet (or returning after RESET_GAP_SEC) start
-    fresh at the observed position.
+    fresh at the observed position. Filter state is additionally keyed by the
+    sanitizer's ``seg`` (TASK-044): an identity transition starts fresh
+    filters, so smoothing never drags a joint across a person change.
     """
-    filters: dict[tuple, tuple[float, list]] = {}   # (id, kp_idx) -> (t_last, [fx, fy])
+    filters: dict[tuple, tuple[float, list]] = {}   # (id, seg, kp_idx) -> (t_last, [fx, fy])
     for frame in track or []:
         try:
             t = float(frame.get("t", 0.0))
@@ -77,7 +79,7 @@ def smooth_pose_track(track: list[dict]) -> list[dict]:
                     continue
                 if conf < 0.15:
                     continue
-                key = (pid, ki)
+                key = (pid, person.get("seg", 0), ki)
                 state = filters.get(key)
                 if state is None or t - state[0] > RESET_GAP_SEC:
                     state = (t, [OneEuro(), OneEuro()])
