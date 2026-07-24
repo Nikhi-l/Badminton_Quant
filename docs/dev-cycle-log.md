@@ -28,7 +28,19 @@ without replacing the current upload, queue, gallery, and Studio product.
   REACT_APP_BADDY_GALLERY_URL=/create.html#gallery GENERATE_SOURCEMAP=false
   CI=true yarn build` — compiled successfully.
 - `./scripts/check.sh` — **212 passed**.
-- Live deployment verification — pending merge and VM rollout.
+- PR #4 merged to `main` as
+  `f43ed3f5673c410cdcc43c0d9bd2aff007327272`.
+- `bash deploy/deploy.sh` from clean merged `main` — VM rollout completed;
+  `baddy.service` and `caddy.service` active, VM-local health
+  `{"ok":true}`.
+- Public HTTP verification — `/`, `/create.html`, `/app.html`,
+  `/architecture`, `/api/health`, and hashed JS/CSS all returned HTTP 200.
+  Public, VM, and merged-main hashes matched.
+- Browser verification — landing, editor handoff, and legacy
+  `/#studio/adda60dbf93e` redirect passed with no console warnings/errors;
+  Studio exposed the existing shuttle and pose layers. Mobile 390×844 DOM
+  validation passed.
+- Existing production data remained intact: 35 jobs (33 done, 2 failed).
 
 **Rollback**
 - Revert the TASK-047 merge and run `bash deploy/deploy.sh` from clean `main`;
