@@ -1,296 +1,44 @@
 <!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Baddy — AI Badminton Highlights</title>
-<meta name="description" content="Drop a badminton video. AI finds every rally, a virtual camera follows the action, and you get a beat-synced vertical highlight reel.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=36">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🏸</text></svg>">
-</head>
-<body>
-<div class="glow glow-a"></div>
-<div class="glow glow-b"></div>
-
-<nav>
-  <div class="nav-inner">
-    <a class="brand" href="#">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M12 2L8 10l-4 9c-.4.9.5 1.8 1.4 1.4l9-4 8-4-2.5-2.5L12 2z" stroke="url(#g)" stroke-width="1.6" stroke-linejoin="round"/><circle cx="6.5" cy="17.5" r="2.2" fill="url(#g)"/><defs><linearGradient id="g" x1="0" y1="0" x2="24" y2="24"><stop stop-color="#b7f542"/><stop offset="1" stop-color="#46e3ff"/></linearGradient></defs></svg>
-      BADDY
-    </a>
-    <div class="nav-links">
-      <a href="#how">How it works</a>
-      <a href="#gallery">Gallery</a>
-      <a href="/login.html">Schools</a>
-      <a href="#create" class="btn btn-small">Create a reel</a>
-    </div>
-  </div>
-</nav>
-
-<header class="hero" id="create">
-  <div class="hero-media" aria-hidden="true">
-    <video class="hero-bg" autoplay muted loop playsinline poster="/assets/hero.jpg">
-      <source src="/assets/hero.mp4" type="video/mp4">
-    </video>
-    <div class="hero-shade"></div>
-  </div>
-  <p class="eyebrow">YOUR SPORTS HIGHLIGHT GENERATOR</p>
-  <h1>Raw game in.<br><span class="grad">Highlights out.</span></h1>
-  <p class="sub">Drop a full badminton recording. Gemini watches the whole game and finds every rally,
-  an AI virtual camera tracks the action like a broadcast operator, and you get a beat-synced
-  vertical reel of your longest rallies — story-ready.</p>
-
-  <div class="drop" id="drop">
-    <input type="file" id="file" multiple accept="video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.mkv,.webm" hidden>
-    <div class="drop-idle" id="dropIdle">
-      <div class="drop-icon">⇪</div>
-      <div class="drop-title">Drag your match video here — multiple clips welcome</div>
-      <div class="drop-sub">MP4 / MOV up to 3 GB total · multi-clip games are ordered by recording time
-      (or upload order if your files have no timestamps) · 4K welcome</div>
-      <button class="btn" id="browse">Choose video(s)</button>
-    </div>
-  </div>
-
-  <div class="vopts" id="vopts">
-    <div class="vopts-head">Analysis workers <span class="muted">— pick what runs on your video</span></div>
-    <div class="vopts-row">
-      <label class="vopt" id="voptShuttle">
-        <input type="checkbox" id="optShuttle">
-        <span class="vopt-b">🏸 Shuttle tracking</span>
-        <span class="vopt-s">TrackNetV3 · GPU · locks camera to the shuttle</span>
-      </label>
-      <label class="vopt" id="voptPose">
-        <input type="checkbox" id="optPose">
-        <span class="vopt-b">🧍 Pose estimation</span>
-        <span class="vopt-s">YOLO11 · players &amp; body keypoints</span>
-      </label>
-      <label class="vopt" id="voptCoach">
-        <input type="checkbox" id="optCoach">
-        <span class="vopt-b">🧠 Coach notes</span>
-        <span class="vopt-s">Gemini feedback from measured signals</span>
-      </label>
-    </div>
-    <div class="vopts-note muted" id="voptsNote">Defaults use the free CPU camera. Shuttle tracking runs on GPU.</div>
-    <div class="vopts-court" id="voptCourt" hidden>
-      <div class="vopts-head">Mark the court <span class="muted">— optional: click its 4 corners so heatmaps &amp; 3D replay work even when auto-detect can't see the full court. Corners cut off by the camera can be placed in the dark margin.</span></div>
-      <div class="court-pick-wrap">
-        <canvas id="courtPickCanvas" width="640" height="400"></canvas>
-        <div class="court-pick-hint" id="courtPickHint">Click the FAR-LEFT corner (1/4)</div>
-      </div>
-      <div class="court-pick-scrub">
-        <span class="muted">frame</span>
-        <input type="range" id="courtPickScrub" min="0" max="1000" value="0" step="1" title="Pick a frame where the court is not blocked">
-        <span class="muted" id="courtPickTime">0.0s</span>
-      </div>
-      <div class="court-pick-actions">
-        <span class="muted" id="courtPickStatus"></span>
-        <button class="btn btn-small btn-ghost" id="courtPickReset" type="button">Clear</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="chips">
-    <span class="chip">🎯 Gemini rally detection</span>
-    <span class="chip">🎥 AI virtual camera</span>
-    <span class="chip">🎵 beat-synced edit</span>
-    <span class="chip">📱 9:16 story format</span>
-  </div>
-</header>
-
-<section class="panel-wrap" id="jobPanel" hidden>
-  <div class="panel">
-    <div class="panel-head">
-      <div>
-        <div class="panel-title" id="jobTitle">Processing…</div>
-        <div class="panel-sub" id="jobFile"></div>
-      </div>
-      <div class="spinner" id="jobSpin"></div>
-    </div>
-    <div class="upbar" id="upbarWrap"><div class="upbar-fill" id="upbar"></div></div>
-    <ul class="stages" id="stageList"></ul>
-    <div class="job-msg" id="jobMsg"></div>
-    <div class="result" id="jobResult" hidden>
-      <video id="resultVideo" controls playsinline></video>
-      <div class="result-side">
-        <h3>Your reel is ready 🎉</h3>
-        <div class="result-meta" id="resultMeta"></div>
-        <a class="btn" id="downloadBtn" download="baddy-reel.mp4">Download reel</a>
-        <button class="btn btn-ghost" id="resultStudio">🎬 Studio</button>
-        <button class="btn btn-ghost" id="anotherBtn">Make another</button>
-        <div id="resultShare"></div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="queue" id="queueSection" hidden>
-  <div class="gallery-head">
-    <h2>Your queue</h2>
-    <button class="btn btn-small btn-ghost" id="queueRefresh">Refresh</button>
-  </div>
-  <div class="queue-list" id="queueList"></div>
-</section>
-
-<section class="gallery" id="gallery">
-  <div class="gallery-head">
-    <h2>Latest reels</h2>
-    <div class="tabs">
-      <button class="tab active" data-tab="community">Community</button>
-      <button class="tab" data-tab="mine">My reels</button>
-    </div>
-  </div>
-  <div class="grid" id="grid"></div>
-  <div class="empty" id="galleryEmpty" hidden>
-    <p>🏸 No reels here yet.</p>
-    <p class="muted">Upload a game above — your highlight will land in the gallery.</p>
-  </div>
-</section>
-
-<section class="how" id="how">
-  <h2>How it works</h2>
-  <div class="steps">
-    <div class="step"><div class="step-n">01</div><h3>Upload</h3><p>Any length, any phone. We build a low-res proxy for analysis and keep your original for the final render.</p></div>
-    <div class="step"><div class="step-n">02</div><h3>Rally detection</h3><p>Gemini watches the proxy and timestamps every rally — serve to floor — then ranks them by length and intensity.</p></div>
-    <div class="step"><div class="step-n">03</div><h3>Virtual camera</h3><p>Runpod vision adds player pose and shuttle tracks; the crop follows the action and renders from your full-res frames.</p></div>
-    <div class="step"><div class="step-n">04</div><h3>Beat-synced stitch</h3><p>Longest rallies first, court audio kept, a 120 BPM bed underneath, packed into a vertical story-ready reel.</p></div>
-  </div>
-</section>
-
-<footer>
-  <span>BADDY · AI sports highlights</span>
-  <span class="muted">rally detection by Gemini · Runpod vision with TrackNetV3 shuttle tracking</span>
-</footer>
-
-<div class="studio" id="studio" hidden>
-  <div class="studio-top">
-    <div class="studio-brand">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2L8 10l-4 9c-.4.9.5 1.8 1.4 1.4l9-4 8-4-2.5-2.5L12 2z" stroke="url(#g2)" stroke-width="1.6" stroke-linejoin="round"/><circle cx="6.5" cy="17.5" r="2.2" fill="url(#g2)"/><defs><linearGradient id="g2" x1="0" y1="0" x2="24" y2="24"><stop stop-color="#b7f542"/><stop offset="1" stop-color="#46e3ff"/></linearGradient></defs></svg>
-      <b>STUDIO</b><span class="muted" id="studioFile"></span>
-    </div>
-    <div class="studio-right">
-      <div class="src-toggle">
-        <button class="active" data-mode="reel" id="modeReel">Reel</button>
-        <button data-mode="source" id="modeSource">Source rallies</button>
-        <button data-mode="compose" id="modeCompose">Compose</button>
-      </div>
-      <a class="btn btn-small" id="stAnnotated" target="_blank" hidden>Analysis video</a>
-      <button class="btn btn-small" id="stTrim" title="Every detected rally back-to-back — shuttle pickups and gaps removed">✂ Trim dead time</button>
-      <a class="btn btn-small" id="stTrimLink" download="baddy-trimmed.mp4" hidden>Download trimmed match</a>
-      <a class="btn btn-small" id="studioDownload" download="baddy-reel.mp4">Export</a>
-      <button class="studio-x" id="studioX" title="Close">×</button>
-    </div>
-  </div>
-
-  <div class="studio-workspace">
-    <aside class="studio-layers">
-      <div class="rail-title">Layers</div>
-      <div class="layer-list" id="layerList"></div>
-      <div class="rail-title rail-title-secondary">Rally order</div>
-      <div class="edit-chips" id="editChips"></div>
-      <div class="edit-actions">
-        <label class="mirror-l"><input type="checkbox" id="mirrorChk"> Mirror</label>
-        <button class="btn btn-small" id="rebuildBtn">Rebuild cuts</button>
-      </div>
-      <div class="edit-msg muted" id="editMsg"></div>
-    </aside>
-
-    <main class="studio-center">
-      <div class="canvas-bar">
-        <div><span class="canvas-tag" id="canvasTag">1080 × 1920</span><span class="muted" id="tpHint"></span></div>
-        <div class="studio-right">
-          <div class="aspect-toggle" id="aspectToggle" title="Preview aspect">
-            <button class="active" data-aspect="portrait">Portrait</button>
-            <button data-aspect="landscape">Landscape</button>
-          </div>
-          <div class="canvas-zoom">
-            <button class="tool compact" id="zoomOut" title="Zoom out">−</button>
-            <button id="zoomLabel" class="zoom-reset" title="Reset view (fit)">Fit</button>
-            <button class="tool compact" id="zoomIn" title="Zoom in">+</button>
-          </div>
-        </div>
-      </div>
-      <div class="studio-stage" id="studioStage">
-        <div class="stage-frame" id="stageFrame">
-          <video id="stVideo" playsinline></video>
-          <div class="ai-overlays" id="aiOverlays"></div>
-        </div>
-        <div class="replay3d" id="replay3d" hidden>
-          <div class="r3d-bar"><b>3D REPLAY</b><span class="muted">drag to orbit · wheel to zoom</span>
-            <span class="r3d-views">
-              <button data-r3d-view="broadcast">Broadcast</button>
-              <button data-r3d-view="side">Side</button>
-              <button data-r3d-view="top">Top</button>
-            </span>
-          </div>
-          <canvas></canvas>
-        </div>
-        <div class="canvas-nodes" id="canvasNodes" hidden></div>
-        <div class="clip-library" id="clipLibrary" hidden>
-          <div class="clip-library-head">Add clips <span class="muted">drag onto the canvas →</span></div>
-          <div class="clip-library-list" id="clipLibraryList"></div>
-        </div>
-        <div class="compose-hint" id="composeHint" hidden>Click clips from the library to drop them on the canvas. Drag to arrange.</div>
-      </div>
-      <div class="coachbar" id="coachbar" hidden></div>
-    </main>
-
-    <aside class="studio-inspector">
-      <div class="inspector-head">
-        <span>Inspector</span>
-        <span class="muted" id="selectedLayerMeta"></span>
-      </div>
-      <div class="inspector-panel" id="inspectorPanel"></div>
-    </aside>
-  </div>
-
-  <div class="transport">
-    <button class="tp-play" id="tpPlay">▶</button>
-    <span class="tp-time" id="tpTime">0:00 / 0:00</span>
-    <div class="transport-scrub"><input type="range" id="tpScrub" min="0" max="1000" value="0"></div>
-    <div class="tp-right">
-      <div class="speed-toggle" id="speedToggle">
-        <button data-rate="0.5">0.5×</button><button class="active" data-rate="1">1×</button><button data-rate="1.5">1.5×</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="timeline timeline-pro" id="tl">
-    <div class="timeline-top">
-      <div>
-        <b>Timeline</b>
-        <span class="muted" id="timelineMeta"></span>
-      </div>
-      <div class="timeline-tools">
-        <span class="tl-kbd" title="Space play/pause · ← → ±5s · , . frame-step · ⌘/Ctrl+scroll zoom">keys</span>
-        <input type="range" id="timelineZoom" min="100" max="600" step="10" value="100" aria-label="Timeline zoom">
-        <span class="tl-zoomval" id="timelineZoomVal">100%</span>
-      </div>
-    </div>
-    <div class="timeline-grid">
-      <div class="track-labels" id="tlLabels"></div>
-      <div class="timeline-board" id="tlBoard">
-        <div class="ruler" id="tlRuler"></div>
-        <div class="lane" id="tlLane"></div>
-        <div class="ghost-head" id="tlGhost" hidden><div class="gh-time" id="tlGhostTime">0:00</div></div>
-        <div class="playhead" id="tlHead"><div class="ph-time" id="tlHeadTime">0:00</div></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="modal" id="modal" hidden>
-  <div class="modal-card">
-    <button class="modal-x" id="modalX">✕</button>
-    <video id="modalVideo" controls autoplay playsinline></video>
-    <div class="modal-meta" id="modalMeta"></div>
-    <div class="modal-meta"><button class="btn btn-ghost" id="modalStudio" style="width:100%">🎬 Open in Studio — rally timeline</button></div>
-  </div>
-</div>
-
-<script src="/app.js?v=41"></script>
-<script src="/replay3d.js?v=32"></script>
-</body>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#09090b">
+    <meta
+      name="description"
+      content="Baddy AI turns full badminton matches into story-ready highlight reels with rally detection, tracking, and virtual-camera edits."
+    >
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='82' font-size='82'>🏸</text></svg>"
+    >
+    <link rel="canonical" href="https://baddyai.com/">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Figtree:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    >
+    <title>Baddy AI — Badminton Highlights</title>
+    <style>
+      html { background: #09090b; }
+    </style>
+    <script>
+      (() => {
+        const productHash = /^#(?:create|gallery|preview|studio(?:\/|$))/;
+        if (productHash.test(window.location.hash)) {
+          window.location.replace(`/create.html${window.location.hash}`);
+        }
+      })();
+    </script>
+    <script defer src="/landing/static/js/main.b12d979b.js"></script>
+    <link rel="stylesheet" href="/landing/static/css/main.75e6ef29.css">
+  </head>
+  <body>
+    <noscript>
+      JavaScript is required for the Baddy landing page.
+      <a href="/create.html#create">Open the reel generator</a>.
+    </noscript>
+    <div id="root" data-deployment="baddy-landing-v1"></div>
+  </body>
 </html>
