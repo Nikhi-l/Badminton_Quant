@@ -9,6 +9,9 @@ docs commit after each functional slice.
   on baddyai.com, v=41 assets, health ok; worker image rebuild (6 Hz cadence)
   still pending. `feat/TASK-043-school-command-ui` — schools UI complete,
   integration pending
+- `feat/TASK-047-landing-page` — owner-approved React landing ready for merge;
+  existing uploader/gallery/Studio preserved at `/create.html`, with legacy
+  Studio hash redirects and a rollback-safe static cutover.
 - Active branches (Cycle 18 stack, base `0cae987`):
   `feat/TASK-031-player-pose-tracking-v2` → `feat/TASK-032-court3d-flow` →
   `feat/TASK-033-timeline-redesign` (merge in that order; 033 also carries a
@@ -22,6 +25,7 @@ docs commit after each functional slice.
 ## Ledger
 | Date | Area | Status | Notes |
 |---|---|---|---|
+| 2026-07-24 | Public landing cutover | Ready to deploy | TASK-047, Cycle 29 — dark/neon Baddy marketing root, original Studio/rally visuals, current uploader/gallery/Studio preserved at `/create.html`, legacy root-hash redirects, deployment-contract tests |
 | 2026-06-20 | Harness adoption | Done | Pragmatic subset scaffolded (Cycle 1) |
 | 2026-06-20 | Camera: follow shuttle | Done | TASK-001, Cycle 1 — follows on 3/5 (soft proxy); regression-tested |
 | 2026-06-21 | RunPod worker rebuild | Done | TASK-002, Cycle 5 — GPU TrackNetV3 verified e2e via baddyai.com (`tracknet.status=ok`, 55–122 real pts/rally, q0.82, backend=runpod). Fixed missing matplotlib/pycocotools (`tracknet-src-20260621b`, template `ic265brof1`); workers `ready:2 unhealthy:0`, scale to 0 idle |

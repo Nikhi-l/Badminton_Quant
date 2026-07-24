@@ -6,10 +6,11 @@ load-bearing pieces of the redesign so a refactor can't silently regress them.
 from pathlib import Path
 
 WEB = Path(__file__).resolve().parents[2] / "web"
+PRODUCT_HTML = WEB / "create.html"
 
 
 def test_zoom_has_no_dead_subunity_range():
-    html = (WEB / "index.html").read_text()
+    html = PRODUCT_HTML.read_text()
     js = (WEB / "app.js").read_text()
     # slider floor is 1x — 80..99 was a no-op zone that desynced the playhead
     assert 'id="timelineZoom" min="100"' in html
@@ -49,7 +50,7 @@ def test_dead_lanes_removed_from_source_mode():
 
 def test_hover_ghost_and_adaptive_ruler_exist():
     js = (WEB / "app.js").read_text()
-    html = (WEB / "index.html").read_text()
+    html = PRODUCT_HTML.read_text()
     assert 'id="tlGhost"' in html
     assert "initTimelineHover" in js
     assert "STEPS.find(s => s * pps >= 70)" in js

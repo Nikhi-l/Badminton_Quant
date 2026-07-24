@@ -5,6 +5,35 @@ lists exact verification commands. Newest first.
 
 <!-- New cycles appended below. -->
 
+## Cycle 29: Public landing cutover with preserved product route (TASK-047)
+**Date:** 2026-07-24
+**Goal:** Deploy the owner-approved dark/neon Baddy landing to `baddyai.com`
+without replacing the current upload, queue, gallery, and Studio product.
+**PRD:** §16 TASK-047 row. **Branch:** `feat/TASK-047-landing-page`.
+
+**Shipped**
+- React landing source is maintained in `landing/`; its production JS/CSS is
+  isolated under `web/landing/`.
+- The prior production `web/index.html` is preserved as `web/create.html`.
+  Landing CTAs enter `/create.html#create`; reel links enter
+  `/create.html#gallery`.
+- Legacy `/#studio/<job>`, `/#preview`, `/#create`, and `/#gallery` URLs
+  redirect into `create.html`, preserving shared links and browser history.
+- Hero and product visuals use original Baddy Studio and tracked-rally frames.
+- Deployment-contract regressions pin the product IDs, bundle routes, original
+  assets, and absence of the retired phone mockup.
+
+**Tests/verification performed**
+- `PUBLIC_URL=/landing REACT_APP_BADDY_APP_URL=/create.html#create
+  REACT_APP_BADDY_GALLERY_URL=/create.html#gallery GENERATE_SOURCEMAP=false
+  CI=true yarn build` — compiled successfully.
+- `./scripts/check.sh` — **212 passed**.
+- Live deployment verification — pending merge and VM rollout.
+
+**Rollback**
+- Revert the TASK-047 merge and run `bash deploy/deploy.sh` from clean `main`;
+  production job/media data is excluded from the deployment archive.
+
 ## Cycle 27: Court drawing — out-of-frame corners + frame scrubbing (TASK-046)
 **Date:** 2026-07-14
 **Goal:** Owner request: (1) allow court-corner extrapolation when the camera

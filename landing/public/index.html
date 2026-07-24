@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='82' font-size='82'>🏸</text></svg>" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#09090b" />
+    <meta name="description" content="Baddy AI turns full badminton matches into story-ready highlight reels with rally detection, tracking, and virtual camera edits." />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Figtree:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <title>Baddy AI — Badminton Highlights</title>
+    <style>
+      /* Prevent FOUC */
+      html { background: #09090b; }
+    </style>
+    <script>
+      (() => {
+        const productHash = /^#(?:create|gallery|preview|studio(?:\/|$))/;
+        if (productHash.test(window.location.hash)) {
+          window.location.replace(`/create.html${window.location.hash}`);
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>
